@@ -71,7 +71,7 @@
 #include "events.h"          /* add_event/remove_event, SYS_EVENT_USB_INSERTED */
 #include "usb.h"             /* usb_inserted, usb_host_is_present */
 #include "audio.h"           /* audio_current_track, audio_status, audio_hard_stop */
-#include "metadata/albumart.h"        /* search_albumart_files */
+#include "metadata/albumart.h"        /* shared source resolver */
 #include "metadata.h"        /* AA_CLEAR_FLAGS_MASK */
 #include "draw/image_load.h"  /* image_embedded_usable */
 #include "image_viewer.h"
@@ -1122,33 +1122,18 @@ static int load_and_show(char *filename, struct image_info *info,
  * it is. */
 static bool find_album_art(int *offset, int *filesize, int *status)
 {
-    struct mp3entry *current_track = audio_current_track();
-    bool embedded;
-
-    if (current_track == NULL)
-    {
+    struct mp3entry *track = audio_current_track();
+    struct albumart_source source;
+    unsigned cursor = 0;
+    if (!albumart_next_source(track, AA_ROLE_ALBUM, &cursor, &source) ||
+        source.kind == AA_SOURCE_ITUNES)
         return false;
-    }
-
-    embedded = current_track->has_embedded_albumart
-               && image_embedded_usable(current_track->albumart.type);
-    iv_src_flags = 0;
-    if (!embedded || AA_PREFER_IMAGE_FILE == global_settings.album_art)
-    {
-        if (search_albumart_files(current_track, "", np_file, MAX_PATH))
-        {
-            (*status) = get_image_type(np_file, false);
-            return true;
-        }
-
-        if (!embedded)
-            return false;
-    }
-    strcpy(np_file, current_track->path);
-    (*offset) = current_track->albumart.pos;
-    (*filesize) = current_track->albumart.size;
-    iv_src_flags = current_track->albumart.type & ~AA_CLEAR_FLAGS_MASK;
-    (*status) = IMAGE_EMBEDDED;
+    strlcpy(np_file, source.path, MAX_PATH);
+    *offset = source.pos;
+    *filesize = source.size;
+    iv_src_flags = source.flags;
+    *status = source.kind == AA_SOURCE_EMBEDDED ? IMAGE_EMBEDDED
+                                               : get_image_type(np_file, false);
     return true;
 }
 

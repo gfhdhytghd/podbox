@@ -1897,11 +1897,7 @@ static int parse_albumart_load(struct skin_element* element,
     dimensions.width = (aa->width + div - 1) / div;
     dimensions.height = (aa->height + div - 1) / div;
 
-    uint32_t key = 0;
-    if (!(aa->filter.stages & IMG_CLASS_RESIZE)
-        && (aa->filter.stages || aa->filter.has_adaptive))
-        key = fnv1a_bytes(&aa->filter, offsetof(struct img_filter, error)) | 1;
-    aa->slot = playback_claim_aa_slot_keyed(&dimensions, key);
+    aa->slot = playback_claim_aa_slot_keyed(&dimensions, 0);
 
     /* Appended only now that nothing can still fail: an entry in the chain is
      * one skin_data_free_buflib_allocs() will release a slot for. */
@@ -3044,7 +3040,7 @@ static bool load_skin_data(enum skinnable_screens skin,
         {
             struct skin_albumart *live = skin_albumart_of(live_buffer, node);
 
-            if (live && (live->filter.stages & IMG_CLASS_RESIZE))
+            if (live && (live->filter.stages || live->filter.has_adaptive))
             {
                 size_t bytes = (size_t)live->width * live->height
                              * sizeof(fb_data);

@@ -188,7 +188,7 @@ static bool art_read_square(unsigned key, fb_data *dst)
     if (fd < 0)
         return false;
 
-    if (read(fd, &hdr, sizeof(hdr)) == (ssize_t)sizeof(hdr)
+    if (art_cache_read_header(fd, &hdr)
         && hdr.magic == ART_CACHE_MAGIC
         && hdr.version == ART_CACHE_FORMAT_VERSION
         && hdr.layout == AA_COLUMNS
@@ -215,6 +215,14 @@ static bool art_read_square(unsigned key, fb_data *dst)
  * not there. A key that has never been tried is what keeps the loop awake. */
 static bool art_resolved(unsigned key)
 {
+    static unsigned generation;
+    unsigned current = art_cache_generation();
+    if (generation != current)
+    {
+        memset(art_key, 0, sizeof(art_key));
+        memset(hue_key, 0, sizeof(hue_key));
+        generation = current;
+    }
     for (int i = 0; i < ART_SLOTS; i++)
         if (art_key[i] == key)
             return true;

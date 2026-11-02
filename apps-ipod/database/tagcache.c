@@ -1092,7 +1092,7 @@ static void albums_note_path(int idx_id, const char *filename)
     if (!sep || sep == dir)
         return;
     *sep = '\0';                     /* track file -> album folder */
-    r->art_hash = art_cache_dir_hash(dir);
+    r->art_hash = r->file_art_hash;
     sep = strrchr(dir, '/');
     if (!sep || sep == dir)
         return;

@@ -204,24 +204,6 @@ static struct albumart_slot
     int used;          /* Counter; increments if something uses it */
 } albumart_slots[MAX_MULTIPLE_AA]; /* (A,O) */
 
-static char last_folder_aa_path[MAX_PATH] = "\0";
-static int last_folder_aa_hid[MAX_MULTIPLE_AA] = {0};
-
-/* Same idea as last_folder_aa_path/last_folder_aa_hid above, but for
- * embedded album art (e.g. FLAC), which has no shared file path to key a
- * cache off of. Without this, tracks on the same album with byte-identical
- * embedded art get it re-extracted and re-decoded from scratch on every
- * track change. Keyed by (album, albumartist, discnum) rather than exact
- * picture bytes -- cheap (these are already-parsed tag strings, no extra
- * work), at the cost of trusting that same-tagged tracks share art, which
- * is why discnum is included: multi-disc sets can share album/albumartist
- * tags while carrying different per-disc art, unlike the folder-path cache
- * above which busts naturally since discs are normally separate folders. */
-static char last_embedded_aa_album[MAX_PATH] = "\0";
-static char last_embedded_aa_albumartist[MAX_PATH] = "\0";
-static int last_embedded_aa_discnum = 0;
-static int last_embedded_aa_hid[MAX_MULTIPLE_AA] = {0};
-
 #define FOREACH_ALBUMART(i) for (int i = 0; i < MAX_MULTIPLE_AA; i++)
 
 
@@ -716,23 +698,6 @@ static bool track_list_commit_buf_info(struct track_buf_info *tbip,
     return true;
 }
 
-static inline void clear_cached_aa_handles(int* aa_handles)
-{
-    /* When a track is freed, don't bufclose() a handle that's cached for reuse
-     * by a later same-folder/same-album track -- zero those slots so only
-     * genuinely per-track handles get closed. Both caches must be spared: a
-     * freed embedded-art handle leaves the next same-album track's WPS album
-     * art reading a closed handle. */
-    FOREACH_ALBUMART(i)
-    {
-        if (last_folder_aa_path[0] != 0 && aa_handles[i] == last_folder_aa_hid[i])
-            aa_handles[i] = 0;
-        else if (last_embedded_aa_hid[i] != 0 &&
-                 aa_handles[i] == last_embedded_aa_hid[i])
-            aa_handles[i] = 0;
-    }
-}
-
 /* Free the track buffer entry and possibly remove it from the list if it
    was succesfully added at some point */
 static void track_list_free_buf_info(struct track_buf_info *tbip)
@@ -774,7 +739,6 @@ static void track_list_free_buf_info(struct track_buf_info *tbip)
     /* No movement allowed during bufclose calls */
     buf_pin_handle(hid, true);
 
-    clear_cached_aa_handles(tbip->info.aa_hid);
     FOR_EACH_TRACK_INFO_HANDLE(i)
         bufclose(tbip->info.handle[i]);
 
@@ -971,32 +935,6 @@ size_t audio_buffer_available(void)
     return MAX(core_size, size);
 }
 
-static void clear_last_folder_album_art(void)
-{
-    if(last_folder_aa_path[0] == 0)
-        return;
-
-    last_folder_aa_path[0] = 0;
-    FOREACH_ALBUMART(i)
-    {
-        bufclose(last_folder_aa_hid[i]);
-        last_folder_aa_hid[i] = 0;
-    }
-}
-
-static void clear_last_embedded_album_art(void)
-{
-    if (last_embedded_aa_album[0] == 0)
-        return;
-
-    last_embedded_aa_album[0] = 0;
-    FOREACH_ALBUMART(i)
-    {
-        bufclose(last_embedded_aa_hid[i]);
-        last_embedded_aa_hid[i] = 0;
-    }
-}
-
 /* Set up the audio buffer for playback
  * filebuflen must be pre-initialized with the maximum size */
 static void audio_reset_buffer_noalloc(
@@ -1033,8 +971,6 @@ static void audio_reset_buffer_noalloc(
     filebuf += allocsize;
     filebuflen -= allocsize;
 
-    clear_last_folder_album_art();
-    clear_last_embedded_album_art();
 
     buffering_reset(filebuf, filebuflen);
 
@@ -2096,83 +2032,6 @@ void set_albumart_mode(int setting)
     albumart_mode = setting;
 }
 
-static int load_album_art_from_path(char *path, struct bufopen_bitmap_data *user_data, bool is_current_track, int i)
-{
-    user_data->embedded_albumart = NULL;
-
-    bool same_path = strcmp(last_folder_aa_path, path) == 0;
-    if (same_path && last_folder_aa_hid[i] != 0)
-        return last_folder_aa_hid[i];
-
-    /* To simplify caching logic a bit we keep track only for first AA path */
-    /* If other album arts use different path (like dimension specific arts) just skip caching for them */
-    bool is_cacheable = i == 0 && (is_current_track || last_folder_aa_path[0] == 0);
-    if (!same_path && is_cacheable)
-    {
-        clear_last_folder_album_art();
-        strcpy(last_folder_aa_path, path);
-    }
-    int hid = bufopen(path, 0, TYPE_BITMAP, user_data);
-    skin_albumart_art_opened(hid);
-    if (hid != ERR_BUFFER_FULL && (same_path || is_cacheable))
-        last_folder_aa_hid[i] = hid;
-    return hid;
-}
-
-/* Load the track's folder art from the pre-scaled cache (the 300px "wps"
- * thumbnail). Returns a handle, or an error when there is no real cached art --
- * the placeholder is rejected so an artless album falls through to the theme's
- * own no-art state rather than showing the cache's "?" thumbnail.
- *
- * Which picture that is, 'artist' says. The cache holds album and
- * artist art alike, both keyed by a folder path, so choosing between them is
- * only a matter of which folder to ask about: the track's own folder for the
- * album, its parent for the artist. That mirrors how art_cache.c fills them
- * (see the parent-folder pass in aa_run_pass()), and it is why artist art
- * exists only for <artist>/<album>/<track> layouts -- a library with no
- * distinct parent folder has nothing for the artist to be keyed on, and falls
- * through to the no-art state above. */
-static int load_cached_albumart(struct mp3entry *track_id3,
-                                struct bufopen_bitmap_data *user_data,
-                                bool is_current_track, int i, bool artist)
-{
-    static int wps_size_idx = -2;   /* -2 until first looked up */
-    char dir[MAX_PATH], path[MAX_PATH];
-    bool is_fallback;
-    const char *sep;
-    int dlen;
-
-    if (wps_size_idx == -2)
-        wps_size_idx = art_cache_size_index("wps");
-    if (wps_size_idx < 0)
-        return ERR_UNSUPPORTED_TYPE;
-
-    sep = strrchr(track_id3->path, '/');
-    if (!sep)
-        return ERR_UNSUPPORTED_TYPE;
-    dlen = sep - track_id3->path;
-    if (dlen <= 0 || dlen >= (int)sizeof(dir))
-        return ERR_UNSUPPORTED_TYPE;
-    memcpy(dir, track_id3->path, dlen);
-    dir[dlen] = '\0';
-
-    if (artist)
-    {
-        /* Up one level. A track sitting at the volume root has no parent to
-         * rise to, and truncating to "" would key on the whole volume. */
-        char *psep = strrchr(dir, '/');
-        if (!psep || psep == dir)
-            return ERR_UNSUPPORTED_TYPE;
-        *psep = '\0';
-    }
-
-    if (!art_cache_lookup(dir, wps_size_idx, path, sizeof(path), &is_fallback)
-        || is_fallback)
-        return ERR_UNSUPPORTED_TYPE;
-
-    return load_album_art_from_path(path, user_data, is_current_track, i);
-}
-
 /* Load any album art for the file - returns false if the buffer is full */
 static int audio_load_albumart(struct track_info *infop,
                                 struct mp3entry *track_id3, bool is_current_track)
@@ -2182,127 +2041,36 @@ static int audio_load_albumart(struct track_info *infop,
         struct bufopen_bitmap_data user_data;
         int *aa_hid = &infop->aa_hid[i];
         int hid = ERR_UNSUPPORTED_TYPE;
-        bool checked_image_file = false;
-
-        /* albumart_slots may change during a yield of bufopen,
-         * but that's no problem */
         if (*aa_hid >= 0 || *aa_hid == ERR_UNSUPPORTED_TYPE ||
             !albumart_slots[i].used)
             continue;
-
         memset(&user_data, 0, sizeof(user_data));
         user_data.dim = &albumart_slots[i].dim;
-
-        /* Artist art has exactly one source: the artist folder's cached
-         * thumbnail. Every other source below is album art by definition --
-         * embedded tags and folder images both belong to the record, not the
-         * performer -- so under the explicit Artist setting an artist with no
-         * portrait ends with no artwork rather than quietly falling through to
-         * the album cover. Missing portraits are meant to be visible; that is
-         * what the art cache health screen reports on.
-         *
-         * "Auto" is the exception, and asks for artist art only for a playlist
-         * built from an artist browse. It is a convenience rather than a
-         * statement about the library, so it does fall back. */
-        bool auto_art = global_settings.wps_art_source == WPS_ART_AUTO &&
-                        playlist_is_from_artist();
-        bool artist_art = global_settings.wps_art_source == WPS_ART_ARTIST ||
-                          auto_art;
-
-        char path[MAX_PATH];
-        if (artist_art && global_settings.album_art != AA_OFF)
+        if (global_settings.album_art != AA_OFF)
         {
-            hid = load_cached_albumart(track_id3, &user_data,
-                                       is_current_track, i, true);
-
-            if (auto_art && hid < 0 && hid != ERR_BUFFER_FULL)
-                artist_art = false;   /* no portrait: take the album cover */
-        }
-
-        if (!artist_art && global_settings.album_art == AA_PREFER_CACHE)
-        {
-            /* cache first: the other sources below chain on hid < 0, so a hit
-             * here skips them */
-            hid = load_cached_albumart(track_id3, &user_data,
-                                       is_current_track, i, false);
-        }
-        else if(!artist_art &&
-                global_settings.album_art == AA_PREFER_IMAGE_FILE)
-        {
-            if (find_albumart(track_id3, path, sizeof(path),
-                          &albumart_slots[i].dim))
+            bool auto_art = global_settings.wps_art_source == WPS_ART_AUTO &&
+                            playlist_is_from_artist();
+            bool artist = global_settings.wps_art_source == WPS_ART_ARTIST || auto_art;
+            char owner[MAX_PATH], path[MAX_PATH];
+            strlcpy(owner, track_id3->path, sizeof(owner));
+            if (artist)
             {
-                hid = load_album_art_from_path(path, &user_data, is_current_track, i);
+                char *slash = strrchr(owner, '/');
+                if (slash) *slash = 0;
+                slash = strrchr(owner, '/');
+                if (slash) *slash = 0;
             }
-            checked_image_file = true;
+            bool fallback = false;
+            int size = art_cache_size_index("wps");
+            if (size >= 0 && art_cache_lookup(owner, size, path, sizeof(path),
+                                              &fallback) && !fallback)
+                hid = bufopen(path, 0, TYPE_BITMAP, &user_data);
+            if (auto_art && hid < 0 && hid != ERR_BUFFER_FULL && size >= 0 &&
+                art_cache_lookup(track_id3->path, size, path, sizeof(path),
+                                 &fallback) && !fallback)
+                hid = bufopen(path, 0, TYPE_BITMAP, &user_data);
         }
-
-        /* We can only decode JPEG and PNG for embedded AA */
-        if (!artist_art && global_settings.album_art != AA_OFF &&
-            hid < 0 && hid != ERR_BUFFER_FULL &&
-            track_id3->has_embedded_albumart && image_embedded_usable(track_id3->albumart.type))
-        {
-            /* Tracks on the same album (same album+albumartist+discnum tags)
-             * typically carry byte-identical embedded art -- reuse the
-             * already-decoded handle instead of re-extracting/re-decoding
-             * on every track change (see statics/comment near
-             * last_embedded_aa_album above). */
-            bool same_album = track_id3->album && track_id3->album[0] &&
-                               track_id3->albumartist && track_id3->albumartist[0] &&
-                               strcmp(last_embedded_aa_album, track_id3->album) == 0 &&
-                               strcmp(last_embedded_aa_albumartist, track_id3->albumartist) == 0 &&
-                               last_embedded_aa_discnum == track_id3->discnum;
-
-            if (same_album && last_embedded_aa_hid[i] != 0)
-            {
-                hid = last_embedded_aa_hid[i];
-            }
-            else
-            {
-                if (is_current_track)
-                    clear_last_folder_album_art();
-
-                bool is_cacheable = i == 0 &&
-                                    (is_current_track || last_embedded_aa_album[0] == 0);
-                if (!same_album && is_cacheable)
-                {
-                    clear_last_embedded_album_art();
-                    strlcpy(last_embedded_aa_album, track_id3->album,
-                            sizeof(last_embedded_aa_album));
-                    strlcpy(last_embedded_aa_albumartist, track_id3->albumartist,
-                            sizeof(last_embedded_aa_albumartist));
-                    last_embedded_aa_discnum = track_id3->discnum;
-                }
-
-                user_data.embedded_albumart = &track_id3->albumart;
-                hid = bufopen(track_id3->path, 0, TYPE_BITMAP, &user_data);
-                skin_albumart_art_opened(hid);
-                if (hid != ERR_BUFFER_FULL && (same_album || is_cacheable))
-                    last_embedded_aa_hid[i] = hid;
-            }
-        }
-
-        if (!artist_art && global_settings.album_art != AA_OFF &&
-            !checked_image_file &&
-            hid < 0 && hid != ERR_BUFFER_FULL)
-        {
-            /* No embedded AA or it couldn't be loaded - try other sources */
-            if (find_albumart(track_id3, path, sizeof(path),
-                              &albumart_slots[i].dim))
-            {
-                hid = load_album_art_from_path(path, &user_data, is_current_track, i);
-            }
-        }
-
-        /* Last resort for the non-cache-first settings: the pre-scaled cache
-         * (cache-first already tried it above). */
-        if (!artist_art && global_settings.album_art != AA_OFF &&
-            global_settings.album_art != AA_PREFER_CACHE &&
-            hid < 0 && hid != ERR_BUFFER_FULL)
-        {
-            hid = load_cached_albumart(track_id3, &user_data,
-                                       is_current_track, i, false);
-        }
+        if (hid >= 0) skin_albumart_art_opened(hid);
 
         if (hid == ERR_BUFFER_FULL)
         {
@@ -2332,6 +2100,7 @@ static int audio_load_albumart(struct track_info *infop,
         }
     }
 
+    (void)is_current_track;
     return true;
 }
 
@@ -3554,8 +3323,6 @@ static void audio_stop_playback(bool allow_fade)
     iap_on_play_status(play_status);
 
     wipe_track_metadata(true);
-    clear_last_folder_album_art();
-    clear_last_embedded_album_art();
     /* Go idle */
     filling = STATE_IDLE;
     cancel_cpu_boost();
@@ -4652,6 +4419,16 @@ void playback_release_aa_slot(int slot)
         if (aa_slot->used > 0)
             aa_slot->used--;
     }
+}
+
+void playback_art_changed(unsigned owner)
+{
+    struct mp3entry *id3 = audio_current_track();
+    char path[MAX_PATH];
+    if (!id3 || !id3->path[0]) return;
+    strlcpy(path, id3->path, sizeof(path));
+    if (art_cache_dir_hash(path) == owner)
+        audio_queue_post(Q_AUDIO_REMAKE_AUDIO_BUFFER, 0);
 }
 
 void playback_update_aa_dims(void)

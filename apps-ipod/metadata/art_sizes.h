@@ -62,9 +62,9 @@ static const struct art_size art_sizes[] =
 {
     /* Columns because the carousel renders slides column by column for the
      * perspective transform, and it is this size's only reader. */
-    { "coverflow", 128, AA_FIT_COVER, AA_COLUMNS },/* carousel slides (DISPLAY_WIDTH) */
-    { "list",       44, AA_FIT_COVER, AA_ROWS    },/* database album rows, in a 46px row */
-    { "wps",       300, AA_FIT_COVER, AA_ROWS    },/* now-playing / miniplayer art */
+    { "coverflow", 128, AA_FIT_CONTAIN, AA_COLUMNS },/* carousel slides (DISPLAY_WIDTH) */
+    { "list",       44, AA_FIT_CONTAIN, AA_ROWS    },/* database album rows, in a 46px row */
+    { "wps",       300, AA_FIT_CONTAIN, AA_ROWS    },/* now-playing / miniplayer art */
 };
 
 #define ART_CACHE_NUM_SIZES \
