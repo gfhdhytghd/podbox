@@ -37,6 +37,7 @@
 #include "usbstack/usb_serial.h"
 #ifdef HAVE_USB_PODLINK
 #include "podlink_stats.h"
+#include "usb_profile.h"
 #endif
 #endif
 #include "button.h"
@@ -146,6 +147,7 @@ static bool usb_hid = true;
 static bool usb_serial = false;
 #ifdef HAVE_USB_PODLINK
 static volatile bool podlink_requested;
+static volatile uint32_t podlink_epoch;
 #endif
 #endif
 #ifdef USB_ENABLE_AUDIO
@@ -885,9 +887,10 @@ static void NORETURN_ATTR usb_thread(void)
 
 #ifdef HAVE_USB_PODLINK
         case USB_PODLINK_CLOSE:
-            if (podlink_requested)
+            if (usb_profile_close_matches(podlink_requested, podlink_epoch,
+                                           (uint32_t)ev.data))
             {
-                podlink_trace(7, usb_state);
+                podlink_trace(7, podlink_epoch);
                 podlink_requested = false;
                 if (usb_state == USB_INSERTED || usb_state == USB_POWERED)
                 {
@@ -897,6 +900,7 @@ static void NORETURN_ATTR usb_thread(void)
                     usb_configure_drivers(usb_power_only ? USB_POWERED : USB_INSERTED);
                 }
             }
+            else podlink_trace(17, (uint32_t)ev.data);
             break;
 #endif
         case USB_INSERTED:
@@ -1427,6 +1431,14 @@ bool usb_exclusive_storage(void)
 
 void usb_request_exclusive_storage(void)
 {
+#ifdef HAVE_USB_PODLINK
+    /* A live application lease cannot hand storage to any host profile. */
+    if (podlink_requested)
+    {
+        podlink_trace(16, podlink_epoch);
+        return;
+    }
+#endif
     if(exclusive_storage_requested || usb_disk_ejected)
         return;
 
@@ -1546,8 +1558,10 @@ bool usb_podlink_open(void)
      * open/close; the USB thread alone acts on the close event. */
     if (podlink_requested || usb_detect() != USB_EXTRACTED || usb_host_probe_on)
         return false;
+    ++podlink_epoch;
+    if (!podlink_epoch) ++podlink_epoch;
     podlink_requested = true;
-    podlink_trace(5, 0);
+    podlink_trace(5, podlink_epoch);
     return true;
 }
 
@@ -1555,8 +1569,8 @@ void usb_podlink_close(void)
 {
     if (podlink_requested)
     {
-        podlink_trace(6, 0);
-        queue_post(&usb_queue, USB_PODLINK_CLOSE, 0);
+        podlink_trace(6, podlink_epoch);
+        queue_post(&usb_queue, USB_PODLINK_CLOSE, podlink_epoch);
     }
 }
 
@@ -1570,7 +1584,11 @@ bool usb_podlink_active(void)
 void usb_set_serial(bool enable)
 {
     usb_serial = enable;
-    usb_core_enable_driver(USB_DRIVER_SERIAL, usb_serial && !usb_drive_only());
+    usb_core_enable_driver(USB_DRIVER_SERIAL,
+#ifdef HAVE_USB_PODLINK
+                           podlink_requested ||
+#endif
+                           (usb_serial && !usb_drive_only()));
 }
 
 bool usb_get_serial(void)

@@ -88,6 +88,12 @@ the real sweep is designed around does not arise. The test the rule is really
 asking is whether the caller stays correct: apply it to the *screen*, not only
 to the return value.
 
+`shim-podlink.c` is the second such shim, for the same reason. It gives
+PodLink a pseudo-terminal in place of the USB serial port, so **System >
+PodLink** and **System > Agents** connect to a program on the same computer.
+The sim prints the pty's path when either screen first opens the link, and
+writes it to the file `$PODLINK_SIM_PATH` names when that is set.
+
 Two return values are load-bearing, and getting either wrong hangs the boot
 silently rather than failing:
 

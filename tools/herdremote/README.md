@@ -37,7 +37,7 @@ writes nothing to the player's disk.
 |---|---|
 | `--socket PATH` | herdr's API socket. Default: `$HERDR_SOCKET_PATH`, else herdr's default socket |
 | `--once` | Print the workspaces and questions the player would get, then exit. Checks herdr without a player |
-| `--port TTY` | Use this tty instead of finding the player. For testing only |
+| `--port TTY` | Use this tty instead of finding the player: for testing, or for the simulator, which prints its tty as `PodLink: /dev/pts/N` when Agents opens |
 
 ## As a user service
 

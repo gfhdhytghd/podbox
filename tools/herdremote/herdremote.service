@@ -9,6 +9,8 @@ After=default.target
 
 [Service]
 ExecStart=/usr/bin/python3 %h/podbox/tools/herdremote/herdremote.py
+# Without this the journal gets the log in blocks, minutes late
+Environment=PYTHONUNBUFFERED=1
 Restart=on-failure
 RestartSec=5
 

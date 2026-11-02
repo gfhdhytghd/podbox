@@ -44,8 +44,15 @@ int podlink_stats_json(char *dest, size_t size)
     memcpy(saved, trace, sizeof(saved));
     saved_next = trace_next;
     restore_irq(level);
+#ifdef HAVE_ADJUSTABLE_CPU_FREQ
+    unsigned long clock_hz = cpu_frequency;
+#else
+    unsigned long clock_hz = 0;
+#endif
     int n = snprintf(dest, size,
-        "{\"build\":\"profile-1\""
+        "{\"build\":\"" PODLINK_BUILD "\""
+        ",\"cpu_hz\":%lu"
+        ",\"ui_turn_us_max\":%lu"
         ",\"polls\":%lu"
         ",\"poll_us\":%lu"
         ",\"poll_us_max\":%lu"
@@ -72,7 +79,7 @@ int podlink_stats_json(char *dest, size_t size)
         ",\"decode_crc_us\":%lu"
         ",\"lease\":%d"
         ",\"trace\":[",
-        (unsigned long)s.polls, (unsigned long)s.poll_us,
+        clock_hz, (unsigned long)s.ui_turn_us_max, (unsigned long)s.polls, (unsigned long)s.poll_us,
         (unsigned long)s.poll_us_max, (unsigned long)s.poll_gap_us_max,
         (unsigned long)s.gaps_1ms, (unsigned long)s.gaps_5ms,
         (unsigned long)s.read_calls, (unsigned long)s.read_bytes,
@@ -102,6 +109,8 @@ struct tx_frame { unsigned int length, sent; unsigned char data[PODLINK_FRAME_MA
 static struct tx_frame tx[QUEUE_SIZE];
 static unsigned int head, count;
 static struct podlink_parser parser;
+static unsigned char input[4096];
+static unsigned int input_pos, input_length;
 static unsigned char event_data[PODLINK_MAX_MESSAGE];
 static enum podlink_connection state;
 static uint32_t next_seq, ping_seq, peer_max;
@@ -134,6 +143,7 @@ static void pump(void)
 static void reset_session(void)
 {
     head = count = parser.used = 0;
+    input_pos = input_length = 0;
     ping_pending = false;
     next_seq = 1;
     peer_max = PODLINK_MAX_MESSAGE;
@@ -232,19 +242,27 @@ static int podlink_poll_impl(struct podlink_message *m)
     }
     /* Do not consume a frame unless there is space to answer control traffic. */
     if (count) return 0;
-    for (int n = 0; n < 1024; ++n)
+    for (int work = 0; work < 64; ++work)
     {
-        unsigned char byte;
-        if (usb_serial_read(&byte, 1) != 1) break;
+        if (input_pos == input_length)
+        {
+            input_length = usb_serial_read(input, sizeof(input));
+            input_pos = 0;
+            if (!input_length) break;
+        }
         struct podlink_message incoming;
-        bool crc_step = parser.used >= PODLINK_HEADER &&
-            parser.used + 1 >= PODLINK_HEADER + 4 +
-            ((uint32_t)parser.bytes[12] | (uint32_t)parser.bytes[13] << 8 |
-             (uint32_t)parser.bytes[14] << 16 | (uint32_t)parser.bytes[15] << 24);
-        uint32_t started = crc_step ? USEC_TIMER : 0;
-        int rc = podlink_decode(&parser, byte, &incoming);
-        if (crc_step) podlink_stats.decode_crc_us += (uint32_t)USEC_TIMER - started;
-        if (rc == 1) ++podlink_stats.decode_frames;
+        unsigned int consumed;
+        uint32_t started = USEC_TIMER;
+        int rc = podlink_decode_bytes(&parser, input + input_pos,
+                                      input_length - input_pos, &consumed,
+                                      &incoming);
+        uint32_t elapsed = (uint32_t)USEC_TIMER - started;
+        if (rc == 1)
+        {
+            podlink_stats.decode_crc_us += elapsed;
+            ++podlink_stats.decode_frames;
+        }
+        input_pos += consumed;
         if (rc == -2)
         {
             send_close(1009);
@@ -323,4 +341,10 @@ int podlink_poll(struct podlink_message *m)
     podlink_stats.poll_us += elapsed;
     if (elapsed > podlink_stats.poll_us_max) podlink_stats.poll_us_max = elapsed;
     return rc;
+}
+
+
+void podlink_wait(int ticks)
+{
+    if (input_pos == input_length) usb_serial_wait(ticks);
 }

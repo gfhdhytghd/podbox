@@ -9,7 +9,9 @@
 long current_tick;
 static bool lease, plugged, kicked;
 static void *recv_ptr;
-static int recv_size, sent_size;
+static int recv_size, recv_have, sent_size;
+static int test_high_speed = 1;
+int usb_drv_port_speed(void) { return test_high_speed; }
 static unsigned char output[32768];
 static int output_size;
 bool usb_podlink_open(void) { if (lease || plugged) return false; lease = true; return true; }
@@ -18,7 +20,7 @@ bool usb_podlink_active(void) { return lease; }
 void usb_core_control_response(int response, void *data, int size) { (void)response;(void)data;(void)size; }
 void usb_signal_class_notify(int driver, uint32_t data) { (void)driver;(void)data;kicked=true; }
 int usb_drv_recv_nonblocking(int ep, void *data, int size)
-{ (void)ep; assert(!recv_ptr); recv_ptr=data;recv_size=size;return 0; }
+{ (void)ep; assert(!recv_ptr); recv_ptr=data;recv_size=size;recv_have=0;return 0; }
 int usb_drv_send_nonblocking(int ep, const void *data, int size)
 {
     (void)ep; assert(!sent_size); assert(output_size+size <= (int)sizeof(output));
@@ -41,9 +43,16 @@ static void input_bytes(const unsigned char *b,unsigned int n)
     while(n)
     {
         controller(); assert(recv_ptr);
-        int chunk=MIN(n,(unsigned)recv_size);
-        memcpy(recv_ptr,b,chunk);recv_ptr=NULL;
-        usb_serial_transfer_complete(0,USB_DIR_OUT,0,chunk);
+        int packet = test_high_speed ? 512 : 64;
+        int chunk=MIN(n,(unsigned)packet);
+        chunk=MIN(chunk,recv_size-recv_have);
+        memcpy((unsigned char *)recv_ptr+recv_have,b,chunk);
+        recv_have+=chunk;
+        if (recv_have==recv_size || chunk<packet)
+        {
+            int length=recv_have;recv_ptr=NULL;
+            usb_serial_transfer_complete(0,USB_DIR_OUT,0,length);
+        }
         b+=chunk;n-=chunk;
     }
 }
@@ -78,18 +87,26 @@ int main(void)
     for(int i=0;i<output_size;i++)if(podlink_decode(&check,output[i],&m)==1)
     { assert(m.type==PODLINK_BINARY);assert(m.length==4096);assert(!memcmp(m.data,payload,4096));++frames; }
     assert(frames==2);
-    /* RX backpressure: eight packets fill the ring, ninth isn't armed. */
+    /* Fill the bounded RX ring with whole multi-packet DMA requests. */
     clear_output();
-    for(int i=0;i<8;i++)input_bytes(payload+i*512,512);
-    assert(!recv_ptr);assert(rx_count==4096);
-    unsigned char readback[4096];assert(usb_serial_read(readback,4096)==4096);
-    assert(!memcmp(readback,payload,4096));controller();assert(recv_ptr);
+    for(int i=0;i<BUFFER_SIZE/(int)sizeof(payload);i++)
+        input_bytes(payload,sizeof(payload));
+    assert(!recv_ptr);assert(rx_count==BUFFER_SIZE);
+    unsigned char readback[BUFFER_SIZE];
+    assert(usb_serial_read(readback,BUFFER_SIZE)==BUFFER_SIZE);
+    for(int i=0;i<BUFFER_SIZE/(int)sizeof(payload);i++)
+        assert(!memcmp(readback+i*sizeof(payload),payload,sizeof(payload)));
+    controller();assert(recv_ptr);
     /* Corrupt frame followed by a valid frame resynchronizes. */
     unsigned char frame[PODLINK_FRAME_MAX];
     unsigned int n=podlink_encode(frame,PODLINK_TEXT,20,"broken",6);frame[n-1]^=1;
     input_bytes(frame,n);input_frame(PODLINK_TEXT,21,"hello",5);
     int got=0;for(int i=0;i<100 && !got;i++)got=poll_message(&m);
     assert(got && m.type==PODLINK_TEXT && m.length==5 && !memcmp(m.data,"hello",5));
+    /* A complete frame aligned to one USB packet must not wait for a ZLP. */
+    input_frame(PODLINK_BINARY,122,payload,492);
+    got=0;for(int i=0;i<20 && !got;i++)got=poll_message(&m);
+    assert(got && m.length==492 && !memcmp(m.data,payload,492));
     /* Ping replies preserve sequence. */
     clear_output();input_frame(PODLINK_PING,123,"p",1);
     for(int i=0;i<20;i++)poll_message(&m);
@@ -115,10 +132,17 @@ int main(void)
     /* User close times out cleanly, releases USB mode, never sleeps here. */
     podlink_close();current_tick+=101;poll_message(&m);
     assert(podlink_state()==PODLINK_CLOSED && !lease);
+    /* Full-speed streams also complete a packet-aligned final write. */
+    remove_usb();test_high_speed=0;insert();assert(recv_size==64);
+    input_bytes(payload,64);
+    unsigned char full_speed[64];assert(usb_serial_read(full_speed,64)==64);
+    assert(!memcmp(full_speed,payload,64));
+    assert(serial_wake.count<=1);
+    remove_usb();
     char diagnostics[4096];
     int diag_size = podlink_stats_json(diagnostics, sizeof(diagnostics));
     assert(diag_size > 0 && diag_size < (int)sizeof(diagnostics));
-    assert(strstr(diagnostics, "\"build\":\"profile-1\"") != NULL);
+    assert(strstr(diagnostics, "\"build\":\"fast-1\"") != NULL);
     puts(diagnostics);
     puts("PASS: real C wire/session/serial: bounded queues, RX backpressure, 4 KiB integrity, CRC recovery, ping, timeout, close, replug");
     return 0;

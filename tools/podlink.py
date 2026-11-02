@@ -10,6 +10,7 @@ from collections import deque
 from dataclasses import dataclass
 import json
 import math
+import select
 import struct
 import threading
 import time
@@ -164,7 +165,12 @@ class Link:
             self.poll()
             if time.monotonic() > deadline:
                 raise TimeoutError("message receive timeout")
-            time.sleep(0.001)
+            if not self.frames:
+                try:
+                    select.select([self.port.fileno()], [], [],
+                                  min(.05, max(0, deadline - time.monotonic())))
+                except (AttributeError, OSError):
+                    time.sleep(.001)
 
     def open(self):
         seq = self.send(OPEN, HELLO_DATA)

@@ -4,6 +4,7 @@
 #include <stddef.h>
 #include <stdint.h>
 struct podlink_stats {
+    uint32_t ui_turn_us_max;
     uint32_t polls, poll_us, poll_us_max, poll_gap_us_max, gaps_1ms, gaps_5ms;
     uint32_t read_calls, read_bytes, empty_reads, write_calls, write_bytes;
     uint32_t rx_xfers, rx_bytes, rx_max, tx_xfers, tx_bytes, tx_max;

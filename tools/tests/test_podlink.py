@@ -119,6 +119,28 @@ class WireTests(unittest.TestCase):
                 for i in range(0, n, 17): frames += decoder.feed(expected[i:i+17])
                 self.assertEqual(frames, [p.Frame(kind, 0x12345678, payload)])
 
+    def test_bulk_decoder_preserves_fragmentation_and_message_boundaries(self):
+        self.c.podlink_decode_bytes.argtypes = [ctypes.POINTER(CParser), ctypes.c_void_p,
+            ctypes.c_uint, ctypes.POINTER(ctypes.c_uint), ctypes.POINTER(CMessage)]
+        corrupt = bytearray(p.encode(p.TEXT, 9, b"bad crc")); corrupt[-1] ^= 1
+        messages = [p.Frame(p.BINARY, 10, p.pattern(0,4096)),
+                    p.Frame(p.TEXT, 11, b""), p.Frame(p.TEXT, 12, b"last")]
+        stream = b"noise" + corrupt + b"".join(p.encode(f.type,f.seq,f.payload) for f in messages)
+        for chunk_size in [1,7,64,512,4096,4116]:
+            parser, msg, actual = CParser(), CMessage(), []
+            for offset in range(0,len(stream),chunk_size):
+                chunk = bytes(stream[offset:offset+chunk_size])
+                used = 0
+                while used < len(chunk):
+                    consumed = ctypes.c_uint()
+                    rc = self.c.podlink_decode_bytes(ctypes.byref(parser), chunk[used:],
+                        len(chunk)-used, ctypes.byref(consumed), ctypes.byref(msg))
+                    self.assertGreater(consumed.value,0)
+                    used += consumed.value
+                    if rc == 1:
+                        actual.append(p.Frame(msg.type,msg.seq,ctypes.string_at(msg.data,msg.length)))
+            self.assertEqual(actual,messages)
+
     def test_crc_resync_oversize_and_bounded_garbage(self):
         bad = bytearray(p.encode(p.BINARY, 1, b"broken")); bad[-1] ^= 8
         decoder = p.Decoder()

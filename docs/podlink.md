@@ -25,9 +25,11 @@ python3 -m venv .venv-podlink
 .venv-podlink/bin/python tools/podlink.py bench --bytes 1048576
 ```
 
-The client finds a tty with VID `05ac` and PID `1261`. Use `--port /dev/ttyACM0`
-before the subcommand to select a particular port. The OS user needs access to
-that tty. Each command opens and cleanly closes its own message session.
+The client finds a tty with VID `05ac` and PID `1261`. To select a port, pass
+`--port /dev/serial/by-id/<identified-PodBox-device>` before the subcommand.
+Check its USB manufacturer and serial before selecting it; ttyACM numbering
+alone does not identify a device. The OS user needs access to that tty. Each
+command opens and cleanly closes its own message session.
 
 Press Menu on the screen to close and exit. USB then re-enumerates using the
 normal USB setting. With the default setting, the disk becomes available.
@@ -106,6 +108,9 @@ cc -std=c99 -Wall -Wextra -Werror -g -fsanitize=address,undefined \
   tools/tests/podlink_firmware_test.c firmware/usbstack/podlink_wire.c \
   -o /tmp/podlink-firmware-test
 /tmp/podlink-firmware-test
+cc -std=c99 -Wall -Wextra -Werror -g -fsanitize=address,undefined \
+  -Ifirmware/export tools/tests/usb_profile_test.c -o /tmp/podlink-usb-profile-test
+/tmp/podlink-usb-profile-test
 ```
 
 These checks use mock serial/controller state and a real local WebSocket. They
@@ -113,7 +118,7 @@ cannot establish physical USB, iPod startup, or real-device throughput.
 
 ## Profiling build
 
-`profile-1` keeps the baseline queue and transfer scheduling, and adds RAM-only
+`profile-1` records the baseline queue and transfer scheduling with RAM-only
 instrumentation. `tools/podlink.py stats --reset` clears performance counters;
 `stats` returns counters and the last 16 lifecycle events. `profile --bytes
 1048576 --samples 100` collects transfer and latency counters separately.
@@ -123,3 +128,25 @@ Trace events: 1 API open, 2 API close, 3 Menu button, 4 unexpected storage event
 5 USB lease acquired, 6 lease release queued, 7 release applied, 8 USB extraction,
 9 peer CLOSE, 11 transport lost, 12 transport configured, 13 descriptor driver
 mask. Trace is retained across message-session resets and screen re-entry.
+
+
+`fast-1` uses transport-event wakeups in place of a fixed UI sleep. The screen
+checks input on each bounded work turn. Bulk-IN DMA requests carry up to
+4096 bytes; bulk-OUT completes one negotiated USB packet at a time so a host
+write ending on a full packet never depends on a zero-length packet. The RAM
+rings hold 16 KiB each, application reads/parsing use spans, and CRC32 uses a
+256-entry IEEE lookup table. CPU boost applies while the CDC function is
+configured. `STATS` includes CPU frequency and maximum active UI-turn time.
+The host CLI waits for fd readiness instead of imposing a 1-ms sleep after
+successful reads. On the tested iPod Classic 6G, 4 KiB messages delivered
+1.47-1.58 MB/s to the iPod and 2.51-2.52 MB/s to the host, with PING median
+0.17-0.18 ms. Same-screen replug recovery passed. These are measured results
+for that device and host; source and host-only tests do not predict USB rates.
+Final fast-1 Menu-to-mass-storage acceptance is pending a physical Menu press.
+
+The USB mode lease is independent of USB connection/session lifetime. A queued
+lease close carries its acquisition generation; an obsolete close cannot
+release a newer screen's lease. While a lease is live, exclusive-storage
+requests are refused and legacy serial settings cannot disable CDC. The normal
+USB profile is restored only after the current lease closes. Event 16 records
+a refused exclusive-storage request. Events 5/6/7 carry the lease generation.

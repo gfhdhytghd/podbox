@@ -366,15 +366,25 @@ static void show(struct gui_synclist *list, int select)
     gui_synclist_draw(list);
 }
 
-/* The selection, kept on the same kind of row after the rows changed. Call
- * before the rows are rebuilt: a status row that was selected may be gone,
- * so the selection then goes to the first row that can be chosen. */
-static int reselect(struct gui_synclist *list)
+/* Rebuild the rows, keeping the selection on the same row when it is still
+ * there: a status or alert row that comes or goes moves the rest. When the
+ * row has gone the selection goes to the first row that can be chosen, never
+ * to whatever took its place: on a question, that could be Cancel. */
+static void show_same(struct gui_synclist *list)
 {
     int sel = gui_synclist_get_sel_pos(list);
-    if (sel < nrows && !selectable(sel))
-        return 0;
-    return sel >= nrows ? nrows - 1 : sel;
+    if (sel < 0 || sel >= nrows || !selectable(sel))
+    {
+        show(list, 0);
+        return;
+    }
+    struct row was = rows[sel];
+    build_rows(list);
+    int i = 0;
+    while (i < nrows &&
+           (rows[i].kind != was.kind || rows[i].index != was.index))
+        i++;
+    show(list, i < nrows ? i : 0);
 }
 
 static void open_question(const char *pane)
@@ -490,7 +500,7 @@ static void take_result(struct gui_synclist *list)
         pending_req[0] = '\0';
         pending_answer = false;
         splash(HZ * 2, "No reply from the computer");
-        show(list, reselect(list));
+        show_same(list);
     }
     if (!model.result_new)
         return;
@@ -501,9 +511,9 @@ static void take_result(struct gui_synclist *list)
     if (!model.result_ok)
         splashf(HZ * 2, "%s", model.result_text);
     else if (pending_answer)
-        splashf(HZ, "✓ %s", model.result_text);
+        splashf(HZ, "%s", model.result_text);
     pending_answer = false;
-    show(list, reselect(list));
+    show_same(list);
 }
 
 int agents_screen(void)
@@ -549,7 +559,7 @@ int agents_screen(void)
         {
             shown_trouble = t;
             redraw_at = current_tick + HZ;
-            show(&list, reselect(&list));
+            show_same(&list);
         }
 
         int before = gui_synclist_get_sel_pos(&list);
@@ -581,7 +591,7 @@ int agents_screen(void)
                 if (activate(&list))
                     show(&list, 0);
                 else
-                    show(&list, reselect(&list));
+                    show_same(&list);
                 break;
             case ACTION_STD_CANCEL:
             case ACTION_STD_MENU:

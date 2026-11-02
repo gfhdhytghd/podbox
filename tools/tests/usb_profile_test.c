@@ -12,5 +12,9 @@ int main(void)
     assert(usb_profile_config_count(2, false, true) == 1);
     assert(usb_profile_config_count(2, true, false) == 1);
     assert(usb_profile_config_count(2, false, false) == 2);
+    /* An old queued close must not release a newly acquired mode lease. */
+    assert(usb_profile_close_matches(true, 7, 7));
+    assert(!usb_profile_close_matches(true, 8, 7));
+    assert(!usb_profile_close_matches(false, 8, 8));
     return 0;
 }

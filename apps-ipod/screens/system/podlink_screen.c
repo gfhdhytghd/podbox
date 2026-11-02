@@ -10,6 +10,7 @@
 #include "powermgmt.h"
 #include "core_alloc.h"
 #include "version.h"
+#include "system.h"
 #include "widgets/splash.h"
 #include "system/shutdown.h"
 #include "podlink_screen.h"
@@ -67,7 +68,7 @@ static void message(const struct podlink_message *m)
         if (m->length == 4 && !memcmp(m->data, "INFO", 4))
         {
             reply_len = snprintf((char *)reply, sizeof(reply),
-                "{\"firmware\":\"%s\",\"podlink_build\":\"profile-1\",\"battery_percent\":%d,"
+                "{\"firmware\":\"%s\",\"podlink_build\":\"" PODLINK_BUILD "\",\"battery_percent\":%d,"
                 "\"free_ram_bytes\":%lu,\"free_ram_scope\":\"core_allocator\","
                 "\"rx_bytes\":%lu,\"tx_bytes\":%lu}",
                 rbversion, battery_level(), (unsigned long)core_available(), received, sent);
@@ -111,16 +112,19 @@ int podlink_screen(void)
     reply_type = 0; operation = ECHO;
     while (true)
     {
+        bool progress = false;
+        uint32_t turn = USEC_TIMER;
         for (int step = 0; step < 16; ++step)
         {
+            if (step && (uint32_t)USEC_TIMER - turn >= 2000) break;
             if (reply_type)
             {
                 int rc = podlink_send(reply_type, reply, reply_len);
-                if (rc == PODLINK_SENT) { sent += reply_len; reply_type = 0; }
+                if (rc == PODLINK_SENT) { sent += reply_len; reply_type = 0; progress = true; }
                 else if (podlink_state() != PODLINK_CONNECTED) reply_type = 0;
             }
             struct podlink_message m;
-            if (podlink_poll(&m)) message(&m);
+            if (podlink_poll(&m)) { message(&m); progress = true; }
             if (!reply_type && operation == DOWNLOAD && !exiting &&
                 podlink_state() == PODLINK_CONNECTED)
             {
@@ -145,7 +149,7 @@ int podlink_screen(void)
             static const char * const names[] = {"Closed", "Waiting: plug USB in",
                 "USB up / waiting OPEN", "Open / messages", "Closing"};
             lcd_clear_display();
-            lcd_puts(0, 0, "PodLink / profile-1");
+            lcd_puts(0, 0, "PodLink / " PODLINK_BUILD);
             lcd_puts(0, 2, names[state]);
             lcd_putsf(0, 4, "RX: %lu  TX: %lu", received, sent);
             lcd_putsf(0, 5, "Close events: %lu", closes);
@@ -164,7 +168,11 @@ int podlink_screen(void)
         }
         if (default_event_handler(button) == SYS_USB_CONNECTED)
         { podlink_trace(4, button); podlink_close(); return 1; }
-        sleep(1);
+        uint32_t turn_us = (uint32_t)USEC_TIMER - turn;
+        if (turn_us > podlink_stats.ui_turn_us_max)
+            podlink_stats.ui_turn_us_max = turn_us;
+        if (progress) yield();
+        else podlink_wait(1);
     }
     return 0;
 }

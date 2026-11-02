@@ -396,5 +396,6 @@ sim/shim-board.c
 sim/shim-buffer.c
 sim/shim-dircache.c
 sim/shim-fs.c
+sim/shim-podlink.c
 sim/shim-usb.c
 #endif

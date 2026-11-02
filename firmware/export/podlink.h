@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 #define PODLINK_VERSION 1
+#define PODLINK_BUILD "fast-1"
 #define PODLINK_MAX_MESSAGE 4096
 #define PODLINK_HEADER 16
 #define PODLINK_FRAME_MAX (PODLINK_HEADER + PODLINK_MAX_MESSAGE + 4)
@@ -31,12 +32,18 @@ int podlink_send(unsigned int type, const void *data, unsigned int length);
 int podlink_poll(struct podlink_message *message);
 enum podlink_connection podlink_state(void);
 void podlink_close(void);
+/* Optional screen idle wait; wakes on transport progress, bounded by ticks. */
+void podlink_wait(int ticks);
 
 /* Portable wire codec, also built by the host tests. */
 struct podlink_parser { unsigned char bytes[PODLINK_FRAME_MAX]; unsigned int used; };
 uint32_t podlink_crc32(const unsigned char *data, unsigned int length);
 unsigned int podlink_encode(unsigned char *dest, unsigned int type, uint32_t seq,
                             const void *data, unsigned int length);
+/* Feed a chunk, stopping at a message/error. Always report consumed bytes. */
+int podlink_decode_bytes(struct podlink_parser *parser, const unsigned char *data,
+                         unsigned int length, unsigned int *consumed,
+                         struct podlink_message *message);
 /* Feed one byte. 1=message, 0=more, -1=bad CRC/header, -2=oversize. */
 int podlink_decode(struct podlink_parser *parser, unsigned char byte,
                    struct podlink_message *message);
