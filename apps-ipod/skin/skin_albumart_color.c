@@ -957,6 +957,7 @@ static unsigned int track_folder_hash(const char *path, bool artist)
 
     if (!path || !path[0])
         return 0;
+    if (!artist) return art_cache_dir_hash(path);
     slash = strrchr(path, '/');
     if (!slash || slash == path)
         return 0;
@@ -1025,17 +1026,19 @@ static bool read_folder_palette(unsigned int hash, int dim,
     if (fd >= 0)
     {
         bytes = (size_t)dim * dim * sizeof(fb_data);
-        if (read(fd, &hdr, sizeof(hdr)) == (ssize_t)sizeof(hdr) &&
+        if (art_cache_read_header(fd, &hdr) &&
             hdr.magic == ART_CACHE_MAGIC &&
             hdr.version == ART_CACHE_FORMAT_VERSION &&
-            hdr.width == dim && hdr.height == dim &&
+            hdr.width > 0 && hdr.width <= dim && hdr.height > 0 &&
+            hdr.height <= dim &&
+            (bytes = (size_t)hdr.width * hdr.height * sizeof(fb_data)) > 0 &&
             read(fd, palette_px, bytes) == (ssize_t)bytes)
         {
             /* Pixel order is not checked because a histogram does not care:
              * this size is stored column-major for the carousel, and every
              * pixel is counted whichever way round they sit. */
-            bmp.width = dim;
-            bmp.height = dim;
+            bmp.width = hdr.width;
+            bmp.height = hdr.height;
             bmp.format = FORMAT_NATIVE;
             bmp.data = (unsigned char *)palette_px;
             got = compute_palette(&bmp, out);
@@ -1093,23 +1096,15 @@ static bool palette_from_folder(unsigned int hash, int dim)
  * False for art the chain has already rewritten: %Cl rewrites in place, and a
  * palette taken from one describes the theme's treatment of the album rather
  * than the album -- a bw chain would turn every derived colour grey. */
-static bool art_filtered(int handle);                 /* with the filter chain */
-
 static bool palette_from_slot(int handle)
 {
     struct bitmap *bmp;
-    bool got;
-
-    if (art_filtered(handle))
-        return false;
-    if (!buf_pin_handle(handle, true))
-        return false;
-
-    got = bufgetdata(handle, 0, (void *)&bmp) > 0;
-    if (got)
-        extract_colors(bmp);
-
+    if (!bufretain(handle)) return false;
+    if (!buf_pin_handle(handle, true)) { bufclose(handle); return false; }
+    bool got = bufgetdata(handle, 0, (void *)&bmp) > 0;
+    if (got) extract_colors(bmp);
     buf_pin_handle(handle, false);
+    bufclose(handle);
     return got;
 }
 
@@ -1190,96 +1185,13 @@ static bool palette_from_cache(void)
  * The %Cl filter chain                                                    *
  * ---------------------------------------------------------------------- */
 
-/* The chain rewrites the album art slot's own copy of the bitmap, so it has
- * to run exactly once per buffer -- twice would darken a cover twice, or
- * invert it back.
- *
- * The guard is therefore the set of art buffers already rewritten, keyed by
- * handle. A handle is the buffer, which is what makes it the right key: slots
- * dedupe by dimension, so a status bar and a WPS asking for the same size
- * share one bitmap and one entry covers both. The sharing has a consequence
- * this cannot fix, and it is worth knowing: two skins on one slot both show
- * whichever chain ran first. Declaring different sizes separates them.
- *
- * A set rather than one entry per slot because art outlives the track it was
- * loaded for. Playback keeps a handle for the album it is in the middle of and
- * hands the same one back for every track of it, so a guard cleared on a track
- * change would filter one buffer once per skip -- and a slot alternating
- * between folder art and embedded art needs both remembered at once.
- *
- * A handle id alone would not do, because buflib reissues them. What makes it
- * do is skin_albumart_art_opened(): playback calls it for every art bitmap it
- * loads, so an id that comes back meaning a different picture is struck off
- * before it can become current.
- *
- * Filtering in place cannot be undone, which shows up in one place: change
- * theme mid-album and the art keeps the outgoing theme's treatment until the
- * next album. Striking the entries instead would be worse -- the new chain
- * would compose on top of the old one's output rather than replace it.
- *
- * AA_FILTER_SLOTS is one above SKINNABLE_SCREENS_COUNT because that is the
- * largest playback.c's MAX_MULTIPLE_AA can be (it grows by one for USB iAP).
- * The set is sized for the buffer, not the slots: every buffered track keeps
- * its own cover, so a skip back lands on a handle filtered many skips ago.
- * One that has fallen out of the set is filtered a second time. */
+/* Each skin filters a private destination. Source bitmaps remain immutable. */
 #define AA_FILTER_SLOTS (SKINNABLE_SCREENS_COUNT + 1)
-#define AA_FILTERED_MAX 128
-
-/* Zero is the empty entry; buflib issues no such handle. */
-static volatile int filtered_art[AA_FILTERED_MAX];
-static int filtered_next;
-
-/* Which run of art the guards in struct skin_albumart refer to. Bumped
- * whenever art is loaded, which is what makes a repeated handle id harmless:
- * a guard stamped with an older count is stale however well its handle
- * matches. */
 static unsigned filter_gen = 1;
-
-unsigned skin_albumart_gen(void)
-{
-    return filter_gen;
-}
-
-static bool art_filtered(int handle)
-{
-    if (handle <= 0)
-        return false;
-
-    for (int i = 0; i < AA_FILTERED_MAX; i++)
-        if (filtered_art[i] == handle)
-            return true;
-    return false;
-}
-
-static void remember_filtered(int handle)
-{
-    if (handle <= 0 || art_filtered(handle))
-        return;
-
-    filtered_art[filtered_next] = handle;
-    if (++filtered_next == AA_FILTERED_MAX)
-        filtered_next = 0;
-}
-
+unsigned skin_albumart_gen(void) { return filter_gen; }
 void skin_albumart_art_opened(int handle)
 {
-    if (handle <= 0)
-        return;
-
-    for (int i = 0; i < AA_FILTERED_MAX; i++)
-        if (filtered_art[i] == handle)
-            filtered_art[i] = 0;
-
-    /* The blurring tier renders into a destination of its own, so nothing
-     * there is rewritten twice and its guard asks a different question: is
-     * what I rendered still the cover on screen? Counting loads rather than
-     * track changes is what stops it re-rendering the same art once per track
-     * of an album.
-     *
-     * Never 0, which is what a skin's art carries before it has rendered
-     * anything -- so a freshly parsed %Cl cannot match the current run. */
-    if (++filter_gen == 0)
-        filter_gen = 1;
+    if (handle > 0 && ++filter_gen == 0) filter_gen = 1;
 }
 
 /* Fit a source of sw x sh inside a bw x bh box, keeping its aspect -- the
@@ -1332,7 +1244,7 @@ static void render_filtered(struct skin_albumart *aa, int handle,
 void skin_albumart_filter(int aa_slot, struct skin_albumart *aa)
 {
     struct img_filter *filter = aa ? &aa->filter : NULL;
-    const bool resizes = filter && (filter->stages & IMG_CLASS_RESIZE);
+    const bool resizes = true;
     struct bitmap *bmp;
     int handle, avoid = -1;
 
@@ -1372,9 +1284,7 @@ void skin_albumart_filter(int aa_slot, struct skin_albumart *aa)
         aa->filter_avoid = (short)avoid;
     }
 
-    if (resizes ? (aa->filtered_art == handle
-                   && aa->filtered_gen == filter_gen)
-                : art_filtered(handle))
+    if (aa->filtered_art == handle && aa->filtered_gen == filter_gen)
         return;                                  /* already done */
 
     /* The bitmap lives in the audio buffer and is movable, and this reads it
@@ -1385,8 +1295,14 @@ void skin_albumart_filter(int aa_slot, struct skin_albumart *aa)
      * Width and height rather than the drawing stride: a levels filter is
      * per-pixel and cares only that it covers the whole buffer. A positional
      * one (dither) would need the real row length. */
+    if (!bufretain(handle)) return;
+    if (!buf_pin_handle(handle, true)) { bufclose(handle); return; }
     if (bufgetdata(handle, 0, (void *)&bmp) <= 0)
+    {
+        buf_pin_handle(handle, false);
+        bufclose(handle);
         return;
+    }
 
     /* An adaptive chain names no amount and is not fit to run until it has
      * seen the picture, so its table is folded here, once per buffered image.
@@ -1401,16 +1317,9 @@ void skin_albumart_filter(int aa_slot, struct skin_albumart *aa)
         img_filter_adapt(filter, &lv, avoid);
     }
 
-    if (resizes)
-    {
-        render_filtered(aa, handle, bmp);
-    }
-    else
-    {
-        img_filter_apply((fb_data *)bmp->data, bmp->width, bmp->height,
-                         filter);
-        remember_filtered(handle);
-    }
+    render_filtered(aa, handle, bmp);
+    buf_pin_handle(handle, false);
+    bufclose(handle);
 }
 
 static void track_change_cb(unsigned short id, void *param)
@@ -1599,6 +1508,17 @@ void dynamic_colors_save_theme(void)
 
 void dynamic_colors_check_extraction(int aa_slot)
 {
+    static unsigned seen_generation;
+    unsigned generation = art_cache_generation();
+    if (generation != seen_generation)
+    {
+        seen_generation = generation;
+        cache.valid = false;
+        palette_miss = 0;
+        memset(prefetched, 0, sizeof(prefetched));
+        memset(prefetch_missed, 0, sizeof(prefetch_missed));
+        needs_extraction = true;
+    }
     /* Remember valid AA slots from skin_render calls so list_draw
      * can trigger extraction with aa_slot = -1 (use last known) */
     static int last_aa_slot = -1;

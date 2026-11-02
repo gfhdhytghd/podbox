@@ -47,9 +47,7 @@
 #include "system/appevents.h"
 #include "metadata.h"
 #include "draw/bmp.h"
-#include "metadata/albumart.h"
 #include "metadata/art_cache.h"
-#include "draw/image_load.h"
 #include "playback.h"
 #include "buffering.h"
 #include "linked_list.h"
@@ -94,6 +92,7 @@ struct memory_handle {
     int     id;             /* A unique ID for the handle */
     enum data_type type;    /* Type of data buffered with this handle */
     uint8_t flags;          /* Handle property flags */
+    unsigned references;   /* owning track plus retained bitmap readers */
     int8_t  pinned;         /* Count of pinnings */
     int8_t  signaled;       /* Stop any attempt at waiting to get the data */
     int     fd;             /* File descriptor to path (-1 if closed) */
@@ -514,6 +513,7 @@ add_handle(unsigned int flags, size_t data_size, const char *path,
     h->size     = handlesize;
     h->id       = next_handle_id();
     h->flags    = flags;
+    h->references = 1;
     h->pinned   = 0; /* Can be moved */
     h->signaled = 0; /* Data can be waited for */
 
@@ -866,8 +866,13 @@ static bool close_handle(int handle_id)
 
     /* If the handle is not found, it is closed */
     if (h) {
-        close_fd(&h->fd);
-        unlink_handle(h);
+        if (h->references > 1)
+            h->references--;
+        else
+        {
+            close_fd(&h->fd);
+            unlink_handle(h);
+        }
     }
 
     mutex_unlock(&llist_mutex);
@@ -985,38 +990,12 @@ static int load_image(int fd, const char *path,
     int rc;
     struct bitmap *bmp = ringbuf_ptr(bufidx);
     struct dim *dim = data->dim;
-    struct mp3_albumart *aa = data->embedded_albumart;
-    /* The pixels' share of the handle, which also holds the struct */
     int data_size = (int)(max_size - sizeof(struct bitmap));
-
-    /* get the desired image size */
-    bmp->width = dim->width, bmp->height = dim->height;
-    /* FIXME: alignment may be needed for the data buffer. */
+    bmp->width = dim->width;
+    bmp->height = dim->height;
     bmp->data = ringbuf_ptr(bufidx + sizeof(struct bitmap));
-
     bmp->maskdata = NULL;
-    const int format = FORMAT_NATIVE | FORMAT_DITHER |
-                       FORMAT_RESIZE | FORMAT_KEEP_ASPECT;
-    size_t plen = strlen(path);
-    if (aa == NULL && plen >= 4 && !strcmp(path + plen - 4, ".aat")) {
-        /* a pre-scaled thumbnail from the art cache: just downscale, no decode
-         *
-         * Unfiltered, deliberately. This bitmap is what skin_albumart_color.c
-         * derives the palette from, and the palette has to describe the album
-         * rather than the theme's treatment of it -- a bw chain here would
-         * turn every derived colour grey. Skin art has its own filter, on the
-         * %Cl that loads it. */
-        rc = art_cache_load_aat(fd, bmp, data_size, NULL);
-    }
-    else {
-        struct image_src src = {
-            .fd = fd,
-            .pos = aa ? aa->pos : 0,
-            .len = aa ? aa->size : -1,
-            .flags = aa ? aa->type & ~AA_CLEAR_FLAGS_MASK : 0,
-        };
-        rc = image_load(&src, bmp, data_size, format, NULL);
-    }
+    rc = art_cache_load_aat(fd, bmp, data_size, NULL);
 
     return rc + (rc > 0 ? sizeof(struct bitmap) : 0);
 }
@@ -1128,11 +1107,7 @@ int bufopen(const char *file, off_t offset, enum data_type type,
         size = BM_SIZE(aa->dim->width, aa->dim->height, FORMAT_NATIVE, false);
         size += sizeof(struct bitmap);
 
-        /* JPEG and PNG loading require extra memory
-         * TODO: don't add unncessary overhead for .bmp images! */
-        size += IMAGE_DECODE_OVERHEAD;
-       /* resize_on_load requires space for 1 line + 2 spare lines */
-        size += sizeof(struct uint32_argb) * 3 * aa->dim->width;
+
     }
 
     if (size == 0)
@@ -1648,6 +1623,16 @@ off_t buf_handle_remaining(int handle_id)
     if (!h)
         return ERR_HANDLE_NOT_FOUND;
     return h->filesize - h->end;
+}
+
+bool bufretain(int handle_id)
+{
+    mutex_lock(&llist_mutex);
+    struct memory_handle *h = find_handle(handle_id);
+    bool ok = h && h->type == TYPE_BITMAP && h->references < UINT_MAX;
+    if (ok) h->references++;
+    mutex_unlock(&llist_mutex);
+    return ok;
 }
 
 bool buf_pin_handle(int handle_id, bool pin)

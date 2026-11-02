@@ -15,21 +15,10 @@
 #include "metadata.h"
 #include "skin/skin_engine.h"
 
-/* Look for albumart bitmap in the same dir as the track and in its parent dir.
- * Calls size_func to get the dimensions to look for
- * Stores the found filename in the buf parameter.
- * Returns true if a bitmap was found, false otherwise */
-bool find_albumart(const struct mp3entry *id3, char *buf, int buflen,
-                    const struct dim *dim);
-
-bool search_albumart_files(const struct mp3entry *id3, const char *size_string,
-                           char *buf, int buflen);
-
 /* Whether the image file at path exists and its decoder takes it, by its
  * headers; one that fails further in passes. */
 bool art_file_usable(const char *path);
 
-void get_albumart_size(struct bitmap *bmp);
 
 /* Where a track's cover comes from, by the Album Art setting's rules: the
  * preference (AA_PREFER_*) names the source tried first, and the others
@@ -39,15 +28,30 @@ void get_albumart_size(struct bitmap *bmp);
  * for a JPEG exactly as the source holds it, or the cache's raw thumbnail,
  * for a caller that sends the bytes on rather than decoding them. False when
  * no source has art. */
-enum { AA_SOURCE_NONE, AA_SOURCE_EMBEDDED, AA_SOURCE_FILE, AA_SOURCE_CACHE };
+enum { AA_SOURCE_NONE, AA_SOURCE_EMBEDDED, AA_SOURCE_FILE, AA_SOURCE_CACHE,
+       AA_SOURCE_ITUNES };
 struct albumart_source {
     int kind;               /* AA_SOURCE_* */
     char path[MAX_PATH];    /* the file to read */
     off_t pos;              /* where the image starts in it */
     int size;               /* its length, or -1 for the whole file */
+    unsigned flags;
+    unsigned width, height, stride; /* raw iTunes RGB565 geometry */
+    uint64_t revision;
+    char identity[MAX_PATH];
 };
 bool albumart_find_source(const struct mp3entry *id3, int preference,
                           bool as_stored, struct albumart_source *src);
 
+
+enum albumart_role { AA_ROLE_ALBUM, AA_ROLE_ARTIST, AA_ROLE_TRACK, AA_ROLE_BOOK };
+struct custom_format;
+bool albumart_normalize(const char *path, char *out, size_t capacity);
+bool albumart_next_source(const struct mp3entry *id3, enum albumart_role role,
+                          unsigned *cursor, struct albumart_source *src);
+bool albumart_source_revision(struct albumart_source *src);
+int albumart_decode(const struct albumart_source *src, struct bitmap *bm,
+                    int maxsize, int format, const struct custom_format *cf);
+void albumart_source_key(const struct albumart_source *src, char *out, size_t n);
 
 #endif /* _ALBUMART_H_ */

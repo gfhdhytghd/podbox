@@ -472,7 +472,7 @@ static bool browser_aa_load(const char *path, int slot,
     if (fd < 0)
         return false;
 
-    if (read(fd, &hdr, sizeof(hdr)) == (ssize_t)sizeof(hdr) &&
+    if (art_cache_read_header(fd, &hdr) &&
         hdr.magic == ART_CACHE_MAGIC &&
         hdr.version == ART_CACHE_FORMAT_VERSION &&
         hdr.layout == AA_ROWS &&
@@ -509,6 +509,13 @@ const struct bitmap *browser_art_row(int selected_item, void *data,
      * to fit the tighter of the two or it is cropped. */
     int want = size ? MIN(size->width, size->height) : TREE_AA_MAX_DIM;
 
+    static unsigned seen_generation;
+    unsigned generation = art_cache_generation();
+    if (generation != seen_generation)
+    {
+        browser_aa_reset();
+        seen_generation = generation;
+    }
     if (!browser_aa_ready(want))
         return NULL;
 

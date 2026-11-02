@@ -40,6 +40,7 @@ INCLUDES = -I. -I$(APPS)/sim/include -I$(BUILD) -I$(BUILD)/lang \
 SRC := artcache_pb.c stubs.c \
        $(APPS)/metadata/art_cache.c \
        $(APPS)/metadata/albumart.c \
+       $(APPS)/metadata/itunes_art.c \
        $(APPS)/draw/image_load.c \
        $(APPS)/draw/jpeg_load.c \
        $(APPS)/draw/png_load.c \

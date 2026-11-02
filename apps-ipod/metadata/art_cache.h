@@ -19,20 +19,10 @@ struct bitmap;
  * (fb_data) pixels in the order the header's 'layout' names. Exposed so
  * consumers (e.g. Cover Flow) can read a cached thumbnail directly. */
 #define ART_CACHE_MAGIC          0x5441u  /* 'AT' */
-/* Bump whenever the cached pixels' meaning changes (format, geometry, fit rule).
- * aa_check_format_version() purges the thumbnails when this moves, so a stale
- * cache regenerates instead of being skipped by the generator (bare file_exists)
- * while the reader rejects it as the wrong version.
- *   1 -> 2: AA_FIT_COVER implemented; "coverflow" thumbs are now centre-cropped
- *           squares rather than letterboxed CONTAIN fits.
- *   2 -> 3: added the 300px "wps" size.
- *   3 -> 4: coverflow 128 -> 140; single podboxnoart placeholder.
- *   4 -> 5: list 48 -> 46.
- *   5 -> 6: list 46 -> 44 (fits 4 rows of 46px).
- *   6 -> 7: coverflow back to 128 (140 tore the angled slides).
- *   7 -> 8: header gained 'layout'; coverflow thumbs are stored column-major so
- *           the carousel can read one straight into a slide. */
-#define ART_CACHE_FORMAT_VERSION 8
+/* Version 9 adds verified source identity, request metadata and a checksum.
+ * It lives in art/v9; version 8 files are never interpreted as this format. */
+#define ART_CACHE_FORMAT_VERSION 9
+#define ART_CACHE_IDENTITY_MAX 512
 
 struct art_cache_header
 {
@@ -41,22 +31,24 @@ struct art_cache_header
     uint16_t width;
     uint16_t height;
     uint16_t layout;   /* enum art_layout, as stored */
-    uint16_t pad;      /* keeps the pixel data 4-byte aligned */
+    uint16_t pad;
+    uint32_t source_id;
+    uint32_t checksum;
+    uint32_t fit;
+    uint32_t pixel_format;
+    char identity[ART_CACHE_IDENTITY_MAX];
 };
 
-/* Background, database-driven album-art thumbnail cache.
- *
- * A dedicated low-priority thread walks the tagcache once the database is
- * ready and idle, resolves each album folder's cover art, and renders it to
- * a set of square thumbnails (see metadata/art_sizes.h) under
- * library/cache/art/<sizename>/<hash>.aat. Thumbnails are keyed by a hash
- * of the album's folder path, so keys stay valid across database rebuilds.
- * Each folder also has a stamp of the image its thumbnails came from -- its
- * path, size and modification time -- so a pass regenerates a folder whose
- * image was replaced and deletes the thumbnails of one whose image is gone. */
+/* The background worker resolves every track. A full-key registry maps a
+ * normalized owner path to a source/revision and shared derivative pixels.
+ * Album rows use their database representative track's owner key. */
 
 /* Start the background cache thread. Call once at startup, after tagcache. */
 void art_cache_init(void);
+bool art_cache_read_header(int fd, struct art_cache_header *header);
+enum art_cache_state { ART_MISSING, ART_LOADING, ART_READY, ART_FAILED };
+enum art_cache_state art_cache_status(void);
+enum art_cache_state art_cache_entry_status(unsigned key);
 
 #ifdef DBTOOL
 /* tools/artcache_pb: one caching pass with no thread, recording the
@@ -66,8 +58,8 @@ enum bg_result art_cache_tool_run(bool rebuild);
 
 /* Load a cached .aat thumbnail from an open fd, area-average downscaled to
  * bm->width x bm->height (bm->data must hold that many fb_data). Returns the
- * pixel byte count, or <= 0 on failure, which includes a non-square
- * thumbnail. Used by the buffering path so the WPS renders the 300px cache
+ * pixel byte count, or <= 0 on failure. Rectangular thumbnails retain their
+ * aspect ratio. Used by the buffering path so the WPS renders the 300px cache
  * instead of re-decoding source art.
  *
  * `filter` is the chain to run on the way out, or NULL for none. It is the
@@ -111,8 +103,7 @@ unsigned int art_cache_generation(void);
  * skipped on its directory entry without reading the image. */
 extern struct bg_task art_cache_task;
 
-/* Where album art is taken from: global_settings.art_cache_album_source.
- * Artist art comes from image files whatever this says. */
+/* Values retained for reading configurations written before format 9. */
 enum art_album_source
 {
     ART_SOURCE_FILES,           /* image files only */
@@ -130,8 +121,7 @@ void art_cache_settings_applied(void);
 
 /* Resolve the cache-file path for a given album folder and size index.
  * Returns true and fills 'out' if a thumbnail is available, false otherwise.
- * 'dir' is the album's folder path (the directory containing the track), with no
- * trailing slash -- the same key generation uses.
+ * 'dir' is a track path, or the artist directory for the artist role.
  *
  * When the folder has no real art, the shared placeholder thumbnail is returned
  * instead (if generated), so callers get a valid thumbnail without managing a
@@ -140,27 +130,14 @@ void art_cache_settings_applied(void);
 bool art_cache_lookup(const char *dir, int size_index,
                            char *out, int out_len, bool *is_fallback);
 
-/* The same lookup keyed by the folder's hash rather than its path.
- *
- * The hash is all the lookup ever uses, so a caller that resolves the same
- * folder repeatedly can keep the hash instead of the path and skip both the
- * path and the work of producing it. The carousel does exactly that: finding an
- * album's folder means a database search, so it is done once when the album
- * index is built and only the hash is carried per slide.
- *
- * art_cache_dir_hash() produces the key, and returns 0 for a NULL path. Callers
- * use 0 as their "folder not resolved" marker; a real path can hash to 0 too,
- * and the cost of that collision is one folder's art not being found. */
+/* Stable registry key, with complete normalized-key collision checking.
+ * Returns zero for an invalid identity or a registry write failure. */
 unsigned int art_cache_dir_hash(const char *dir);
 bool art_cache_lookup_hash(unsigned int dir_hash, int size_index,
                            char *out, int out_len, bool *is_fallback);
 
-/* Where a folder's thumbnail would be, said without going near the disk.
- *
- * For a caller that is about to open the file anyway: the lookups above answer
- * "is it there?" by opening it and closing it again, so asking them first and
- * then opening makes two of what should be one. Opening the path this hands
- * back is itself the existence test. */
+/* Resolve an owner's published source reference to its derivative path.
+ * A missing derivative queues a bounded retry on the worker. */
 void art_cache_thumb_path(unsigned int dir_hash, int size_index,
                           char *out, int out_len);
 

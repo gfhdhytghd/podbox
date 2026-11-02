@@ -403,6 +403,7 @@ static unsigned int folder_hash(const char *path, bool up)
     if (!path || !path[0])
         return 0;
 
+    if (!up) return art_cache_dir_hash(path);
     slash = strrchr(path, '/');
     if (!slash || slash == path)
         return 0;
