@@ -33,9 +33,16 @@ the player, finds it by its USB identity, and reconnects by itself when the
 player is unplugged and plugged back in. It logs to standard output and
 writes nothing to the player's disk.
 
+Both lists are in priority order: agents waiting for you first (the oldest
+question first), then agents that are working, then the rest with the most
+recently active first. A workspace ranks as its best agent. herdr records
+no times, so this program notes when each agent's status changes and keeps
+the times in a small state file; a restart keeps the order.
+
 | Option | Use |
 |---|---|
 | `--socket PATH` | herdr's API socket. Default: `$HERDR_SOCKET_PATH`, else herdr's default socket |
+| `--state FILE` | Where the order's times are kept. Default: `order.json` in `$STATE_DIRECTORY`, else `~/.local/state/herdremote/` |
 | `--once` | Print the workspaces and questions the player would get, then exit. Checks herdr without a player |
 | `--port TTY` | Use this tty instead of finding the player: for testing, or for the simulator, which prints its tty as `PodLink: /dev/pts/N` when Agents opens |
 
@@ -72,7 +79,7 @@ A row at the top says when something is missing:
 | Connect USB to the computer | No USB connection |
 | Start herdremote on the computer | USB is up; this program is not running |
 | Waiting for herdremote… | The session is open; this program has not answered yet |
-| herdr is not running on the computer | This program cannot reach herdr's socket |
+| herdr is not running | This program cannot reach herdr's socket |
 | No update for N s | The player has heard nothing for N seconds |
 | herdr data N s old | herdr has stopped answering this program |
 

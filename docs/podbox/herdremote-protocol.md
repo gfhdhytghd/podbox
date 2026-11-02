@@ -52,7 +52,8 @@ W <n>
 <id> <f|-> <working> <waiting> <done> <idle> <label>     (n records)
 ```
 
-All of herdr's workspaces, in herdr's order. `f` marks the one the computer
+All of herdr's workspaces, in the order the player lists them (see
+[Order](#order)). `f` marks the one the computer
 shows. The four counts are agents in that workspace's first tab by status;
 `waiting` counts agents that herdr reports blocked or that show a question. `label` is at most 40
 bytes. At most 32 records.
@@ -65,7 +66,7 @@ A <ws> <n>
 ```
 
 Sent only for the workspace the player subscribed to with `sub`, and again
-whenever it changes.
+whenever it changes. Records come in the order the player lists them.
 
 | Field | Budget | Meaning |
 |---|---|---|
@@ -77,6 +78,22 @@ whenever it changes.
 | `last` | 90 | the last line of activity above the agent's prompt |
 
 At most 16 records.
+
+### Order
+
+The computer sends both lists in priority order, and the player shows them
+as sent:
+
+1. Agents that need a person: a question, or herdr's `blocked`. The oldest
+   question comes first.
+2. Agents that are working, in herdr's order.
+3. All others, the most recent status change first. An agent with no
+   recorded change keeps herdr's order, after the ones with one.
+
+A workspace ranks as its best agent; a workspace with no agents goes with
+the last group. The order changes only when an agent's status changes. The
+player keeps its selection on the same workspace or agent when the order
+changes. Questions (`Q`) are sent oldest first.
 
 ### `Q` — a question
 

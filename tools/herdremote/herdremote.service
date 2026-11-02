@@ -11,6 +11,8 @@ After=default.target
 ExecStart=/usr/bin/python3 %h/podbox/tools/herdremote/herdremote.py
 # Without this the journal gets the log in blocks, minutes late
 Environment=PYTHONUNBUFFERED=1
+# The list order's times: ~/.local/state/herdremote/order.json
+StateDirectory=herdremote
 Restart=on-failure
 RestartSec=5
 

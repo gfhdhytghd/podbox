@@ -26,6 +26,7 @@ import podlink  # noqa: E402  tools/podlink.py: the PodLink frame codec
 
 import hrdetect  # noqa: E402
 import hrherdr  # noqa: E402
+import hrorder  # noqa: E402
 import hrproto  # noqa: E402
 
 VERSION = "herdremote-1"
@@ -110,6 +111,7 @@ class Daemon:
     def __init__(self, args):
         self.args = args
         self.herdr = hrherdr.Herdr(args.socket)
+        self.order = hrorder.Order(args.state)
         self.changed = threading.Event()
         self.results = queue.Queue()
         self.answerer = Answerer(self.herdr, self.results, self.changed)
@@ -131,7 +133,8 @@ class Daemon:
     def refresh(self):
         try:
             snapshot = self.herdr.snapshot()
-            self.model = hrherdr.build_model(snapshot, self.herdr.read)
+            self.model = self.order.apply(
+                hrherdr.build_model(snapshot, self.herdr.read))
             self.model_time = time.monotonic()
             if not self.herdr_ok:
                 log.info("herdr reachable at %s", self.herdr.path)
@@ -296,6 +299,9 @@ def main():
                         "(default: $HERDR_SOCKET_PATH or ~/.config/herdr)")
     parser.add_argument("--port", help="use this tty instead of finding the "
                         "iPod (testing only)")
+    parser.add_argument("--state", default=hrorder.default_path(),
+                        help="file that keeps the list order across restarts "
+                        "(default: %(default)s)")
     parser.add_argument("--once", action="store_true",
                         help="print the model as the player would get it, "
                         "then exit")

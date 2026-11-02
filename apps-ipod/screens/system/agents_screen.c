@@ -65,9 +65,13 @@ enum row_kind {
     ROW_EMPTY,
 };
 
+/* id is the workspace or pane a row stands for, copied when the rows are
+ * built: the computer reorders the lists, so an index alone does not say
+ * which item the selection was on once the model has changed */
 struct row {
     unsigned char kind;
     unsigned char index;
+    char id[16];
 };
 
 #define MAX_ROWS   64
@@ -295,8 +299,11 @@ static void add_row(int kind, int index)
 {
     if (nrows < MAX_ROWS)
     {
+        const char *id = kind == ROW_SPACE ? model.ws[index].id :
+                         kind == ROW_AGENT ? model.agents[index].pane : "";
         rows[nrows].kind = kind;
         rows[nrows].index = index;
+        snprintf(rows[nrows].id, sizeof rows[nrows].id, "%s", id);
         nrows++;
     }
 }
@@ -633,8 +640,9 @@ static void show_same(struct gui_synclist *list)
     int top = list->start_item[SCREEN_MAIN];
     build_rows(list);
     int i = 0;
-    while (i < nrows &&
-           (rows[i].kind != was.kind || rows[i].index != was.index))
+    while (i < nrows && (rows[i].kind != was.kind ||
+                         (was.id[0] ? strcmp(rows[i].id, was.id) :
+                                      rows[i].index != was.index)))
         i++;
     /* A row that has not moved keeps the view where the reader left it */
     if (i < nrows)

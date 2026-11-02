@@ -22,6 +22,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(HERE)))
 
 import hrdetect  # noqa: E402
 import hrherdr  # noqa: E402
+import hrorder  # noqa: E402
 import hrproto  # noqa: E402
 import herdremote  # noqa: E402
 import podlink  # noqa: E402
@@ -237,6 +238,131 @@ class CrossLanguage(unittest.TestCase):
 
 
 # --- end to end ---------------------------------------------------------
+class Ordering(unittest.TestCase):
+    """Priority order: asking (oldest first), working, then most recent."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.path = os.path.join(self.tmp.name, "state", "order.json")
+        self.now = 1000.0
+        self.order = hrorder.Order(self.path, clock=lambda: self.now)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    @staticmethod
+    def agent(pane, status, question=False):
+        return dict(pane=pane, status=status, question=question)
+
+    def model(self, spaces):
+        """spaces: [(workspace id, [(pane, status, question)])]"""
+        return dict(
+            workspaces=[dict(id=w) for w, _ in spaces],
+            agents={w: [self.agent(*a) for a in rows] for w, rows in spaces},
+            questions={})
+
+    def run_model(self, spaces, order=None):
+        model = (order or self.order).apply(self.model(spaces))
+        return ([w["id"] for w in model["workspaces"]],
+                {w: [a["pane"] for a in rows]
+                 for w, rows in model["agents"].items()})
+
+    def test_unknown_panes_keep_herdr_order(self):
+        spaces, agents = self.run_model([
+            ("a", [("a1", "idle"), ("a2", "done")]),
+            ("b", [("b1", "idle")])])
+        self.assertEqual(spaces, ["a", "b"])
+        self.assertEqual(agents["a"], ["a1", "a2"])
+
+    def test_ranks_and_recency(self):
+        layout = [("a", [("a1", "working"), ("a2", "idle")]),
+                  ("b", [("b1", "working")]),
+                  ("c", [("c1", "idle")]),
+                  ("d", [("d1", "working")]),
+                  ("e", [])]
+        self.run_model(layout)
+        # b1 asks, d1 finishes; c1 stays idle and has no history
+        self.now = 1010
+        layout[1] = ("b", [("b1", "blocked", True)])
+        layout[3] = ("d", [("d1", "done")])
+        spaces, agents = self.run_model(layout)
+        self.assertEqual(spaces, ["b", "a", "d", "c", "e"])
+        self.now = 1030
+        layout[0] = ("a", [("a1", "working"), ("a2", "idle")])
+        spaces, agents = self.run_model(layout)
+        self.assertEqual(spaces[:2], ["b", "a"])
+        self.now = 1040
+        layout[3] = ("d", [("d1", "idle")])
+        spaces, agents = self.run_model(layout)
+        # d changed most recently, c has no history so comes after it
+        self.assertEqual(spaces, ["b", "a", "d", "c", "e"])
+        self.assertEqual(agents["a"], ["a1", "a2"])
+
+    def test_oldest_question_first(self):
+        layout = [("a", [("a1", "working")]), ("b", [("b1", "working")]),
+                  ("c", [("c1", "working")])]
+        self.run_model(layout)
+        self.now = 1100
+        layout[2] = ("c", [("c1", "blocked", True)])
+        self.run_model(layout)
+        self.now = 1200
+        layout[0] = ("a", [("a1", "blocked")])
+        spaces, _ = self.run_model(layout)
+        self.assertEqual(spaces, ["c", "a", "b"])
+        model = self.model(layout)
+        model["questions"] = {"q2": dict(pane="a1"), "q1": dict(pane="c1")}
+        self.order.apply(model)
+        self.assertEqual(list(model["questions"]), ["q1", "q2"])
+
+    def test_agents_inside_a_workspace(self):
+        layout = [("a", [("a1", "idle"), ("a2", "working"),
+                         ("a3", "working"), ("a4", "idle")])]
+        self.run_model(layout)
+        self.now = 1010
+        layout[0] = ("a", [("a1", "idle"), ("a2", "done"),
+                           ("a3", "working"), ("a4", "blocked", True)])
+        _, agents = self.run_model(layout)
+        self.assertEqual(agents["a"], ["a4", "a3", "a2", "a1"])
+
+    def test_stable_between_polls(self):
+        layout = [("a", [("a1", "working")]), ("b", [("b1", "idle")]),
+                  ("c", [("c1", "working")])]
+        first = self.run_model(layout)
+        mtime = os.stat(self.path).st_mtime_ns
+        for step in range(5):
+            self.now += 1
+            self.assertEqual(self.run_model(layout), first)
+        # Nothing changed, so nothing was written
+        self.assertEqual(os.stat(self.path).st_mtime_ns, mtime)
+
+    def test_restart_keeps_order(self):
+        layout = [("a", [("a1", "working")]), ("b", [("b1", "working")])]
+        self.run_model(layout)
+        self.now = 1010
+        layout[0] = ("a", [("a1", "done")])
+        self.run_model(layout)
+        self.now = 1020
+        layout[1] = ("b", [("b1", "idle")])
+        self.assertEqual(self.run_model(layout)[0], ["b", "a"])
+        again = hrorder.Order(self.path, clock=lambda: self.now + 500)
+        self.assertEqual(self.run_model(layout, again)[0], ["b", "a"])
+
+    def test_bad_state_file_is_ignored(self):
+        os.makedirs(os.path.dirname(self.path))
+        with open(self.path, "w") as f:
+            f.write("{not json")
+        order = hrorder.Order(self.path)
+        self.assertEqual(order.panes, {})
+        self.assertEqual(self.run_model([("a", [("a1", "idle")])], order)[0],
+                         ["a"])
+
+    def test_closed_panes_are_forgotten(self):
+        self.run_model([("a", [("a1", "idle"), ("a2", "idle")])])
+        self.run_model([("a", [("a1", "idle")])])
+        with open(self.path) as f:
+            self.assertEqual(list(json.load(f)["panes"]), ["a1"])
+
+
 class FakeHerdr(threading.Thread):
     """A herdr socket with one workspace, one Claude agent and a dialog."""
 
@@ -365,7 +491,9 @@ class EndToEnd(unittest.TestCase):
         self.herdr.start()
         self.ipod = FakeIpod()
         args = types.SimpleNamespace(socket=self.herdr.path,
-                                     port=self.ipod.path, once=False)
+                                     port=self.ipod.path, once=False,
+                                     state=os.path.join(self.tmp.name,
+                                                        "order.json"))
         self.daemon = herdremote.Daemon(args)
         herdremote.CONFIRM_SECONDS = 2
         self.thread = threading.Thread(target=self.daemon.run, daemon=True)
