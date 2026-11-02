@@ -128,6 +128,10 @@ void usb_charging_maxcurrent_change(int maxcurrent)
     bool fast_charging = (maxcurrent >= 500);
 
     usb_committed_ma = maxcurrent;
+#ifndef BOOTLOADER
+    if (usb_host_is_present())
+        usb_charger_detected = false;
+#endif
 
     /* This GPIO is connected to the LTC4066's SUSP pin */
     /* Setting it high prevents any power being drawn over USB */
@@ -144,7 +148,8 @@ void usb_charging_maxcurrent_change(int maxcurrent)
      * source can't deliver enough for device + charge current.
      * Device still draws operating power from USB; battery only
      * supplements if USB is insufficient. */
-    GPIOCMD = 0xc010e | ((fast_charging || usb_charger_detected) ? 0 : 1);
+    GPIOCMD = 0xc010e | ((!suspend_charging &&
+                        (fast_charging || usb_charger_detected)) ? 0 : 1);
 }
 #endif
 
@@ -180,6 +185,31 @@ unsigned int power_input_status(void)
     if (usb_detect() == USB_INSERTED)
     {
         status |= POWER_INPUT_USB;
+        /* A host's negotiated grant is authoritative, including PodLink:
+         * no storage handover or !CHRG debounce is needed to report it.
+         * Never let the wall-charger probe override a host's current limit
+         * or USB suspend. This also respects Charge During USB = off. */
+        int maxcurrent = usb_charging_maxcurrent();
+        if (maxcurrent >= 500 || maxcurrent < 100
+#ifndef BOOTLOADER
+            || usb_host_is_present()
+#endif
+           )
+        {
+            if (monitoring)
+            {
+                timeout_cancel(&chrg_monitor_tmo);
+                monitoring = false;
+            }
+            usb_charger_detected = false;
+            was_probing = false;
+            inserted = true;
+            debounce = 0;
+            GPIOCMD = 0xc010e | (maxcurrent >= 500 ? 0 : 1);
+            if (maxcurrent >= 500)
+                status |= POWER_INPUT_USB_CHARGER;
+            goto usb_done;
+        }
         if (!inserted)
         {
             inserted = true;
@@ -257,6 +287,7 @@ unsigned int power_input_status(void)
         inserted = false;
         debounce = 0;
     }
+usb_done:
     if (pmu_firewire_present())
         status |= POWER_INPUT_MAIN_CHARGER;
     return status;

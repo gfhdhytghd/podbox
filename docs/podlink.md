@@ -116,6 +116,58 @@ cc -std=c99 -Wall -Wextra -Werror -g -fsanitize=address,undefined \
 These checks use mock serial/controller state and a real local WebSocket. They
 cannot establish physical USB, iPod startup, or real-device throughput.
 
+## Charging in PodLink / Agents
+
+PodLink and normal storage use the same saved **Charge During USB Connection**
+setting (System > Battery). With `on` or `force`, both request 500 mA
+(`bMaxPower` byte 250, in 2 mA units). With `off`, both request 100 mA
+(`bMaxPower` byte 50) and do not enable battery charging from an enumerated
+computer. Select the setting before reconnecting: a host's existing 100 mA
+grant is not raised merely because the setting changed.
+
+Before configuration, the device limits USB input to 100 mA. A configured
+500 mA source enables the iPod6g charger and reports a charging source to the
+battery status bar, without waiting for a storage-mode handover. Suspend
+disables USB input and battery charging; resume restores the existing grant.
+Unplug clears the grant. A bus reset requires configuration again. The
+LTC4066 still controls battery charge termination and the battery's charge
+current (the 500 mA limit includes device consumption).
+
+Run the production USB core and iPod6g power code against RAM-backed hardware:
+
+```sh
+cc -std=gnu11 -Wall -Wextra -Werror -g -fsanitize=address,undefined \
+  -ffunction-sections -fdata-sections -Wl,--gc-sections \
+  -Itools/tests/charging_stubs -Ifirmware/export -Ifirmware/usbstack \
+  tools/tests/usb_charging_test.c -o /tmp/podlink-usb-charging-test
+/tmp/podlink-usb-charging-test
+```
+
+Physical acceptance remains separate. With a partially discharged battery,
+select `on`, unplug, enter System > Agents (or PodLink), and reconnect.
+Read the host descriptor using `lsusb -v -d 05ac:1261`: expect `bMaxPower 500mA`,
+one configuration, and CDC interfaces in link mode. Find the matching USB
+device directory under `/sys/bus/usb/devices` by its `idVendor=05ac` and
+`idProduct=1261`; read its `bMaxPower` and `bConfigurationValue` (expect `500mA`
+and `1`). Record the directory and serial. Do not select a tty by number.
+
+Confirm the battery animation while the link is active. For a separate
+diagnostic run, enable the Debug menu and open System > Debug > Battery;
+record `USB current limit` and the hardware charging state. Opening that
+screen requires leaving Agents, so do not label it a simultaneous observation
+of Agents charging. A full battery may correctly stop charging.
+Repeat after the screen/backlight has been off for at least 15 seconds.
+Check unplug/replug without leaving Agents, and then exit to storage using
+MENU/LEFT from the spaces view. Confirm storage enumeration and charging.
+Repeat with `off` (100 mA, no host battery charging) and `force` (500 mA after
+configuration). For each setting, unplug/replug before reading descriptors.
+
+Coordinate a host suspend/resume with the user and the owner of `herdremote`.
+During suspend, confirm charger input/charge stops with a USB power meter;
+after resume, confirm the prior grant, battery animation and link recovery.
+Keep the normal storage volume unmounted for its suspend comparison.
+Do not infer physical charge current or link throughput from host-only tests.
+
 ## Profiling build
 
 `profile-1` records the baseline queue and transfer scheduling with RAM-only

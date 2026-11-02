@@ -199,7 +199,9 @@ static enum { DEFAULT, ADDRESS, CONFIGURED } usb_state;
 
 #ifdef HAVE_USB_CHARGING_ENABLE
 static int usb_charging_mode = USB_CHARGING_DISABLE;
-static int usb_charging_current_requested = 500;
+static int usb_charging_current_requested = 100;
+static int usb_charging_current_granted = 100;
+static volatile bool usb_suspended;
 static struct timeout usb_no_host_timeout;
 static bool usb_no_host = false;
 
@@ -522,6 +524,8 @@ void usb_core_init(void)
     usb_config = 0;
 #ifdef HAVE_USB_CHARGING_ENABLE
     usb_no_host = false;
+    usb_suspended = false;
+    usb_charging_current_requested = 100;
     timeout_register(&usb_no_host_timeout, usb_no_host_callback, HZ*10, 0);
 #endif
     logf("usb_core_init() finished");
@@ -558,6 +562,8 @@ void usb_core_exit(void)
     usb_state = DEFAULT;
 #ifdef HAVE_USB_CHARGING_ENABLE
     usb_no_host = false;
+    usb_suspended = false;
+    timeout_cancel(&usb_no_host_timeout);
     usb_charging_maxcurrent_change(usb_charging_maxcurrent());
 #endif
     logf("usb_core_exit() finished");
@@ -947,14 +953,13 @@ static void request_handler_device_get_descriptor(struct usb_ctrlrequest* req, u
                 config_descriptor.bDescriptorType = USB_DT_OTHER_SPEED_CONFIG;
             }
 #ifdef HAVE_USB_CHARGING_ENABLE
-            if (usb_charging_mode == USB_CHARGING_DISABLE) {
-                config_descriptor.bMaxPower = (100+1)/2;
-                usb_charging_current_requested = 100;
-            }
-            else {
-                config_descriptor.bMaxPower = (500+1)/2;
-                usb_charging_current_requested = 500;
-            }
+            int requested = usb_charging_mode == USB_CHARGING_DISABLE ?
+                            100 : 500;
+            config_descriptor.bMaxPower = requested / 2;
+            /* An OTHER_SPEED query must not change the current granted
+             * for the configuration at the actual bus speed. */
+            if (type == USB_DT_CONFIG)
+                usb_charging_current_requested = requested;
 #endif
             size = sizeof(struct usb_config_descriptor);
 
@@ -1090,6 +1095,10 @@ static int usb_core_do_set_config(uint8_t new_config)
 
     usb_config = new_config;
     usb_state = usb_config == 0 ? ADDRESS : CONFIGURED;
+#ifdef HAVE_USB_CHARGING_ENABLE
+    usb_charging_current_granted = usb_config ?
+                                  usb_charging_current_requested : 100;
+#endif
 
     bool require_exclusive = false;
     bool require_cpu_boost = false;
@@ -1410,6 +1419,13 @@ static void do_bus_reset(void) {
     bus_reset_pending = false;
     set_ep0_state(EP0_READY);
     have_pending_request = false;
+#ifdef HAVE_USB_CHARGING_ENABLE
+    usb_suspended = false;
+    usb_no_host = false;
+    /* Keep the descriptor for this attachment: after a reset the host
+     * may reuse its cached configuration without reading it again. The
+     * active grant is dropped by deconfiguration, not by this cache. */
+#endif
 }
 
 /* called by usb_drv_int() */
@@ -1427,6 +1443,10 @@ void usb_core_bus_reset(void)
         return;
     }
     bus_reset_pending = true;
+#ifdef HAVE_USB_CHARGING_ENABLE
+    /* Drop the old grant before deferred class-driver teardown. */
+    usb_charger_update();
+#endif
     if(usb_config == 0) {
         do_bus_reset();
     } else {
@@ -1720,6 +1740,13 @@ void usb_core_notify_set_config(uint8_t config)
 }
 
 #ifdef HAVE_USB_CHARGING_ENABLE
+/* IRQ-safe: target charging callbacks run in the USB thread. */
+void usb_core_bus_suspend(bool suspended)
+{
+    usb_suspended = suspended;
+    usb_charger_update();
+}
+
 void usb_charging_enable(int state)
 {
     usb_charging_mode = state;
@@ -1728,18 +1755,20 @@ void usb_charging_enable(int state)
 
 int usb_charging_maxcurrent(void)
 {
+    if (usb_detect() == USB_EXTRACTED || usb_suspended)
+        return 0;
     if (usb_charging_mode == USB_CHARGING_DISABLE)
         return 100;
 #ifndef BOOTLOADER
     /* The player never powers the port, so 5V on it in host mode is a
      * charger's */
     if (usb_host_probe_active())
-        return usb_detect() != USB_EXTRACTED ? 500 : 100;
+        return 500;
 #endif
-    if (!initialized)
+    if (!initialized || bus_reset_pending)
         return 100;
     if (usb_state == CONFIGURED)
-        return usb_charging_current_requested;
+        return usb_charging_current_granted;
     if (usb_charging_mode == USB_CHARGING_FORCE && usb_no_host)
         return 500;
     return 100;

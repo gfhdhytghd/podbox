@@ -1305,6 +1305,21 @@ static void usb_dw_irq(void)
         usb_core_bus_reset();
     }
 
+#ifdef HAVE_USB_CHARGING_ENABLE
+    if (gintsts & USBSUSP)
+    {
+        DWC_GINTSTS = USBSUSP;
+        if (!(gintsts & USBRST))
+            usb_core_bus_suspend(true);
+    }
+    if (gintsts & WKUINT)
+    {
+        DWC_GINTSTS = WKUINT;
+        if (!(gintsts & USBRST))
+            usb_core_bus_suspend(false);
+    }
+#endif
+
     if (gintsts & ENUMDNE)
     {
         DWC_GINTSTS = ENUMDNE;
@@ -1490,6 +1505,9 @@ static void usb_dw_init(void)
     usb_endpoints = DWC_DAINTMSK;
 
     uint32_t gintmsk = USBRST|ENUMDNE|IEPINT|OEPINT;
+#ifdef HAVE_USB_CHARGING_ENABLE
+    gintmsk |= USBSUSP|WKUINT;
+#endif
 #ifdef USB_DW_ARCH_SLAVE
     gintmsk |= RXFLVL;
 #endif
