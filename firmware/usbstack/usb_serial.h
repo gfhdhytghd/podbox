@@ -26,6 +26,8 @@ void usb_serial_init(void);
 int usb_serial_read(unsigned char *data, int length);
 int usb_serial_write(const unsigned char *data, int length);
 bool usb_serial_connected(void);
+/* Atomic snapshot of connection state and byte-stream lifetime. */
+bool usb_serial_get_state(uint32_t *generation);
 void usb_serial_wait(int ticks);
 
 void usb_serial_send(const unsigned char *data, int length);

@@ -2,7 +2,10 @@
 
 PodLink connects a running PodBox application to a computer over USB CDC-ACM.
 It uses RAM for messages. It does not use disk files or USB mass storage for
-communication. The default USB mode still provides mass storage.
+communication. The default USB mode still provides mass storage. In the
+simulator, PodLink runs over a pseudo-terminal instead of USB: opening
+**System > PodLink** prints `PodLink: /dev/pts/N`, and `tools/podlink.py
+--port /dev/pts/N` connects to it.
 
 This PodBox revision has no loadable plugin system. The demo is a native screen
 at **System > PodLink**. The reusable message API is `firmware/export/podlink.h`;
@@ -96,18 +99,26 @@ memory for that length. The two sides reset their byte queues on USB reconnect.
 Demo throughput commands use TEXT `BENCH TX N` / `BENCH RX N`. After TEXT
 `READY TX N` / `READY RX N`, exactly N bytes travel in BINARY messages of up to
 4096 bytes. Byte at offset i is `i % 251`. Final TEXT is `OK TX N errors=0` or
-`OK RX N`. Both directions verify the complete pattern. Latency measures
-protocol PING/PONG and 64-byte binary echo separately.
+`OK RX N`. A valid BENCH command replaces any active transfer. A rejected size
+preserves the active transfer. Both directions verify the complete pattern.
+Latency measures protocol PING/PONG and 64-byte binary echo separately.
 
 ## Host verification
 
 ```sh
-.venv-podlink/bin/python -m unittest discover -s tools/tests -p test_podlink.py -v
-cc -std=c99 -Wall -Wextra -Werror -g -fsanitize=address,undefined \
-  -Itools/tests/podlink_stubs -Ifirmware/export \
-  tools/tests/podlink_firmware_test.c firmware/usbstack/podlink_wire.c \
-  -o /tmp/podlink-firmware-test
-/tmp/podlink-firmware-test
+.venv-podlink/bin/python -m unittest discover -s tools/tests -p 'test_podlink*.py' -v
+for test in podlink_firmware podlink_reset podlink_wire; do
+  cc -std=gnu11 -Wall -Wextra -Werror -g -fsanitize=address,undefined \
+    -Itools/tests/podlink_stubs -Ifirmware/export \
+    tools/tests/${test}_test.c firmware/usbstack/podlink_wire.c \
+    -o /tmp/${test}_test
+  /tmp/${test}_test
+done
+cc -std=gnu11 -Wall -Wextra -Werror -g -fsanitize=address,undefined \
+  -ffunction-sections -fdata-sections -Wl,--gc-sections \
+  -Itools/tests/podlink_screen_stubs -Itools/tests/podlink_stubs \
+  -Ifirmware/export tools/tests/podlink_screen_test.c -o /tmp/podlink-screen-test
+/tmp/podlink-screen-test
 cc -std=c99 -Wall -Wextra -Werror -g -fsanitize=address,undefined \
   -Ifirmware/export tools/tests/usb_profile_test.c -o /tmp/podlink-usb-profile-test
 /tmp/podlink-usb-profile-test
@@ -116,10 +127,10 @@ cc -std=c99 -Wall -Wextra -Werror -g -fsanitize=address,undefined \
 These checks use mock serial/controller state and a real local WebSocket. They
 cannot establish physical USB, iPod startup, or real-device throughput.
 
-## Charging in PodLink / Agents
+## Charging in PodLink
 
 PodLink and normal storage use the same saved **Charge During USB Connection**
-setting (System > Battery). With `on` or `force`, both request 500 mA
+setting (**Settings > Battery & Power**). With `on` or `force`, both request 500 mA
 (`bMaxPower` byte 250, in 2 mA units). With `off`, both request 100 mA
 (`bMaxPower` byte 50) and do not enable battery charging from an enumerated
 computer. Select the setting before reconnecting: a host's existing 100 mA
@@ -144,7 +155,7 @@ cc -std=gnu11 -Wall -Wextra -Werror -g -fsanitize=address,undefined \
 ```
 
 Physical acceptance remains separate. With a partially discharged battery,
-select `on`, unplug, enter System > Agents (or PodLink), and reconnect.
+select `on`, unplug, enter **System > PodLink**, and reconnect.
 Read the host descriptor using `lsusb -v -d 05ac:1261`: expect `bMaxPower 500mA`,
 one configuration, and CDC interfaces in link mode. Find the matching USB
 device directory under `/sys/bus/usb/devices` by its `idVendor=05ac` and
@@ -154,51 +165,35 @@ and `1`). Record the directory and serial. Do not select a tty by number.
 Confirm the battery animation while the link is active. For a separate
 diagnostic run, enable the Debug menu and open System > Debug > Battery;
 record `USB current limit` and the hardware charging state. Opening that
-screen requires leaving Agents, so do not label it a simultaneous observation
-of Agents charging. A full battery may correctly stop charging.
+screen requires leaving PodLink, so do not label it a simultaneous observation
+of PodLink charging. A full battery may correctly stop charging.
 Repeat after the screen/backlight has been off for at least 15 seconds.
-Check unplug/replug without leaving Agents, and then exit to storage using
-MENU/LEFT from the spaces view. Confirm storage enumeration and charging.
+Check unplug/replug without leaving PodLink. Press Menu to return to storage.
+Confirm storage enumeration and charging.
 Repeat with `off` (100 mA, no host battery charging) and `force` (500 mA after
 configuration). For each setting, unplug/replug before reading descriptors.
 
-Coordinate a host suspend/resume with the user and the owner of `herdremote`.
+Run a separate host suspend/resume check.
 During suspend, confirm charger input/charge stops with a USB power meter;
 after resume, confirm the prior grant, battery animation and link recovery.
 Keep the normal storage volume unmounted for its suspend comparison.
 Do not infer physical charge current or link throughput from host-only tests.
 
-## Profiling build
+## RAM diagnostics
 
-`profile-1` records the baseline queue and transfer scheduling with RAM-only
-instrumentation. `tools/podlink.py stats --reset` clears performance counters;
-`stats` returns counters and the last 16 lifecycle events. `profile --bytes
-1048576 --samples 100` collects transfer and latency counters separately.
-Instrumentation overhead is included in these measurements.
+`tools/podlink.py stats --reset` clears performance counters. `stats` returns
+counters and the last 16 lifecycle events. `profile --bytes 1048576 --samples
+100` collects transfer and latency counters separately. Instrumentation overhead
+is included in these measurements. Host-only tests do not predict USB rates.
 
 Trace events: 1 API open, 2 API close, 3 Menu button, 4 unexpected storage event,
 5 USB lease acquired, 6 lease release queued, 7 release applied, 8 USB extraction,
 9 peer CLOSE, 11 transport lost, 12 transport configured, 13 descriptor driver
-mask. Trace is retained across message-session resets and screen re-entry.
+mask. Event 16 records a refused exclusive-storage request. Events 5/6/7 carry
+the lease generation. Trace is retained across message-session resets and
+screen re-entry.
 
-
-`fast-1` uses transport-event wakeups in place of a fixed UI sleep. The screen
-checks input on each bounded work turn. Bulk-IN DMA requests carry up to
-4096 bytes; bulk-OUT completes one negotiated USB packet at a time so a host
-write ending on a full packet never depends on a zero-length packet. The RAM
-rings hold 16 KiB each, application reads/parsing use spans, and CRC32 uses a
-256-entry IEEE lookup table. CPU boost applies while the CDC function is
-configured. `STATS` includes CPU frequency and maximum active UI-turn time.
-The host CLI waits for fd readiness instead of imposing a 1-ms sleep after
-successful reads. On the tested iPod Classic 6G, 4 KiB messages delivered
-1.47-1.58 MB/s to the iPod and 2.51-2.52 MB/s to the host, with PING median
-0.17-0.18 ms. Same-screen replug recovery passed. These are measured results
-for that device and host; source and host-only tests do not predict USB rates.
-Final fast-1 Menu-to-mass-storage acceptance is pending a physical Menu press.
-
-The USB mode lease is independent of USB connection/session lifetime. A queued
-lease close carries its acquisition generation; an obsolete close cannot
-release a newer screen's lease. While a lease is live, exclusive-storage
-requests are refused and legacy serial settings cannot disable CDC. The normal
-USB profile is restored only after the current lease closes. Event 16 records
-a refused exclusive-storage request. Events 5/6/7 carry the lease generation.
+The USB mode lease lasts until the screen exits. Cable removal or USB
+reconfiguration resets the byte queues and message handshake. A queued close
+from an older lease cannot release a newer screen's lease. Normal USB profiles
+return after the current lease closes.

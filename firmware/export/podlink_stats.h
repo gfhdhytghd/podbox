@@ -1,9 +1,11 @@
-/* RAM-only transport instrumentation. SPDX-License-Identifier: GPL-2.0-or-later */
+/* RAM-only transport instrumentation. SPDX-License-Identifier: GPL-2.0-or-later
+ */
 #ifndef PODLINK_STATS_H
 #define PODLINK_STATS_H
 #include <stddef.h>
 #include <stdint.h>
-struct podlink_stats {
+struct podlink_stats
+{
     uint32_t ui_turn_us_max;
     uint32_t polls, poll_us, poll_us_max, poll_gap_us_max, gaps_1ms, gaps_5ms;
     uint32_t read_calls, read_bytes, empty_reads, write_calls, write_bytes;

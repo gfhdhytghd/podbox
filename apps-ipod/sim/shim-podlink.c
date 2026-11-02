@@ -10,7 +10,10 @@
  * computer side at it, for example
  *   python3 tools/herdremote/herdremote.py --port /dev/pts/7
  * The pty lives as long as the sim. Closing the computer's end reads as an
- * unplug; opening it again reads as a plug.
+ * unplug; opening it again reads as a plug. Each of those, and each open of
+ * the link, starts a new stream generation. An unplug also drops what the
+ * pty still holds, as a USB reset empties the device's buffers; a plug does
+ * not, as the computer may already have written its OPEN.
  *
  * Like shim-dircache.c this implements rather than stubs (see README.md):
  * a stub that never connects would leave both screens with nothing to show.
@@ -21,6 +24,7 @@
 #if defined(SIMULATOR) && defined(HAVE_USB_PODLINK)
 
 #include <stdbool.h>
+#include <stdint.h>
 #include "kernel.h"
 #include "usb.h"
 #include "usbstack/usb_serial.h"
@@ -67,6 +71,7 @@ fail:
 #endif /* !_WIN32 */
 
 static bool active;
+static uint32_t generation;
 
 bool usb_podlink_open(void)
 {
@@ -76,6 +81,7 @@ bool usb_podlink_open(void)
     if (pty < 0)
         pty_create();
 #endif
+    ++generation;
     active = true;
     return true;
 }
@@ -90,18 +96,39 @@ bool usb_podlink_active(void)
     return active;
 }
 
-/* A pty master reads POLLHUP while no one holds the other end open */
-bool usb_serial_connected(void)
+/* A pty master reads POLLHUP while no one holds the other end open. The
+ * computer's end opening or closing is a new stream, as a plug or unplug
+ * is; one noticed only by this call still counts. */
+bool usb_serial_get_state(uint32_t *gen)
 {
 #ifndef _WIN32
+    static bool peer;
     struct pollfd p = { .fd = pty, .events = POLLIN };
-    if (pty < 0 || !active)
-        return false;
-    poll(&p, 1, 0);
-    return !(p.revents & POLLHUP);
+    bool now = false;
+    if (pty >= 0 && active)
+    {
+        poll(&p, 1, 0);
+        now = !(p.revents & POLLHUP);
+    }
+    if (now != peer)
+    {
+        peer = now;
+        ++generation;
+        if (!now && pty >= 0)
+            tcflush(pty, TCIOFLUSH);
+    }
+    *gen = generation;
+    return now;
 #else
+    *gen = generation;
     return false;
 #endif
+}
+
+bool usb_serial_connected(void)
+{
+    uint32_t gen;
+    return usb_serial_get_state(&gen);
 }
 
 /* The firmware sleeps on a semaphore the receive interrupt posts. A sim has
