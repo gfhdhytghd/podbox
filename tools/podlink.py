@@ -7,6 +7,7 @@ Open System > PodLink while unplugged, then connect USB.
 import argparse
 import asyncio
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 import json
 import math
@@ -308,15 +309,33 @@ def serial_port(device, timeout):
                          timeout=0, write_timeout=timeout, exclusive=True)
 
 
-async def bridge_session(ws, link):
-    """One WS message per frame; bounded websocket and serial buffers."""
+async def serial_call(executor, function, *args):
+    """Keep cancelled callers alive until their serial operation stops."""
+    future = asyncio.get_running_loop().run_in_executor(executor, function, *args)
+    try:
+        return await asyncio.shield(future)
+    except asyncio.CancelledError:
+        try:
+            await future
+        except Exception:
+            pass
+        raise
+
+
+async def bridge_session(ws, link, executor=None):
+    """One serial owner; bounded websocket and serial buffers."""
+    owned = executor is None
+    if owned:
+        executor = ThreadPoolExecutor(max_workers=1)
+
     async def from_ws():
         async for data in ws:
-            await asyncio.to_thread(link.send, TEXT if isinstance(data, str) else BINARY, data)
+            await serial_call(executor, link.send,
+                              TEXT if isinstance(data, str) else BINARY, data)
 
     async def from_serial():
         while True:
-            link.poll()
+            await serial_call(executor, link.poll)
             while link.frames:
                 frame = link.frames.popleft()
                 if frame.type == TEXT:
@@ -334,6 +353,8 @@ async def bridge_session(ws, link):
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
+        if owned:
+            executor.shutdown(wait=True)
 
 
 def bridge_handler(device, timeout):
@@ -349,11 +370,17 @@ def bridge_handler(device, timeout):
         async with busy:
             # Resolve tty again for every session; a replug may change its name.
             port = link = None
-            try:
+            executor = ThreadPoolExecutor(max_workers=1)
+
+            def open_link():
+                nonlocal port, link
                 port = serial_port(device, timeout)
                 link = Link(port, timeout)
-                await asyncio.to_thread(link.open)
-                await bridge_session(ws, link)
+                link.open()
+
+            try:
+                await serial_call(executor, open_link)
+                await bridge_session(ws, link, executor)
             except LinkClosed as error:
                 code = error.code if error.code in (1000, 1001, 1002, 1007, 1008, 1009, 1011) else 1001
                 await ws.close(code, error.reason[:80])
@@ -362,14 +389,19 @@ def bridge_handler(device, timeout):
             except (OSError, RuntimeError, TimeoutError, ValueError) as error:
                 await ws.close(1011, str(error)[:80])
             finally:
-                if link and link.opened:
+                try:
+                    if link and link.opened:
+                        try:
+                            code = ws.close_code if ws.close_code in (1000, 1001) else 1000
+                            await serial_call(executor, link.close, code, "WebSocket closed")
+                        except (OSError, RuntimeError, TimeoutError):
+                            pass
+                finally:
                     try:
-                        code = ws.close_code if ws.close_code in (1000, 1001) else 1000
-                        await asyncio.to_thread(link.close, code, "WebSocket closed")
-                    except (OSError, RuntimeError, TimeoutError):
-                        pass
-                if port:
-                    port.close()
+                        if port:
+                            await serial_call(executor, port.close)
+                    finally:
+                        executor.shutdown(wait=True)
 
     return handler
 

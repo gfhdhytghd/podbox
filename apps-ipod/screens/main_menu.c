@@ -458,7 +458,8 @@ MENUITEM_FUNCTION(bg_task_info, MENU_FUNC_CHECK_RETVAL,
                   bg_task_info_item, NULL, Icon_NOICON);
 
 #ifdef HAVE_USB_PODLINK
-MENUITEM_FUNCTION(podlink_item, 0, "PodLink", podlink_screen, NULL, Icon_NOICON);
+MENUITEM_FUNCTION(podlink_item, 0, "PodLink", podlink_screen, NULL,
+                  Icon_NOICON);
 #endif
 
 MAKE_MENU(info_menu, ID2P(LANG_SYSTEM), 0, Icon_System_menu,

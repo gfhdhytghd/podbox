@@ -1,1 +1,4 @@
-#define logf(...) do {} while (0)
+#define logf(...)                                                              \
+    do                                                                         \
+    {                                                                          \
+    } while (0)

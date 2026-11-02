@@ -341,7 +341,7 @@ static inline void usb_configure_drivers(int for_state)
 #ifdef HAVE_USB_PODLINK
     if (podlink_requested && for_state != USB_EXTRACTED)
     {
-        /* A single complete CDC-ACM function; never hand storage to the host. */
+        /* A complete CDC-ACM function; never hand storage to the host. */
         for (int i = 0; i < USB_NUM_DRIVERS; ++i)
             usb_core_enable_driver(i, i == USB_DRIVER_SERIAL);
         usb_attach();
@@ -897,7 +897,8 @@ static void NORETURN_ATTR usb_thread(void)
                     usb_stack_enable(false);
                     sleep(HZ / 5);
                     usb_stack_enable(true);
-                    usb_configure_drivers(usb_power_only ? USB_POWERED : USB_INSERTED);
+                    usb_configure_drivers(usb_power_only ? USB_POWERED :
+                                                          USB_INSERTED);
                 }
             }
             else podlink_trace(17, (uint32_t)ev.data);
@@ -1252,7 +1253,8 @@ void usb_init(void)
      * queue and thread are created. */
     usb_init_device();
 #ifdef USB_ENABLE_SERIAL
-    usb_serial_init(); /* API mutex exists even before the first USB insertion */
+    /* The API mutex exists even before the first USB insertion. */
+    usb_serial_init();
 #endif
 
 #ifdef USB_FULL_INIT

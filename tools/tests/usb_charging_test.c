@@ -21,69 +21,169 @@ uint32_t *test_gpio_register(void)
 struct usb_drv_ep_spec usb_drv_ep_specs[USB_NUM_ENDPOINTS];
 uint8_t usb_drv_ep_specs_flags;
 
-static int first_interface(int n) { return n + 1; }
+static int first_interface(int n)
+{
+    return n + 1;
+}
 static int interface_descriptor(unsigned char *dest, int mps)
 {
     (void)mps;
     struct usb_interface_descriptor d = {
-        .bLength = sizeof(d), .bDescriptorType = USB_DT_INTERFACE,
+        .bLength = sizeof(d),
+        .bDescriptorType = USB_DT_INTERFACE,
     };
     memcpy(dest, &d, sizeof(d));
     return sizeof(d);
 }
 struct usb_class_driver usb_cdrv_storage = {
-    .config = 1, .needs_exclusive_storage = true,
+    .config = 1,
+    .needs_exclusive_storage = true,
     .set_first_interface = first_interface,
     .get_config_descriptor = interface_descriptor,
 };
 struct usb_class_driver usb_cdrv_serial = {
-    .config = 1, .set_first_interface = first_interface,
+    .config = 1,
+    .set_first_interface = first_interface,
     .get_config_descriptor = interface_descriptor,
 };
 
-bool usb_drive_only(void) { return false; }
-bool usb_storage_host_wrote(void) { return false; }
-bool usb_podlink_active(void) { return leased; }
-bool usb_host_probe_active(void) { return host_probe; }
-int usb_detect(void) { return connected ? USB_INSERTED : USB_EXTRACTED; }
-bool usb_host_is_present(void) { return connected && host_present; }
-bool is_backlight_on(bool ignore) { (void)ignore; return true; }
-int pmu_firewire_present(void) { return 0; }
-void usb_charger_update(void) { ++update_pending; }
-void usb_request_exclusive_storage(void) { exclusive = true; }
-void usb_release_exclusive_storage(void) { exclusive = false; }
+bool usb_drive_only(void)
+{
+    return false;
+}
+bool usb_storage_host_wrote(void)
+{
+    return false;
+}
+bool usb_podlink_active(void)
+{
+    return leased;
+}
+bool usb_host_probe_active(void)
+{
+    return host_probe;
+}
+int usb_detect(void)
+{
+    return connected ? USB_INSERTED : USB_EXTRACTED;
+}
+bool usb_host_is_present(void)
+{
+    return connected && host_present;
+}
+bool is_backlight_on(bool ignore)
+{
+    (void)ignore;
+    return true;
+}
+int pmu_firewire_present(void)
+{
+    return 0;
+}
+void usb_charger_update(void)
+{
+    ++update_pending;
+}
+void usb_request_exclusive_storage(void)
+{
+    exclusive = true;
+}
+void usb_release_exclusive_storage(void)
+{
+    exclusive = false;
+}
 void usb_record_waypoint(enum usb_waypoint w, int a, int b)
-{ (void)w; (void)a; (void)b; }
-void podlink_trace(unsigned int e, unsigned int d) { (void)e; (void)d; }
-void trigger_cpu_boost(void) { }
-void cancel_cpu_boost(void) { }
+{
+    (void)w;
+    (void)a;
+    (void)b;
+}
+void podlink_trace(unsigned int e, unsigned int d)
+{
+    (void)e;
+    (void)d;
+}
+void trigger_cpu_boost(void)
+{
+}
+void cancel_cpu_boost(void)
+{
+}
 void usb_log(int t, int a, int b, uint32_t c, uint32_t d)
-{ (void)t; (void)a; (void)b; (void)c; (void)d; }
-void usb_drv_init(void) { }
-void usb_drv_exit(void) { }
-int usb_drv_port_speed(void) { return speed; }
+{
+    (void)t;
+    (void)a;
+    (void)b;
+    (void)c;
+    (void)d;
+}
+void usb_drv_init(void)
+{
+}
+void usb_drv_exit(void)
+{
+}
+int usb_drv_port_speed(void)
+{
+    return speed;
+}
 void usb_drv_ep_init(const struct usb_drv_ep_alloc_ctx *c, int ep)
-{ (void)c; (void)ep; }
+{
+    (void)c;
+    (void)ep;
+}
 void usb_drv_ep_deinit(const struct usb_drv_ep_alloc_ctx *c, int ep)
-{ (void)c; (void)ep; }
-void usb_clear_pending_transfer_completion_events(void) { }
+{
+    (void)c;
+    (void)ep;
+}
+void usb_clear_pending_transfer_completion_events(void)
+{
+}
 void usb_signal_notify(long id, intptr_t data)
 {
     if (id == USB_NOTIFY_SET_ADDR)
         host_present = true;
     usb_core_handle_notify(id, data);
 }
-void usb_signal_transfer_completion(struct usb_transfer_completion_event_data *e)
-{ usb_core_handle_transfer_completion(e); }
+void usb_signal_transfer_completion(
+    struct usb_transfer_completion_event_data *e)
+{
+    usb_core_handle_transfer_completion(e);
+}
 void usb_drv_stall(int ep, bool stall, bool in)
-{ (void)ep; (void)stall; (void)in; }
-bool usb_drv_stalled(int ep, bool in) { (void)ep; (void)in; return false; }
-void usb_drv_cancel_all_transfers(void) { }
-void usb_drv_set_test_mode(int mode) { (void)mode; }
+{
+    (void)ep;
+    (void)stall;
+    (void)in;
+}
+bool usb_drv_stalled(int ep, bool in)
+{
+    (void)ep;
+    (void)in;
+    return false;
+}
+void usb_drv_cancel_all_transfers(void)
+{
+}
+void usb_drv_set_test_mode(int mode)
+{
+    (void)mode;
+}
 int usb_drv_recv_nonblocking(int ep, void *data, int size)
-{ (void)ep; (void)data; (void)size; return 0; }
+{
+    (void)ep;
+    (void)data;
+    (void)size;
+    return 0;
+}
 int usb_drv_send_nonblocking(int ep, void *data, int size)
-{ (void)ep; (void)data; (void)size; return 0; }
+{
+    (void)ep;
+    (void)data;
+    (void)size;
+    return 0;
+}
 
 static void drain_charger(void)
 {
@@ -113,8 +213,10 @@ static void descriptor(int type, int expected)
 {
     unsigned char data[256];
     struct usb_ctrlrequest req = {
-        .bRequestType = USB_DIR_IN, .bRequest = USB_REQ_GET_DESCRIPTOR,
-        .wValue = type << 8, .wLength = sizeof(data),
+        .bRequestType = USB_DIR_IN,
+        .bRequest = USB_REQ_GET_DESCRIPTOR,
+        .wValue = type << 8,
+        .wLength = sizeof(data),
     };
     request_handler_device_get_descriptor(&req, data, sizeof(data));
     assert(((struct usb_config_descriptor *)data)->bMaxPower == expected);
@@ -123,10 +225,11 @@ static void descriptor(int type, int expected)
 static void configure(int config)
 {
     struct usb_ctrlrequest req = {
-        .bRequest = USB_REQ_SET_CONFIGURATION, .wValue = config,
+        .bRequest = USB_REQ_SET_CONFIGURATION,
+        .wValue = config,
     };
     usb_core_control_request_handler(&req, usb_control_data,
-                                    sizeof(usb_control_data));
+                                     sizeof(usb_control_data));
 }
 static void insert(int mode)
 {
@@ -151,45 +254,46 @@ static void unplug(void)
 int main(void)
 {
     for (profile = 0; profile < 2; ++profile)
-    for (speed = 0; speed < 2; ++speed)
-    for (int mode = USB_CHARGING_DISABLE; mode <= USB_CHARGING_FORCE; ++mode)
-    {
-        int grant = mode == USB_CHARGING_DISABLE ? 100 : 500;
-        insert(mode);
-        descriptor(USB_DT_CONFIG, grant / 2);
-        descriptor(USB_DT_OTHER_SPEED_CONFIG, grant / 2);
-        configure(1);
-        assert(exclusive == !leased);
-        expect_current(grant);
-        usb_core_bus_suspend(true);
-        expect_current(0);
-        /* No-host timeout and force must never defeat suspend. */
-        usb_no_host_callback(&usb_no_host_timeout);
-        expect_current(0);
-        usb_core_bus_suspend(false);
-        expect_current(grant);
-        configure(0);
-        expect_current(100);
-        configure(1);
-        expect_current(grant);
-        usb_core_bus_reset();
-        expect_current(100);
-        usb_core_notify_set_address(1);
-        /* Hosts can reuse the descriptor across a bus reset. */
-        configure(1);
-        expect_current(grant);
-        descriptor(USB_DT_CONFIG, grant / 2);
-        configure(1);
-        expect_current(grant);
-        usb_core_bus_suspend(true);
-        expect_current(0);
-        unplug();
-        insert(mode);
-        descriptor(USB_DT_CONFIG, grant / 2);
-        configure(1);
-        expect_current(grant);
-        unplug();
-    }
+        for (speed = 0; speed < 2; ++speed)
+            for (int mode = USB_CHARGING_DISABLE; mode <= USB_CHARGING_FORCE;
+                 ++mode)
+            {
+                int grant = mode == USB_CHARGING_DISABLE ? 100 : 500;
+                insert(mode);
+                descriptor(USB_DT_CONFIG, grant / 2);
+                descriptor(USB_DT_OTHER_SPEED_CONFIG, grant / 2);
+                configure(1);
+                assert(exclusive == !leased);
+                expect_current(grant);
+                usb_core_bus_suspend(true);
+                expect_current(0);
+                /* No-host timeout and force must never defeat suspend. */
+                usb_no_host_callback(&usb_no_host_timeout);
+                expect_current(0);
+                usb_core_bus_suspend(false);
+                expect_current(grant);
+                configure(0);
+                expect_current(100);
+                configure(1);
+                expect_current(grant);
+                usb_core_bus_reset();
+                expect_current(100);
+                usb_core_notify_set_address(1);
+                /* Hosts can reuse the descriptor across a bus reset. */
+                configure(1);
+                expect_current(grant);
+                descriptor(USB_DT_CONFIG, grant / 2);
+                configure(1);
+                expect_current(grant);
+                usb_core_bus_suspend(true);
+                expect_current(0);
+                unplug();
+                insert(mode);
+                descriptor(USB_DT_CONFIG, grant / 2);
+                configure(1);
+                expect_current(grant);
+                unplug();
+            }
     /* A cached 100mA descriptor remains the grant until SET_CONFIGURATION,
      * even after the user enables charging and reads a 500mA descriptor. */
     profile = 1;

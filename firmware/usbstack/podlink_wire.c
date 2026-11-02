@@ -4,12 +4,13 @@
 
 static uint32_t get32(const unsigned char *p)
 {
-    return (uint32_t)p[0] | (uint32_t)p[1] << 8 |
-           (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
+    return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 |
+           (uint32_t)p[3] << 24;
 }
 static void put32(unsigned char *p, uint32_t n)
 {
-    for (int i = 0; i < 4; ++i) p[i] = n >> (8 * i);
+    for (int i = 0; i < 4; ++i)
+        p[i] = n >> (8 * i);
 }
 uint32_t podlink_crc32(const unsigned char *data, unsigned int length)
 {
@@ -80,20 +81,23 @@ uint32_t podlink_crc32(const unsigned char *data, unsigned int length)
         0xb40bbe37u, 0xc30c8ea1u, 0x5a05df1bu, 0x2d02ef8du,
     };
     uint32_t crc = ~0u;
-    while (length--) crc = table[(crc ^ *data++) & 255] ^ (crc >> 8);
+    while (length--)
+        crc = table[(crc ^ *data++) & 255] ^ (crc >> 8);
     return ~crc;
 }
-unsigned int podlink_encode(unsigned char *dest, unsigned int type, uint32_t seq,
-                            const void *data, unsigned int length)
+unsigned int podlink_encode(unsigned char *dest, unsigned int type,
+                            uint32_t seq, const void *data, unsigned int length)
 {
     if (type < PODLINK_OPEN || type > PODLINK_HELLO ||
-        length > PODLINK_MAX_MESSAGE || (length && !data)) return 0;
+        length > PODLINK_MAX_MESSAGE || (length && !data))
+        return 0;
     memcpy(dest, "PLNK", 4);
     dest[4] = type;
     dest[5] = dest[6] = dest[7] = 0;
     put32(dest + 8, seq);
     put32(dest + 12, length);
-    if (length) memcpy(dest + PODLINK_HEADER, data, length);
+    if (length)
+        memcpy(dest + PODLINK_HEADER, data, length);
     put32(dest + PODLINK_HEADER + length,
           podlink_crc32(dest + 4, PODLINK_HEADER - 4 + length));
     return PODLINK_HEADER + length + 4;
@@ -103,35 +107,68 @@ static void discard(struct podlink_parser *p)
     --p->used;
     memmove(p->bytes, p->bytes + 1, p->used);
 }
-int podlink_decode(struct podlink_parser *p, unsigned char byte,
-                   struct podlink_message *m)
+static void compact(struct podlink_parser *p)
 {
-    /* Completed payload remains readable until this next call. */
-    if (p->used == PODLINK_FRAME_MAX) p->used = 0;
-    p->bytes[p->used++] = byte;
-    while (p->used >= 4 && memcmp(p->bytes, "PLNK", 4)) discard(p);
-    if (p->used < PODLINK_HEADER) return 0;
+    if (p->consumed)
+    {
+        p->used -= p->consumed;
+        memmove(p->bytes, p->bytes + p->consumed, p->used);
+        p->consumed = 0;
+    }
+}
+
+static int decode_buffer(struct podlink_parser *p, struct podlink_message *m)
+{
+    while (p->used >= 4 && memcmp(p->bytes, "PLNK", 4))
+        discard(p);
+    if (p->used < PODLINK_HEADER)
+        return 0;
     unsigned char *b = p->bytes;
     if (b[4] < PODLINK_OPEN || b[4] > PODLINK_HELLO || b[5] || b[6] || b[7])
-    { discard(p); return -1; }
+    {
+        discard(p);
+        return -1;
+    }
     uint32_t length = get32(b + 12);
-    if (length > PODLINK_MAX_MESSAGE) { discard(p); return -2; }
-    if (p->used < PODLINK_HEADER + length + 4) return 0;
+    if (length > PODLINK_MAX_MESSAGE)
+    {
+        discard(p);
+        return -2;
+    }
+    if (p->used < PODLINK_HEADER + length + 4)
+        return 0;
     if (get32(b + PODLINK_HEADER + length) !=
         podlink_crc32(b + 4, PODLINK_HEADER - 4 + length))
-    { discard(p); return -1; }
-    m->type = b[4]; m->flags = b[5]; m->seq = get32(b + 8);
-    m->length = length; m->data = b + PODLINK_HEADER;
-    p->used = 0;
+    {
+        discard(p);
+        return -1;
+    }
+    m->type = b[4];
+    m->flags = b[5];
+    m->seq = get32(b + 8);
+    m->length = length;
+    m->data = b + PODLINK_HEADER;
+    p->consumed = PODLINK_HEADER + length + 4;
     return 1;
 }
 
+int podlink_decode(struct podlink_parser *p, unsigned char byte,
+                   struct podlink_message *m)
+{
+    compact(p);
+    p->bytes[p->used++] = byte;
+    return decode_buffer(p, m);
+}
 
 int podlink_decode_bytes(struct podlink_parser *p, const unsigned char *data,
                          unsigned int length, unsigned int *consumed,
                          struct podlink_message *message)
 {
     *consumed = 0;
+    compact(p);
+    int rc = decode_buffer(p, message);
+    if (rc)
+        return rc;
     while (*consumed < length)
     {
         /* Copy the ordinary header/payload in spans. The final byte goes
@@ -139,9 +176,11 @@ int podlink_decode_bytes(struct podlink_parser *p, const unsigned char *data,
         unsigned int target = 0;
         if (p->used >= 4 && !memcmp(p->bytes, "PLNK", 4))
         {
-            if (p->used < PODLINK_HEADER) target = PODLINK_HEADER;
-            else if (p->bytes[4] >= PODLINK_OPEN && p->bytes[4] <= PODLINK_HELLO &&
-                     !p->bytes[5] && !p->bytes[6] && !p->bytes[7])
+            if (p->used < PODLINK_HEADER)
+                target = PODLINK_HEADER;
+            else if (p->bytes[4] >= PODLINK_OPEN &&
+                     p->bytes[4] <= PODLINK_HELLO && !p->bytes[5] &&
+                     !p->bytes[6] && !p->bytes[7])
             {
                 uint32_t payload = get32(p->bytes + 12);
                 if (payload <= PODLINK_MAX_MESSAGE)
@@ -151,14 +190,16 @@ int podlink_decode_bytes(struct podlink_parser *p, const unsigned char *data,
         if (target && p->used < target - 1)
         {
             unsigned int n = target - 1 - p->used;
-            if (n > length - *consumed) n = length - *consumed;
+            if (n > length - *consumed)
+                n = length - *consumed;
             memcpy(p->bytes + p->used, data + *consumed, n);
             p->used += n;
             *consumed += n;
             continue;
         }
         int rc = podlink_decode(p, data[(*consumed)++], message);
-        if (rc) return rc;
+        if (rc)
+            return rc;
     }
     return 0;
 }

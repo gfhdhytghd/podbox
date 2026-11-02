@@ -8,6 +8,8 @@ import struct
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from unittest.mock import patch
 
@@ -83,7 +85,8 @@ class CMessage(ctypes.Structure):
 
 
 class CParser(ctypes.Structure):
-    _fields_ = [("bytes", ctypes.c_ubyte * 4116), ("used", ctypes.c_uint)]
+    _fields_ = [("bytes", ctypes.c_ubyte * 4116), ("used", ctypes.c_uint),
+                ("consumed", ctypes.c_uint)]
 
 
 class WireTests(unittest.TestCase):
@@ -135,11 +138,39 @@ class WireTests(unittest.TestCase):
                     consumed = ctypes.c_uint()
                     rc = self.c.podlink_decode_bytes(ctypes.byref(parser), chunk[used:],
                         len(chunk)-used, ctypes.byref(consumed), ctypes.byref(msg))
-                    self.assertGreater(consumed.value,0)
+                    self.assertTrue(consumed.value or rc)
                     used += consumed.value
                     if rc == 1:
                         actual.append(p.Frame(msg.type,msg.seq,ctypes.string_at(msg.data,msg.length)))
             self.assertEqual(actual,messages)
+
+    def test_resync_retains_trailing_frames_and_drains_without_input(self):
+        self.c.podlink_decode_bytes.argtypes = [ctypes.POINTER(CParser), ctypes.c_void_p,
+            ctypes.c_uint, ctypes.POINTER(ctypes.c_uint), ctypes.POINTER(CMessage)]
+        expected = [p.Frame(p.TEXT, 2, b"first"), p.Frame(p.TEXT, 3, b"second")]
+        for outer_length in (32, 47):
+            stream = p.HEADER.pack(p.MAGIC, p.TEXT, 0, 0, 1, outer_length)
+            stream += b"".join(p.encode(f.type, f.seq, f.payload) for f in expected)
+            self.assertEqual(p.Decoder().feed(stream), expected)
+            for chunk_size in (1, 7, 64, 4096):
+                parser, msg, actual = CParser(), CMessage(), []
+                for offset in range(0, len(stream), chunk_size):
+                    chunk = stream[offset:offset + chunk_size]
+                    used = 0
+                    # Include zero-input calls to drain frames buffered during recovery.
+                    for _ in range(len(chunk) + 100):
+                        consumed = ctypes.c_uint()
+                        rc = self.c.podlink_decode_bytes(ctypes.byref(parser), chunk[used:],
+                            len(chunk) - used, ctypes.byref(consumed), ctypes.byref(msg))
+                        used += consumed.value
+                        if rc == 1:
+                            actual.append(p.Frame(msg.type, msg.seq,
+                                ctypes.string_at(msg.data, msg.length)))
+                        if rc == 0 and used == len(chunk):
+                            break
+                    else:
+                        self.fail("decoder did not drain")
+                self.assertEqual(actual, expected, (outer_length, chunk_size))
 
     def test_crc_resync_oversize_and_bounded_garbage(self):
         bad = bytearray(p.encode(p.BINARY, 1, b"broken")); bad[-1] ^= 8
@@ -183,6 +214,71 @@ class WireTests(unittest.TestCase):
 
 
 class WebSocketTests(unittest.IsolatedAsyncioTestCase):
+    async def test_backpressure_ping_keeps_loop_and_ws_close_responsive(self):
+        from websockets.asyncio.server import serve
+        from websockets.asyncio.client import connect
+
+        class Port:
+            def __init__(self):
+                self.started = threading.Event()
+                self.release = threading.Event()
+                self.ping_sent = threading.Event()
+                self.pong_sent = False
+                self.closed = False
+
+            def write(self, data):
+                if data[4] == p.BINARY:
+                    self.started.set()
+                    self.release.wait(2)
+                if data[4] == p.PONG:
+                    self.pong_sent = True
+                assert not self.closed
+                return len(data)
+
+            def read(self, count):
+                assert not self.closed
+                if self.started.is_set() and not self.ping_sent.is_set():
+                    self.ping_sent.set()
+                    return p.encode(p.PING, 19, b"keepalive")
+                return b""
+
+        port = Port()
+        link = p.Link(port, 1)
+        link.opened = True
+        done = asyncio.Event()
+
+        async def handler(ws):
+            try:
+                await p.bridge_session(ws, link)
+            finally:
+                port.closed = True
+                done.set()
+
+        timer = threading.Timer(.5, port.release.set)
+        timer.start()
+        try:
+            async with serve(handler, "127.0.0.1", 0) as server:
+                uri = f"ws://127.0.0.1:{server.sockets[0].getsockname()[1]}/"
+                async with connect(uri) as ws:
+                    await ws.send(b"application data")
+                    while not port.started.is_set():
+                        await asyncio.sleep(.001)
+                    start = time.monotonic()
+                    await asyncio.sleep(.02)
+                    self.assertLess(time.monotonic() - start, .15)
+                    await asyncio.wait_for(ws.close(), .15)
+                    self.assertFalse(port.release.is_set())
+                    # Cleanup must wait for outstanding serial work before port close.
+                    self.assertFalse(port.closed)
+                port.release.set()
+                await asyncio.wait_for(done.wait(), 2)
+                self.assertTrue(port.ping_sent.is_set())
+                self.assertTrue(port.pong_sent)
+        finally:
+            port.release.set()
+            timer.cancel()
+            timer.join()
+
     async def test_real_websocket_text_binary_exclusivity_unplug_reconnect(self):
         from websockets.asyncio.server import serve
         from websockets.asyncio.client import connect
