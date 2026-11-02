@@ -25,6 +25,17 @@
 #include "kernel.h"
 #include "usb_serial.h"
 #include "usb_class_driver.h"
+#include "usb.h"
+#ifdef HAVE_USB_PODLINK
+#include "podlink_stats.h"
+#define STAT_ADD(field,n) (podlink_stats.field += (n))
+#define STAT_MAX(field,n) do { \
+    if ((unsigned)(n) > podlink_stats.field) podlink_stats.field = (n); \
+} while (0)
+#else
+#define STAT_ADD(field,n) do {} while (0)
+#define STAT_MAX(field,n) do {} while (0)
+#endif
 /*#define LOGF_ENABLE*/
 #include "logf.h"
 
@@ -187,28 +198,47 @@ static union line_coding_buffer line_coding;
  * around 100 bytes without boost, we play safe and limit packet size to 32
  * bytes, it doesn't hurt because data can be sent over several transfers.
  */
+#ifdef HAVE_USB_PODLINK
+#define BUFFER_SIZE 16384
+#else
 #define BUFFER_SIZE 512
+#endif
+#ifdef HAVE_USB_PODLINK
+#define TRANSIT_BUFFER_SIZE 4096
+#else
 #define TRANSIT_BUFFER_SIZE 32
-#define RECV_BUFFER_SIZE 32
+#endif
+#ifdef HAVE_USB_PODLINK
+#define RECV_BUFFER_SIZE 512
+#else
+#define RECV_BUFFER_SIZE TRANSIT_BUFFER_SIZE
+#endif
 static unsigned char send_buffer[BUFFER_SIZE];
 static unsigned char transit_buffer[TRANSIT_BUFFER_SIZE]
     USB_DEVBSS_ATTR __attribute__((aligned(4)));
-static unsigned char receive_buffer[512]
+static unsigned char receive_buffer[RECV_BUFFER_SIZE]
     USB_DEVBSS_ATTR __attribute__((aligned(32)));
 
-static void sendout(void);
-
-static int buffer_start;
-/* The number of bytes to transfer that haven't been given to the USB stack yet */
-static int buffer_length;
-/* The number of bytes to transfer that have been given to the USB stack */
-static int buffer_transitlength;
-static bool active = false;
+/* Both rings are protected by this mutex. Only the USB thread submits DMA.
+ * Leave room for one full OUT packet before arming receive: NAK is backpressure.
+ * Pending IN bytes remain in the ring until successful completion. */
+static struct mutex serial_mtx;
+#ifdef HAVE_USB_PODLINK
+static struct semaphore serial_wake;
+static void wake_screen(void) { semaphore_release(&serial_wake); }
+#else
+static void wake_screen(void) { }
+#endif
+static unsigned char rx_buffer[BUFFER_SIZE];
+static int tx_start, tx_count, tx_inflight;
+static int rx_start, rx_count;
+static bool rx_armed, active, kick_pending;
+static int rx_packet_size = RECV_BUFFER_SIZE;
 
 static struct usb_class_driver_ep_allocation ep_allocs[3] = {
     {.type = USB_ENDPOINT_XFER_BULK, .dir = DIR_IN, .optional = false, .mps = -1},
     {.type = USB_ENDPOINT_XFER_BULK, .dir = DIR_OUT, .optional = false, .mps = -1},
-    {.type = USB_ENDPOINT_XFER_INT, .dir = DIR_IN, .optional = true, .mps = -1},
+    {.type = USB_ENDPOINT_XFER_INT, .dir = DIR_IN, .optional = false, .mps = -1},
 };
 
 #define EP_IN (ep_allocs[0].ep)
@@ -319,123 +349,213 @@ static bool usb_serial_control_request(struct usb_ctrlrequest* req, uint8_t* req
     return handled;
 }
 
-static int usb_serial_init_connection(void)
+/* Called with serial_mtx held, only in the USB thread. */
+static void serial_service(void)
 {
-    /* prime rx endpoint */
-    usb_drv_recv_nonblocking(EP_OUT, receive_buffer, RECV_BUFFER_SIZE);
-
-    /* we come here too after a bus reset, so reset some data */
-    buffer_transitlength = 0;
-    if(buffer_length>0)
+    if (!active)
+        return;
+    if (!rx_armed && BUFFER_SIZE - rx_count >= rx_packet_size)
     {
-        sendout();
+        if (usb_drv_recv_nonblocking(EP_OUT, receive_buffer, rx_packet_size) == 0)
+        {
+            rx_armed = true;
+            STAT_ADD(rx_xfers, 1);
+        }
+        else
+            active = false;
     }
-    active=true;
-    return 0;
+    if (!rx_armed && BUFFER_SIZE - rx_count < rx_packet_size) STAT_ADD(rx_full, 1);
+    if (!tx_inflight && tx_count)
+    {
+        int n = MIN(tx_count, TRANSIT_BUFFER_SIZE);
+        int first = MIN(n, BUFFER_SIZE - tx_start);
+        memcpy(transit_buffer, send_buffer + tx_start, first);
+        memcpy(transit_buffer + first, send_buffer, n - first);
+        if (usb_drv_send_nonblocking(EP_IN, transit_buffer, n) == 0)
+        {
+            tx_inflight = n;
+            STAT_ADD(tx_xfers, 1); STAT_ADD(tx_bytes, n); STAT_MAX(tx_max, n);
+        }
+        else
+            active = false;
+    }
 }
 
-/* called by usb_code_init() */
-static void usb_serial_init(void)
+static void reset_buffers(void)
 {
-    logf("serial: init");
-    buffer_start = 0;
-    buffer_length = 0;
-    buffer_transitlength = 0;
+    tx_start = tx_count = tx_inflight = rx_start = rx_count = 0;
+    rx_armed = kick_pending = false;
+}
+
+void usb_serial_init(void)
+{
+    static bool initialized;
+    if (!initialized)
+    {
+        mutex_init(&serial_mtx);
+#ifdef HAVE_USB_PODLINK
+        semaphore_init(&serial_wake, 1, 0);
+#endif
+        initialized = true;
+    }
+    mutex_lock(&serial_mtx);
+    active = false;
+    reset_buffers();
+    line_coding.data.dwDTERate = 115200;
+    line_coding.data.bDataBits = 8;
+    mutex_unlock(&serial_mtx);
+}
+
+static int usb_serial_init_connection(void)
+{
+    mutex_lock(&serial_mtx);
+    reset_buffers();
+#ifdef HAVE_USB_PODLINK
+    /* A stream write ending on a full packet need not carry a ZLP. One
+     * packet per OUT request therefore completes every host write size. */
+    rx_packet_size = usb_drv_port_speed() ? 512 : 64;
+#endif
+    active = true;
+    serial_service();
+    mutex_unlock(&serial_mtx);
+    wake_screen();
+    return active ? 0 : -1;
 }
 
 static void usb_serial_disconnect(void)
 {
+    mutex_lock(&serial_mtx);
     active = false;
+    reset_buffers();
+    mutex_unlock(&serial_mtx);
+    wake_screen();
 }
 
-static void sendout(void)
+/* Called with serial_mtx held. Coalesce notifications to bound queue usage. */
+static void kick(void)
 {
-    buffer_transitlength = MIN(buffer_length,BUFFER_SIZE-buffer_start);
-    if(buffer_transitlength > 0)
+    if (active && !kick_pending)
     {
-        buffer_transitlength = MIN(buffer_transitlength,TRANSIT_BUFFER_SIZE);
-        buffer_length -= buffer_transitlength;
-        memcpy(transit_buffer,&send_buffer[buffer_start],buffer_transitlength);
-        usb_drv_send_nonblocking(EP_IN,transit_buffer,buffer_transitlength);
+        kick_pending = true;
+        usb_signal_class_notify(USB_DRIVER_SERIAL, 0);
     }
 }
 
-void usb_serial_send(const unsigned char *data,int length)
+static void serial_notify(intptr_t data)
 {
-    int freestart, available_end_space, i;
-
-    if (!active||length<=0)
-        return;
-
-    i=buffer_start+buffer_length+buffer_transitlength;
-    freestart=i%BUFFER_SIZE;
-    available_end_space=BUFFER_SIZE-i;
-
-    if (0>=available_end_space)
-    {
-        /* current buffer wraps, so new data can't wrap */
-        int available_space = BUFFER_SIZE -
-            (buffer_length + buffer_transitlength);
-
-        length = MIN(length,available_space);
-        memcpy(&send_buffer[freestart],data,length);
-        buffer_length+=length;
-    }
-    else
-    {
-        /* current buffer doesn't wrap, so new data might */
-        int first_chunk = MIN(length,available_end_space);
-
-        memcpy(&send_buffer[freestart],data,first_chunk);
-        length-=first_chunk;
-        buffer_length+=first_chunk;
-        if(length>0)
-        {
-            /* wrap */
-            memcpy(&send_buffer[0],&data[first_chunk],MIN(length,buffer_start));
-            buffer_length+=MIN(length,buffer_start);
-        }
-    }
-
-    if (buffer_transitlength==0)
-        sendout();
-    /* else do nothing. The transfer completion handler will pick it up */
+    (void)data;
+    mutex_lock(&serial_mtx);
+    kick_pending = false;
+    serial_service();
+    mutex_unlock(&serial_mtx);
 }
 
-/* called by usb_core_transfer_complete() */
-static void usb_serial_transfer_complete(int ep,int dir, int status, int length)
+bool usb_serial_connected(void)
+{
+    mutex_lock(&serial_mtx);
+    bool connected = active;
+    mutex_unlock(&serial_mtx);
+    return connected;
+}
+
+int usb_serial_write(const unsigned char *data, int length)
+{
+    if (!data || length <= 0)
+        return 0;
+    mutex_lock(&serial_mtx);
+    int n = active ? MIN(length, BUFFER_SIZE - tx_count) : 0;
+    int start = (tx_start + tx_count) % BUFFER_SIZE;
+    int first = MIN(n, BUFFER_SIZE - start);
+    memcpy(send_buffer + start, data, first);
+    memcpy(send_buffer, data + first, n - first);
+    STAT_ADD(write_calls, 1); STAT_ADD(write_bytes, n);
+    if (n < length) STAT_ADD(write_busy, 1);
+    tx_count += n;
+    if (n) kick();
+    mutex_unlock(&serial_mtx);
+    return n;
+}
+
+int usb_serial_read(unsigned char *data, int length)
+{
+    if (!data || length <= 0)
+        return 0;
+    mutex_lock(&serial_mtx);
+    int n = active ? MIN(length, rx_count) : 0;
+    int first = MIN(n, BUFFER_SIZE - rx_start);
+    memcpy(data, rx_buffer + rx_start, first);
+    memcpy(data + first, rx_buffer, n - first);
+    rx_start = (rx_start + n) % BUFFER_SIZE;
+    STAT_ADD(read_calls, 1); STAT_ADD(read_bytes, n);
+    if (!n) STAT_ADD(empty_reads, 1);
+    rx_count -= n;
+    if (n) kick();
+    mutex_unlock(&serial_mtx);
+    return n;
+}
+
+void usb_serial_send(const unsigned char *data, int length)
+{
+#ifdef HAVE_USB_PODLINK
+    if (usb_podlink_active())
+        return; /* logf must never enter the application byte stream */
+#endif
+    (void)usb_serial_write(data, length);
+}
+
+static void usb_serial_transfer_complete(int ep, int dir, int status, int length)
 {
     (void)ep;
-    (void)length;
-
-    switch (dir) {
-        case USB_DIR_OUT:
-            logf("serial: %s", receive_buffer);
-            /* Data received. TODO : Do something with it ? */
-
-            /* Get the next bit */
-            usb_drv_recv_nonblocking(EP_OUT, receive_buffer, RECV_BUFFER_SIZE);
-            break;
-
-        case USB_DIR_IN:
-            /* Data sent out. Update circular buffer */
-            if(status == 0)
-            {
-                /* TODO: Handle (length != buffer_transitlength) */
-
-                buffer_start=(buffer_start+buffer_transitlength)%BUFFER_SIZE;
-                buffer_transitlength = 0;
-            }
-
-            if(buffer_length>0)
-                sendout();
-            break;
+    mutex_lock(&serial_mtx);
+    if (!active)
+        goto out;
+    if (status != 0 || length < 0)
+    {
+        active = false; /* fail the session, never silently lose stream bytes */
+        reset_buffers();
+        goto out;
     }
+    if (dir == USB_DIR_OUT)
+    {
+        rx_armed = false;
+        if (length > rx_packet_size || length > BUFFER_SIZE - rx_count)
+        {
+            active = false;
+            reset_buffers();
+            goto out;
+        }
+        int start = (rx_start + rx_count) % BUFFER_SIZE;
+        int first = MIN(length, BUFFER_SIZE - start);
+        memcpy(rx_buffer + start, receive_buffer, first);
+        memcpy(rx_buffer, receive_buffer + first, length - first);
+        rx_count += length;
+        STAT_ADD(rx_bytes, length); STAT_MAX(rx_max, length);
+    }
+    else if (dir == USB_DIR_IN)
+    {
+        if (length != tx_inflight)
+        {
+            active = false;
+            reset_buffers();
+            goto out;
+        }
+        tx_start = (tx_start + length) % BUFFER_SIZE;
+        tx_count -= length;
+        tx_inflight = 0;
+    }
+    serial_service();
+out:
+    mutex_unlock(&serial_mtx);
+    wake_screen();
 }
 
 struct usb_class_driver usb_cdrv_serial = {
     .needs_exclusive_storage = false,
+#ifdef HAVE_USB_PODLINK
+    .needs_cpu_boost = true,
+#else
     .needs_cpu_boost = false,
+#endif
     .config = 1,
     .ep_allocs_size = ARRAYLEN(ep_allocs),
     .ep_allocs = ep_allocs,
@@ -446,4 +566,18 @@ struct usb_class_driver usb_cdrv_serial = {
     .disconnect = usb_serial_disconnect,
     .transfer_complete = usb_serial_transfer_complete,
     .control_request = usb_serial_control_request,
+    .notify_event = serial_notify,
 };
+
+
+void usb_serial_wait(int ticks)
+{
+#ifdef HAVE_USB_PODLINK
+    mutex_lock(&serial_mtx);
+    bool ready = rx_count != 0;
+    mutex_unlock(&serial_mtx);
+    if (!ready) semaphore_wait(&serial_wake, ticks);
+#else
+    (void)ticks;
+#endif
+}
