@@ -33,6 +33,12 @@
 #include "panic.h"
 #include "lcd.h"
 #include "usb.h"
+#ifdef USB_ENABLE_SERIAL
+#include "usbstack/usb_serial.h"
+#ifdef HAVE_USB_PODLINK
+#include "podlink_stats.h"
+#endif
+#endif
 #include "button.h"
 #include "string.h"
 #ifdef HAVE_USBSTACK
@@ -138,6 +144,9 @@ static bool usb_hid = true;
 #endif
 #ifdef USB_ENABLE_SERIAL
 static bool usb_serial = false;
+#ifdef HAVE_USB_PODLINK
+static volatile bool podlink_requested;
+#endif
 #endif
 #ifdef USB_ENABLE_AUDIO
 static int usb_audio = 0;
@@ -326,6 +335,16 @@ static inline void usb_configure_drivers(int for_state)
 #ifdef USB_ENABLE_AUDIO
     // FIXME: doesn't seem to get set when loaded at boot...
     usb_audio = global_settings.usb_audio;
+#endif
+#ifdef HAVE_USB_PODLINK
+    if (podlink_requested && for_state != USB_EXTRACTED)
+    {
+        /* A single complete CDC-ACM function; never hand storage to the host. */
+        for (int i = 0; i < USB_NUM_DRIVERS; ++i)
+            usb_core_enable_driver(i, i == USB_DRIVER_SERIAL);
+        usb_attach();
+        return;
+    }
 #endif
     switch(for_state)
     {
@@ -578,6 +597,9 @@ static void usb_set_host_present(bool present)
 
 static void usb_extract(void)
 {
+#ifdef HAVE_USB_PODLINK
+    podlink_trace(8, (usb_state << 1) | podlink_requested);
+#endif
     if(usb_state == USB_EXTRACTED)
         return;
 
@@ -861,6 +883,22 @@ static void NORETURN_ATTR usb_thread(void)
             break;
 #endif /* HAVE_USBSTACK */
 
+#ifdef HAVE_USB_PODLINK
+        case USB_PODLINK_CLOSE:
+            if (podlink_requested)
+            {
+                podlink_trace(7, usb_state);
+                podlink_requested = false;
+                if (usb_state == USB_INSERTED || usb_state == USB_POWERED)
+                {
+                    usb_stack_enable(false);
+                    sleep(HZ / 5);
+                    usb_stack_enable(true);
+                    usb_configure_drivers(usb_power_only ? USB_POWERED : USB_INSERTED);
+                }
+            }
+            break;
+#endif
         case USB_INSERTED:
             if(usb_state != USB_EXTRACTED || usb_host_probe_on)
                 break;
@@ -914,7 +952,11 @@ static void NORETURN_ATTR usb_thread(void)
             usb_set_host_present(true);
 #endif
 #ifdef HAVE_USB_HOST_AUDIO
-            if(usb_dac_auto && !usb_dac_tried && !usb_drive_only())
+            if(usb_dac_auto && !usb_dac_tried && !usb_drive_only()
+#ifdef HAVE_USB_PODLINK
+               && !podlink_requested
+#endif
+              )
             {
                 timeout_register(&usb_dac_tmo, usb_dac_tmo_cb,
                                  USB_DAC_WAIT, 0);
@@ -1205,6 +1247,9 @@ void usb_init(void)
      * to make sure this won't trigger a transfer completion before the
      * queue and thread are created. */
     usb_init_device();
+#ifdef USB_ENABLE_SERIAL
+    usb_serial_init(); /* API mutex exists even before the first USB insertion */
+#endif
 
 #ifdef USB_FULL_INIT
     usb_enable(false);
@@ -1493,6 +1538,33 @@ void usb_car_found(void)
         queue_post(&usb_queue, USB_CAR_RECONNECT, 0);
 }
 #endif /* USB_ENABLE_IAP */
+
+#ifdef HAVE_USB_PODLINK
+bool usb_podlink_open(void)
+{
+    /* Never take storage away from a mounted host. Plugin UI calls serialize
+     * open/close; the USB thread alone acts on the close event. */
+    if (podlink_requested || usb_detect() != USB_EXTRACTED || usb_host_probe_on)
+        return false;
+    podlink_requested = true;
+    podlink_trace(5, 0);
+    return true;
+}
+
+void usb_podlink_close(void)
+{
+    if (podlink_requested)
+    {
+        podlink_trace(6, 0);
+        queue_post(&usb_queue, USB_PODLINK_CLOSE, 0);
+    }
+}
+
+bool usb_podlink_active(void)
+{
+    return podlink_requested;
+}
+#endif
 
 #ifdef USB_ENABLE_SERIAL
 void usb_set_serial(bool enable)

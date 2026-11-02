@@ -145,6 +145,9 @@ screens/context_menu.c
 screens/system/about.c
 screens/system/art_health.c
 screens/system/bg_task_info.c
+#ifdef HAVE_USB_PODLINK
+screens/system/podlink_screen.c
+#endif
 screens/system/db_search.c
 screens/system/file_search.c
 screens/system/playlist_search.c
