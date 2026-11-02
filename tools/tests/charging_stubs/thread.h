@@ -1,0 +1,1 @@
+/* The host harness uses no firmware scheduler. */
