@@ -160,6 +160,12 @@ class Protocol(unittest.TestCase):
                                         ["?", "你想用哪种颜色? Which colour?"]])
         self.assertEqual(records[3], ["o", "1", "红色 Red — Warm"])
 
+    def test_status_message(self):
+        items = [dict(id="w1", tab1="b", other="w"),
+                 dict(id="w2", tab1="-", other="-")]
+        self.assertEqual(hrproto.decode(hrproto.status(items)),
+                         [["S", "2"], ["w1", "b", "w"], ["w2", "-", "-"]])
+
     def test_commands(self):
         self.assertEqual(hrproto.parse_command(b"a\t7\tabcd1234\t2"),
                          ("a", ["7", "abcd1234", "2"]))
@@ -214,6 +220,7 @@ class CrossLanguage(unittest.TestCase):
                 hrproto.hello("herdremote-1"),
                 hrproto.workspaces([dict(id="w1", label="项目" * 20,
                     focused=True, working=1, waiting=1, done=0, idle=2)]),
+                hrproto.status([dict(id="w1", tab1="i", other="w")]),
                 hrproto.agents("w1", [dict(pane="w1:p1", kind="claude",
                     status="blocked", question=True, name=None,
                     title="标题", last="行" * 40)]),
@@ -229,7 +236,7 @@ class CrossLanguage(unittest.TestCase):
         self.assertEqual(lines[0], "hello=1 herdr_ok=1 age=3")
         # The daemon cuts to its byte budgets on a character boundary, and
         # each budget fits the player's field.
-        self.assertEqual(lines[1], "W w1 1 1 1 0 2 " + "项目" * 6 + "项")
+        self.assertEqual(lines[1], "W w1 1 1 1 0 2 i w " + "项目" * 6 + "项")
         self.assertEqual(lines[2], "A w1 w1:p1 claude b 1 |标题|" + "行" * 30)
         self.assertEqual(lines[3], "Q 0badf00d w1:p1 w1 0 项目 · claude")
         self.assertIn("? Do you want to proceed?", lines)
@@ -238,6 +245,65 @@ class CrossLanguage(unittest.TestCase):
 
 
 # --- end to end ---------------------------------------------------------
+class AllTabs(unittest.TestCase):
+    """A workspace's state comes from every tab; only tab 1 is listed."""
+
+    def snapshot(self, tab1, others):
+        panes = [dict(pane_id="w1:p%d" % i, tab_id="w1:t1", agent="claude",
+                      agent_status=st) for i, st in enumerate(tab1)]
+        panes += [dict(pane_id="w1:q%d" % i, tab_id="w1:t2", agent="codex",
+                       agent_status=st) for i, st in enumerate(others)]
+        return dict(focused_workspace_id="w1", agents=[],
+                    workspaces=[dict(workspace_id="w1", label="one")],
+                    tabs=[dict(tab_id="w1:t1", workspace_id="w1"),
+                          dict(tab_id="w1:t2", workspace_id="w1")],
+                    panes=panes)
+
+    def state(self, tab1, others):
+        model = hrherdr.build_model(self.snapshot(tab1, others),
+                                    lambda pane: "")
+        ws = model["workspaces"][0]
+        return ws["tab1"], ws["other"], ws["working"], model
+
+    def test_states(self):
+        self.assertEqual(self.state(["idle"], ["working"])[:3], ("i", "w", 1))
+        self.assertEqual(self.state(["working"], [])[:3], ("w", "-", 1))
+        self.assertEqual(self.state(["done", "blocked"], ["idle"])[:2],
+                         ("b", "i"))
+        self.assertEqual(self.state([], [])[:2], ("-", "-"))
+        self.assertEqual(self.state(["unknown"], ["done", "blocked"])[:2],
+                         ("u", "b"))
+
+    def test_only_tab1_is_listed(self):
+        model = self.state(["idle"], ["working", "working"])[3]
+        self.assertEqual([a["pane"] for a in model["agents"]["w1"]],
+                         ["w1:p0"])
+        self.assertEqual(len(model["others"]["w1"]), 2)
+
+    def test_question_in_tab1_wins(self):
+        model = hrherdr.build_model(self.snapshot(["idle"], ["working"]),
+                                    lambda pane: sample("claude-ask.txt"))
+        self.assertEqual(model["workspaces"][0]["tab1"], "b")
+
+    def test_other_tab_working_ranks_as_working(self):
+        order = hrorder.Order(None)
+        idle = hrherdr.build_model(dict(
+            focused_workspace_id=None, agents=[],
+            workspaces=[dict(workspace_id="w0", label="idle"),
+                        dict(workspace_id="w1", label="one")],
+            tabs=[dict(tab_id="w0:t1", workspace_id="w0"),
+                  dict(tab_id="w1:t1", workspace_id="w1"),
+                  dict(tab_id="w1:t2", workspace_id="w1")],
+            panes=[dict(pane_id="w0:p1", tab_id="w0:t1", agent="claude",
+                        agent_status="idle"),
+                   dict(pane_id="w1:p1", tab_id="w1:t1", agent="claude",
+                        agent_status="idle"),
+                   dict(pane_id="w1:p2", tab_id="w1:t2", agent="codex",
+                        agent_status="working")]), lambda pane: "")
+        order.apply(idle)
+        self.assertEqual([w["id"] for w in idle["workspaces"]], ["w1", "w0"])
+
+
 class Ordering(unittest.TestCase):
     """Priority order: asking (oldest first), working, then most recent."""
 
@@ -513,8 +579,11 @@ class EndToEnd(unittest.TestCase):
         ws = ipod.wait_for("W")
         self.assertEqual(ws[0], ["W", "2"])
         self.assertEqual(ws[1], ["w1", "f", "0", "1", "0", "0", "项目"])
-        # w2's codex sits in w2:t1, which is not w2's first tab.
-        self.assertEqual(ws[2], ["w2", "-", "0", "0", "0", "0", "other"])
+        # w2's codex sits in w2:t1, which is not w2's first tab: it counts,
+        # and S says it is working in another tab.
+        self.assertEqual(ws[2], ["w2", "-", "1", "0", "0", "0", "other"])
+        self.assertEqual(ipod.wait_for("S"),
+                         [["S", "2"], ["w1", "b", "-"], ["w2", "-", "w"]])
         q = ipod.wait_for("Q")
         qid = q[0][1]
         self.assertEqual(q[0][2:], ["w1:p1", "w1", "-", "项目 · claude"])

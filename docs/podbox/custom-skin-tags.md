@@ -62,6 +62,7 @@ preceding group repeats.
 | [`%Lr`](#lr--where-a-number-setting-sits-in-its-range) | where a number setting sits in its range |
 | [`%LP`](#lp--is-this-row-playing) | is this row playing |
 | [`%Lm`](#lm--is-this-row-ticked) | is this row ticked |
+| [`%Ls`](#ls--the-rows-status-picture) | a row's status picture |
 | [`%LH([field])`](#lhfield--the-lists-header) | the album over its track list |
 | [`%Cl(...[, filters, radius, label])`](#changed-behaviour-cl-album-art-filters-rounded-corners-and-names) | changed: art filters, corners, names |
 | [`%Cd([name][, x, y, width, height])`](#showing-part-of-an-artwork) | changed: named art, a window of it |
@@ -731,6 +732,26 @@ draw a mark at all, and `%if(%Lm,=,m)` which one:
 A skin that uses `%Lm` anywhere draws the marks itself. Every other skin gets
 `[x] ` or `[ ] ` in front of the row's text while it is selecting, which also
 means a comparison of `%LT` with a row's name does not match then.
+
+---
+
+### `%Ls` — the row's status picture
+
+Marks the viewport where the screen draws a row's status itself. On
+**System > Agents** that is the coloured status dot of a workspace or agent,
+which breathes while it works and blinks while it waits for you. Put `%Ls`
+in a row viewport the size of the picture, on the line the viewport's other
+content is on. The screen draws over the viewport's background after the
+line, and redraws only that area while it animates.
+
+```
+%Vl(Rows,2,3,24,24,2)
+%?if(%cs,=,40)<%Ls>
+```
+
+On every other list `%Ls` draws nothing, and as a value it is always
+empty. A skin without it gets no dots: on Agents, the row's text only, or
+whatever the skin draws from `%Lv`.
 
 ---
 

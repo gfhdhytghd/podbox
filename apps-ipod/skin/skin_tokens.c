@@ -1790,6 +1790,9 @@ const char *get_token_value(struct gui_wps *gwps,
                 return NULL;
             return browser_header_text(lh->field, buf, buf_size);
         }
+        case SKIN_TOKEN_LIST_ITEM_STATUS:
+            /* A picture, drawn in skin_render.c; as a value it is empty */
+            return NULL;
         case SKIN_TOKEN_LIST_HAS_ART_ROWS:
             /* List-level, and answerable before anything draws -- which is what
              * lets it choose between two %Lb where %?La cannot. */

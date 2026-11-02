@@ -42,6 +42,7 @@
 #include "podlink.h"
 #include "input/action.h"
 #include "draw/viewport.h"
+#include "draw/screen_access.h"
 #include "widgets/list.h"
 #include "widgets/splash.h"
 #include "widgets/dialog.h"
@@ -185,6 +186,182 @@ static char space_state(const struct hr_workspace *w, char *buf, size_t size)
 static char agent_state(const struct hr_agent *a)
 {
     return a->question ? 'b' : a->status;
+}
+
+/* The status dot a theme's %Ls shows. Asking and working in tab 1 are
+ * the two that move; the rest are herdr's own dots and colours. */
+enum dot {
+    DOT_NONE,
+    DOT_ASKING,         /* red, blinking */
+    DOT_WORKING,        /* green, breathing */
+    DOT_ASKING_ELSEWHERE,   /* in another tab: red, three dots */
+    DOT_WORKING_ELSEWHERE,  /* in another tab: green, three dots */
+    DOT_DONE,           /* herdr's teal dot */
+    DOT_IDLE,           /* herdr's green ring */
+    DOT_UNKNOWN,        /* herdr's small grey dot */
+};
+
+/* What is left after asking and working, in herdr's order: done, idle,
+ * unknown */
+static enum dot rest_dot(char a, char b)
+{
+    if (a == 'd' || b == 'd')
+        return DOT_DONE;
+    if (a == 'i' || b == 'i')
+        return DOT_IDLE;
+    return DOT_UNKNOWN;
+}
+
+static enum dot row_dot(int item)
+{
+    if (item < 0 || item >= nrows)
+        return DOT_NONE;
+    const struct row *r = &rows[item];
+    if (r->kind == ROW_SPACE)
+    {
+        const struct hr_workspace *w = &model.ws[r->index];
+        if (w->tab1 == 'b')
+            return DOT_ASKING;
+        if (w->tab1 == 'w')
+            return DOT_WORKING;
+        if (w->other == 'b')
+            return DOT_ASKING_ELSEWHERE;
+        if (w->other == 'w')
+            return DOT_WORKING_ELSEWHERE;
+        return rest_dot(w->tab1, w->other);
+    }
+    if (r->kind == ROW_AGENT)
+    {
+        char state = agent_state(&model.agents[r->index]);
+        return state == 'b' ? DOT_ASKING : state == 'w' ? DOT_WORKING :
+               rest_dot(state, state);
+    }
+    return DOT_NONE;
+}
+
+/* catppuccin-latte, the palette herdr is set to on the computer */
+#define DOT_RED     LCD_RGBPACK(210, 15, 57)
+#define DOT_GREEN   LCD_RGBPACK(64, 160, 43)
+#define DOT_TEAL    LCD_RGBPACK(23, 146, 153)
+#define DOT_GREY    LCD_RGBPACK(156, 160, 176)
+
+/* One frame in ANIM_STEPS of the breathing: (1 - cos) / 2 from 40% up */
+#define ANIM_STEPS 24
+#define ANIM_TICKS (HZ / 10)
+static const unsigned char breath[ANIM_STEPS] = {
+    102, 105, 112, 124, 140, 159, 178, 198, 217, 233, 245, 252,
+    255, 252, 245, 233, 217, 198, 178, 159, 140, 124, 112, 105,
+};
+
+/* How strongly to draw a dot now, 0 to 255 */
+static int dot_strength(enum dot dot)
+{
+    long frame = current_tick / ANIM_TICKS;
+    if (dot == DOT_WORKING)
+        return breath[frame % ANIM_STEPS];
+    if (dot == DOT_ASKING)
+        return frame % 10 < 6 ? 255 : 0;     /* 0.6 s on, 0.4 s off */
+    return 255;
+}
+
+/* Coverage of a pixel of a dot, 0 to 16, from 4x4 samples. Lengths are
+ * in eighths of a pixel; radii are tenths of a pixel at a 24-pixel cell and
+ * scale with it. */
+static int dot_cover(enum dot dot, int x, int y, int size)
+{
+#define R(tenths) ((tenths) * size * 8 / 240)
+    int c = size * 4;
+    int n = 0;
+    for (int sy = 0; sy < 4; sy++)
+        for (int sx = 0; sx < 4; sx++)
+        {
+            int dx = x * 8 + sx * 2 + 1 - c, dy = y * 8 + sy * 2 + 1 - c;
+            int d2 = dx * dx + dy * dy;
+            bool in;
+            switch (dot)
+            {
+                case DOT_IDLE:      /* a ring */
+                    in = d2 <= R(70) * R(70) && d2 >= R(50) * R(50);
+                    break;
+                case DOT_UNKNOWN:   /* a small dot */
+                    in = d2 <= R(30) * R(30);
+                    break;
+                case DOT_ASKING_ELSEWHERE:
+                case DOT_WORKING_ELSEWHERE:
+                    /* a larger dot, three holes across its middle */
+                    in = d2 <= R(80) * R(80);
+                    for (int k = -1; in && k <= 1; k++)
+                    {
+                        int hx = dx - k * R(45);
+                        in = hx * hx + dy * dy > R(16) * R(16);
+                    }
+                    break;
+                default:
+                    in = d2 <= R(65) * R(65);
+                    break;
+            }
+            n += in;
+        }
+    return n;
+#undef R
+}
+
+static unsigned dot_colour(enum dot dot)
+{
+    switch (dot)
+    {
+        case DOT_ASKING:
+        case DOT_ASKING_ELSEWHERE:  return DOT_RED;
+        case DOT_DONE:              return DOT_TEAL;
+        case DOT_UNKNOWN:           return DOT_GREY;
+        default:                    return DOT_GREEN;
+    }
+}
+
+/* The %Ls callback: the row's dot, blended over the viewport's background */
+static bool draw_dot(int item, void *data, struct screen *display,
+                     struct viewport *vp)
+{
+    (void)data;
+    enum dot dot = row_dot(item);
+    if (dot == DOT_NONE)
+        return false;
+    int size = MIN(MIN(vp->width, vp->height), 32);
+    int strength = dot_strength(dot);
+    if (!strength)
+        return true;
+    unsigned fg = dot_colour(dot), bg = vp->bg_pattern;
+    int fr = RGB_UNPACK_RED(fg), fgn = RGB_UNPACK_GREEN(fg);
+    int fb = RGB_UNPACK_BLUE(fg);
+    int br = RGB_UNPACK_RED(bg), bgn = RGB_UNPACK_GREEN(bg);
+    int bb = RGB_UNPACK_BLUE(bg);
+    int ox = (vp->width - size) / 2, oy = (vp->height - size) / 2;
+    for (int y = 0; y < size; y++)
+        for (int x = 0; x < size; x++)
+        {
+            int a = dot_cover(dot, x, y, size) * strength / 16;
+            if (!a)
+                continue;
+            display->set_foreground(LCD_RGBPACK(
+                br + (fr - br) * a / 255, bgn + (fgn - bgn) * a / 255,
+                bb + (fb - bb) * a / 255));
+            display->drawpixel(ox + x, oy + y);
+        }
+    return true;
+}
+
+/* Whether a dot in view moves, so the screen has frames to draw */
+static bool animating(struct gui_synclist *list)
+{
+    int top = list->start_item[SCREEN_MAIN];
+    int lines = gui_synclist_get_nb_lines(list, SCREEN_MAIN);
+    for (int i = top; i < top + lines && i < nrows; i++)
+    {
+        enum dot dot = row_dot(i);
+        if (dot == DOT_ASKING || dot == DOT_WORKING)
+            return true;
+    }
+    return false;
 }
 
 static const char *agent_name(const struct hr_agent *a)
@@ -480,7 +657,7 @@ static const char *row_value(int item, void *data, char *buf, size_t size)
             break;
         case ROW_ALERT:
         {
-            icon = 'b';
+            icon = 'a';
             const struct hr_workspace *w =
                 find_space(model.questions[0].workspace);
             if (model.nquestions == 1 && w)
@@ -805,8 +982,10 @@ int agents_screen(void)
     gui_synclist_set_row_callbacks(&list, NULL, row_value, NULL);
     gui_synclist_set_description_callback(&list, row_description);
     gui_synclist_set_voice_callback(&list, speak_row);
+    gui_synclist_set_status_callback(&list, draw_dot);
     show(&list, 0);
 
+    long frame_at = current_tick;
     long redraw_at = current_tick + HZ;
     const char *shown_trouble = NULL;
     bool done = false;
@@ -830,9 +1009,18 @@ int agents_screen(void)
             show_same(&list);
         }
 
+        /* Only the dots are drawn again for a frame, and only while one in
+         * view moves and the screen can be seen */
+        if (TIME_AFTER(current_tick, frame_at))
+        {
+            frame_at = current_tick + ANIM_TICKS - 1;
+            if (is_backlight_on(true) && animating(&list))
+                skinlist_redraw_status(&screens[SCREEN_MAIN], &list);
+        }
+
         int before = gui_synclist_get_sel_pos(&list);
         int before_top = list.start_item[SCREEN_MAIN];
-        if (list_do_action(CONTEXT_LIST, HZ / 10, &list, &action))
+        if (list_do_action(CONTEXT_LIST, ANIM_TICKS, &list, &action))
         {
             int sel = gui_synclist_get_sel_pos(&list);
             int lines = gui_synclist_get_nb_lines(&list, SCREEN_MAIN);

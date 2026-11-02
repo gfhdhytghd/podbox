@@ -117,12 +117,23 @@ class Watcher(threading.Thread):
             sock.close()
 
 
+def best_state(statuses):
+    """The one state that stands for a group of agents, as a status letter:
+    b asking, w working, d done, i idle, u unknown; "-" with no agents."""
+    for code in "bwdiu":
+        if code in statuses:
+            return code
+    return "-"
+
+
 def build_model(snapshot, read):
     """The dashboard model from a herdr snapshot.
 
     read(pane_id) returns a pane's visible text. Tab 1 is a workspace's first
     tab in herdr's order, which is the order its tab bar shows; its own
-    number is a creation count and is not used.
+    number is a creation count and is not used. Only tab 1's agents are
+    listed and read; the agents of the other tabs count by herdr's status
+    alone, so a workspace is working when any of its tabs is.
     """
     first_tab = {}
     for tab in snapshot["tabs"]:
@@ -133,12 +144,20 @@ def build_model(snapshot, read):
     for pane in snapshot["panes"]:
         if pane.get("agent"):
             by_tab.setdefault(pane["tab_id"], []).append(pane)
-    workspaces, agents, questions = [], {}, {}
+    tabs_of = {}
+    for t in snapshot["tabs"]:
+        tabs_of.setdefault(t["workspace_id"], []).append(t["tab_id"])
+    workspaces, agents, others, questions = [], {}, {}, {}
     for ws in snapshot["workspaces"]:
         wid = ws["workspace_id"]
         tab = first_tab.get(wid)
         counts = dict(working=0, waiting=0, done=0, idle=0)
         rows = []
+        elsewhere = [dict(pane=p["pane_id"], status=p.get("agent_status",
+                                                         "unknown"),
+                          question=False)
+                     for t in tabs_of.get(wid, []) if t != tab
+                     for p in by_tab.get(t, [])]
         for pane in by_tab.get(tab, []):
             try:
                 text = read(pane["pane_id"])
@@ -163,7 +182,24 @@ def build_model(snapshot, read):
                              question=bool(q), name=names.get(pane["pane_id"]),
                              title=pane.get("terminal_title_stripped") or "",
                              last=last))
-        workspaces.append(dict(id=wid, label=ws.get("label") or wid,
-                               focused=wid == focused_ws, tab=tab, **counts))
+        for row in elsewhere:
+            key = "waiting" if row["status"] == "blocked" else row["status"]
+            if key in counts:
+                counts[key] += 1
+        code = status_code
+        workspaces.append(dict(
+            id=wid, label=ws.get("label") or wid, focused=wid == focused_ws,
+            tab=tab, tab1=best_state([code(r) for r in rows]),
+            other=best_state([code(r) for r in elsewhere]), **counts))
         agents[wid] = rows
-    return dict(workspaces=workspaces, agents=agents, questions=questions)
+        others[wid] = elsewhere
+    return dict(workspaces=workspaces, agents=agents, others=others,
+                questions=questions)
+
+
+def status_code(row):
+    """A row's status letter, asking when it shows a question"""
+    if row["question"]:
+        return "b"
+    return {"working": "w", "blocked": "b", "done": "d",
+            "idle": "i"}.get(row["status"], "u")

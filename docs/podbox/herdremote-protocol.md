@@ -25,8 +25,8 @@ carries it back.
 ## Session
 
 1. The player opens a PodLink session and sends `hr`.
-2. The computer sends `HR` and then everything the screen lacks: `W`, every
-   current `Q`, and `T`.
+2. The computer sends `HR` and then everything the screen lacks: `W` and
+   `S`, every current `Q`, and `T`.
 3. From then on the computer sends only changes, plus `T` every 2 seconds.
 4. When the player sends `hr` again (it reopened the screen), the computer
    forgets what it sent and starts again at step 2.
@@ -54,9 +54,47 @@ W <n>
 
 All of herdr's workspaces, in the order the player lists them (see
 [Order](#order)). `f` marks the one the computer
-shows. The four counts are agents in that workspace's first tab by status;
-`waiting` counts agents that herdr reports blocked or that show a question. `label` is at most 40
-bytes. At most 32 records.
+shows. The four counts are agents in all of that workspace's tabs by
+status; `waiting` counts agents that herdr reports blocked or that show a
+question. `label` is at most 40 bytes. At most 32 records.
+
+### `S` — where in each workspace the agents are busy
+
+```
+S <n>
+<id> <tab1> <other>     (n records)
+```
+
+Sent after every `W`, and again whenever it changes. `tab1` is the state of
+the workspace's first tab and `other` that of all its other tabs, each the
+most pressing of its agents' states, as one letter: `b` asking (a question,
+or herdr's `blocked`), `w` working, `d` done, `i` idle, `u` unknown, `-` no
+agents. Only first-tab panes are read for questions; in the other tabs
+`b` is herdr's `blocked` alone. A record whose `id` is not in the last `W`
+is ignored, and so is a letter not in this list.
+
+A player that does not know `S` ignores it and works from `W`'s counts. A
+player that gets no `S` takes `tab1` from the counts and `other` as `-`.
+
+#### Status dots
+
+The player shows each workspace's `S`, and each agent's status, as a dot.
+The first match wins:
+
+| State | Dot |
+|---|---|
+| `tab1` is `b`; an agent asking | red, blinking |
+| `tab1` is `w`; an agent working | green, breathing |
+| `other` is `b` | red, three dots in it |
+| `other` is `w` | green, three dots in it |
+| either is `d` | teal ● |
+| either is `i` | green ○ |
+| anything else | grey · |
+
+The rest are herdr's own dot indicators (`status_indicators = "dots"`) in
+its `catppuccin-latte` colours: blocked red `#d20f39`, done teal `#179299`,
+idle green `#40a02b`, unknown grey `#9ca0b0`, working yellow `#df8e1d`.
+Working and asking take green and red here instead, and move.
 
 ### `A` — agents of one workspace
 
@@ -90,8 +128,8 @@ as sent:
 3. All others, the most recent status change first. An agent with no
    recorded change keeps herdr's order, after the ones with one.
 
-A workspace ranks as its best agent; a workspace with no agents goes with
-the last group. The order changes only when an agent's status changes. The
+A workspace ranks as its best agent in any of its tabs; a workspace with
+no agents goes with the last group. The order changes only when an agent's status changes. The
 player keeps its selection on the same workspace or agent when the order
 changes. Questions (`Q`) are sent oldest first.
 

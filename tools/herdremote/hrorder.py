@@ -2,7 +2,7 @@
 
 Agents that need a person come first, oldest question first; then agents
 that are working; then the rest, the most recently active first. A
-workspace ranks as its best agent. herdr's panes carry no times, so this
+workspace ranks as its best agent in any of its tabs. herdr's panes carry no times, so this
 module records them: when each pane began asking, and when its status last
 changed. A sort key changes only when a status does, so a list never
 reorders between polls without a reason.
@@ -94,8 +94,10 @@ class Order:
 
     def apply(self, model):
         """Sort model in place and return it."""
+        others = model.get("others", {})
         rows = [row for ws in model["workspaces"]
-                for row in model["agents"].get(ws["id"], [])]
+                for row in model["agents"].get(ws["id"], []) +
+                others.get(ws["id"], [])]
         if self.note(rows):
             self.save()
         best = {}
@@ -104,8 +106,12 @@ class Order:
                             for i, row in enumerate(agents)),
                            key=lambda kr: kr[0])
             agents[:] = [row for _, row in keyed]
-            if keyed:
-                best[wid] = keyed[0][0][:2]
+            # A workspace ranks as its best agent in any tab
+            keys = [k for k, _ in keyed] + [
+                self.key(row, len(agents) + i)
+                for i, row in enumerate(others.get(wid, []))]
+            if keys:
+                best[wid] = min(keys)[:2]
         none = (OTHER, float("inf"))
         order = sorted(enumerate(model["workspaces"]),
                        key=lambda iw: best.get(iw[1]["id"], none) + (iw[0],))

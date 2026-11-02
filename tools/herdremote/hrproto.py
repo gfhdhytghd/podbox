@@ -76,6 +76,16 @@ def workspaces(items):
     return _fit(["W", str(len(rows))], rows)
 
 
+def status(items):
+    """items: dicts with id, tab1 and other, each a status letter or "-".
+
+    Sent after every W; a player that does not know it keeps W's counts.
+    """
+    rows = [[clean(w["id"], 15), w["tab1"][:1] or "-", w["other"][:1] or "-"]
+            for w in items[:MAX_WORKSPACES]]
+    return _fit(["S", str(len(rows))], rows)
+
+
 def agents(workspace_id, items):
     """items: dicts with pane, kind, status, question, name, title, last."""
     rows = [[clean(a["pane"], 15), clean(a["kind"] or "?", 11),

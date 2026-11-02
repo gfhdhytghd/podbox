@@ -3,8 +3,8 @@
 HerdRemote puts the agents that [herdr](https://herdr.dev) runs on this
 computer onto the iPod, in **System > Agents**. From the player you can:
 
-- see every herdr workspace, with how many agents in its first tab are
-  working, waiting for you, done or idle;
+- see every herdr workspace, with how many of its agents are working,
+  waiting for you, done or idle, in any tab;
 - open a workspace, which also shows it in herdr on this computer, and see
   its first tab's agents with each one's last activity;
 - select an agent, which shows its pane in herdr;
@@ -35,7 +35,7 @@ writes nothing to the player's disk.
 
 Both lists are in priority order: agents waiting for you first (the oldest
 question first), then agents that are working, then the rest with the most
-recently active first. A workspace ranks as its best agent. herdr records
+recently active first. A workspace ranks as its best agent in any tab. herdr records
 no times, so this program notes when each agent's status changes and keeps
 the times in a small state file; a restart keeps the order.
 
@@ -59,12 +59,21 @@ journalctl --user -u herdremote -f
 
 ## What the player shows
 
-| Glyph | Agent |
+On the Scrim theme, a dot left of each workspace and agent shows its state.
+A workspace's dot is for its first tab, unless only another tab is busy:
+
+| Dot | Meaning |
 |---|---|
-| ◐ | working |
-| ⚠ | waiting for you |
-| ● | done |
-| ○ | idle |
+| red, blinking | waiting for you |
+| green, breathing | working |
+| red with three dots | waiting for you in another tab |
+| green with three dots | working in another tab |
+| teal ● | done |
+| green ○ | idle |
+| grey · | unknown, or no agents |
+
+The last three are herdr's own dots and colours (`catppuccin-latte`).
+Other themes show the row's text only.
 
 A question waiting anywhere puts a ⚠ row at the top of every list. Select
 it to open the question. When an answer reaches the agent, the player says

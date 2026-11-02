@@ -168,13 +168,14 @@
 #
 # - System > Agents. Each row's %Lv is a style letter, an icon letter and
 #   the text for its right-hand side. Styles: r a row with an icon, q the
-#   same greyed and never chosen, h a line of a question, n a note. Icons: the agent's state (w working, b asking,
-#   d done, i idle, u unknown), l no link, 1 to 8 an option's number, c and
-#   x a multiple choice's boxes, s Submit. Asking is in the accent. Each
-#   line has one branch: a false branch beside it would clear the row's text
-#   drawn by the viewport before.
+#   same greyed and never chosen, h a line of a question, n a note. Icons: a
+#   question waiting, l no link, 1 to 8 an option's number, c and x a
+#   multiple choice's boxes, s Submit; a workspace or agent row (w, b, d, i,
+#   u) has no glyph, as %Ls draws its status dot there. The question row is
+#   in the accent. Each line has one branch: a false branch beside it would
+#   clear the row's text drawn by the viewport before.
 %Vl(Rows,2,3,24,24,2)
-%?and(%if(%vg(shape),=,4),%or(%if(%ss(0,1,%Lv),=,r),%if(%ss(0,1,%Lv),=,q)))<%?if(%ss(1,1,%Lv),=,b)<%Vf(vivid>60:ffb74d)|%?if(%ss(0,1,%Lv),=,q)<%Vf(vivid>85.70:8a8a8a)|%?Lc<%Vf(!ffffff)|%Vf(vivid>85:bdbdbd)>>>%sel(%ss(1,1,%Lv),w,&,b,!,d,+,i,$,u,$,l,/,s,=,c,Ö,x,×,1,ę,2,Ě,3,ě,4,Ĝ,5,ĝ,6,Ğ,7,ğ,8,Ġ)>
+%?and(%if(%vg(shape),=,4),%or(%if(%ss(0,1,%Lv),=,r),%if(%ss(0,1,%Lv),=,q)))<%Ls%?if(%ss(1,1,%Lv),=,a)<%Vf(vivid>60:ffb74d)|%?if(%ss(0,1,%Lv),=,q)<%Vf(vivid>85.70:8a8a8a)|%?Lc<%Vf(!ffffff)|%Vf(vivid>85:bdbdbd)>>>%sel(%ss(1,1,%Lv),a,!,l,/,s,=,c,Ö,x,×,1,ę,2,Ě,3,ě,4,Ĝ,5,ĝ,6,Ğ,7,ğ,8,Ġ)>
 %Vl(Rows,36,0,3,30,-)
 %?and(%if(%vg(shape),=,4),%if(%ss(0,1,%Lv),=,r),%Lc)<%dr(0,0,3,30,vivid>60:ffffff,-,14,3)>
 %Vl(Rows,46,5,160,20,-)

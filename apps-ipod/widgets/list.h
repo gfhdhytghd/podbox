@@ -165,6 +165,19 @@ typedef int list_get_range(int selected_item, void * data);
  */
 typedef bool list_is_playing(int selected_item, void * data);
 
+/*
+ * Status callback, drawn where the skin's %Ls is: the row's own picture of
+ * its state, into vp, which is already set. The skinned list calls it as
+ * the row draws, after the skin's own drawing there, and again for each %Ls
+ * on screen, on a cleared viewport, when the owner calls
+ * skinlist_redraw_status(), so it can animate. Returns false for a row with
+ * no status picture: its viewport is then left to the skin and never
+ * cleared.
+ */
+struct screen;
+typedef bool list_draw_status(int selected_item, void * data,
+                              struct screen *display, struct viewport *vp);
+
 struct list_selection_color
 {
     /* text color, in native lcd format
@@ -239,6 +252,8 @@ struct gui_synclist
     list_is_playing *callback_item_is_playing;
     /* %LD: the selected row's description */
     list_get_name *callback_get_item_description;
+    /* %Ls: the row's status picture */
+    list_draw_status *callback_draw_status;
     /* %Lp counts from the last row up: a list sorted newest first, so the
      * oldest is 1 however many are added. Its tracks run to the end. */
     bool count_down;
@@ -288,6 +303,9 @@ extern void gui_synclist_set_unnumbered(struct gui_synclist * lists,
 /* The answer to %LD. May be NULL. */
 extern void gui_synclist_set_description_callback(struct gui_synclist * lists,
                                                   list_get_name callback);
+/* What %Ls draws. May be NULL: %Ls then draws nothing. */
+extern void gui_synclist_set_status_callback(struct gui_synclist * lists,
+                                             list_draw_status callback);
 extern void gui_synclist_speak_item(struct gui_synclist * lists);
 extern int gui_synclist_get_nb_items(struct gui_synclist * lists);
 
@@ -359,6 +377,12 @@ bool skinlist_item_is_playing(int offset, bool wrap);
 int skinlist_get_item_range(int offset, bool wrap);
 /* %LD of the list on screen, or NULL */
 const char *skinlist_get_selected_description(char *buf, int buf_size);
+/* %Ls: the skin has drawn the viewport the current row's status goes in */
+void skinlist_draw_status(struct screen *display, struct viewport *vp);
+/* Draw every %Ls of list's last draw again, and update only those areas
+ * of the LCD. Returns how many there were: 0 when the theme has no %Ls or
+ * list is not the one on screen. */
+int skinlist_redraw_status(struct screen *display, struct gui_synclist *list);
 /* %Lp: the row's number among the list's tracks, from 1; -1 on any row that
  * is not a track. */
 int skinlist_get_item_position(int offset, bool wrap);

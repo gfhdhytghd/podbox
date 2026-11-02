@@ -317,6 +317,7 @@ void gui_synclist_init(struct gui_synclist * gui_list,
     gui_list->callback_get_item_range = NULL;
     gui_list->callback_item_is_playing = NULL;
     gui_list->callback_get_item_description = NULL;
+    gui_list->callback_draw_status = NULL;
     gui_list->count_down = false;
     gui_list->unnumbered = false;
     gui_list->generation = ++last_generation;
@@ -790,6 +791,12 @@ void gui_synclist_set_description_callback(struct gui_synclist * lists,
                                            list_get_name callback)
 {
     lists->callback_get_item_description = callback;
+}
+
+void gui_synclist_set_status_callback(struct gui_synclist * lists,
+                                      list_draw_status callback)
+{
+    lists->callback_draw_status = callback;
 }
 
 void gui_synclist_set_sel_color(struct gui_synclist * lists,

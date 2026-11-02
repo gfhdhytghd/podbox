@@ -25,8 +25,9 @@ static void dump(void)
 {
     printf("hello=%d herdr_ok=%d age=%d\n", m.hello, m.herdr_ok, m.herdr_age);
     for (int i = 0; i < m.nws; i++)
-        printf("W %s %d %u %u %u %u %s\n", m.ws[i].id, m.ws[i].focused,
-               m.ws[i].working, m.ws[i].waiting, m.ws[i].done, m.ws[i].idle,
+        printf("W %s %d %u %u %u %u %c %c %s\n", m.ws[i].id,
+               m.ws[i].focused, m.ws[i].working, m.ws[i].waiting,
+               m.ws[i].done, m.ws[i].idle, m.ws[i].tab1, m.ws[i].other,
                m.ws[i].label);
     for (int i = 0; i < m.nagents; i++)
         printf("A %s %s %s %c %d %s|%s|%s\n", m.agents_ws, m.agents[i].pane,
@@ -79,9 +80,21 @@ int main(int argc, char **argv)
     assert(m.nws == 2 && m.ws[0].focused && m.ws[0].waiting == 2);
     assert(!strcmp(m.ws[0].label, "项目") && !m.ws[1].focused);
 
+    /* Without S, tab 1's state is what the counts say */
+    assert(m.ws[0].tab1 == 'b' && m.ws[0].other == '-');
+    assert(m.ws[1].tab1 == 'i');
+
     /* A bad record leaves the model as it was */
     assert(apply("W\t1\nw9\tf\t1") == 0);
     assert(m.nws == 2 && !strcmp(m.ws[1].id, "w2"));
+
+    /* S by id; an unknown id and a bad letter are left out */
+    assert(apply("S\t3\nw2\t-\tw\nw9\tb\tb\nw1\tz\tbb") == 'S');
+    assert(m.ws[1].tab1 == '-' && m.ws[1].other == 'w');
+    assert(m.ws[0].tab1 == '-' && m.ws[0].other == '-');
+    assert(apply("S\t1\nw1\tw") == 0 && m.ws[0].tab1 == '-');
+    assert(apply("S\t1\nw1\tw\tb") == 'S');
+    assert(m.ws[0].tab1 == 'w' && m.ws[0].other == 'b');
 
     assert(apply("A\tw1\t1\nw1:p1\tclaude\tb\t1\tasker\t标题\tlast line") == 'A');
     assert(m.agents_valid && m.nagents == 1 && m.agents[0].status == 'b');
@@ -132,7 +145,7 @@ int main(int argc, char **argv)
     {
         char junk[256];
         int n = 1 + rand() % sizeof junk;
-        static const char alphabet[] = "WAQXRTHo?\t\n1f-汉 ";
+        static const char alphabet[] = "WSAQXRTHo?\t\n1fbw-汉 ";
         for (int j = 0; j < n; j++)
             junk[j] = alphabet[rand() % (sizeof alphabet - 1)];
         hr_model_apply(&m, junk, n);

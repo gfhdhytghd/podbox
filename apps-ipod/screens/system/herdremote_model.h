@@ -23,7 +23,11 @@ struct hr_workspace {
     char id[16];
     char label[44];
     bool focused;
-    unsigned char working, waiting, done, idle;
+    unsigned char working, waiting, done, idle;     /* agents in every tab */
+    /* The best state of tab 1's agents and of the other tabs' agents, as
+     * hr_agent.status letters, '-' with none. From S; a daemon that sends no
+     * S leaves tab1 as W's counts say and other '-'. */
+    char tab1, other;
 };
 
 struct hr_agent {
@@ -70,8 +74,8 @@ struct hr_model {
     char result_text[124];
 };
 
-/* Apply one message. Returns its type letter ('W', 'A', 'Q', 'X', 'R', 'T',
- * 'H' for the hello), or 0 if it was not a HerdRemote v1 message, in which
+/* Apply one message. Returns its type letter ('W', 'S', 'A', 'Q', 'X', 'R',
+ * 'T', 'H' for the hello), or 0 if it was not a HerdRemote v1 message, in which
  * case the model is unchanged. */
 int hr_model_apply(struct hr_model *m, const char *data, unsigned int length);
 

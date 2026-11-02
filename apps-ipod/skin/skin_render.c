@@ -101,6 +101,9 @@ struct skin_draw_info {
      * loop. NULL when the current line has no album art. */
     const struct bitmap *pending_aa;
     const struct listitem *pending_aa_item;   /* the %La that asked for it */
+    /* A %Ls on the line: the list's owner draws after write_line(), for the
+     * same reason as pending_aa */
+    bool pending_status;
     /* Anything in this viewport actually reached the framebuffer, so the
      * viewport's rectangle has to be flushed. See do_non_text_tags(). */
     bool drew;
@@ -791,6 +794,10 @@ static bool do_non_text_tags(struct gui_wps *gwps, struct skin_draw_info *info,
             }
             break;
         }
+        case SKIN_TOKEN_LIST_ITEM_STATUS:
+            if (do_refresh)
+                info->pending_status = true;
+            break;
         case SKIN_TOKEN_LIST_ITEM_ALBUMART:
         {
             if (do_refresh)
@@ -1520,6 +1527,7 @@ bool skin_render_viewport(struct skin_element* viewport, struct gui_wps *gwps,
         info.force_redraw = false;
         info.pending_aa = NULL;
         info.pending_aa_item = NULL;
+        info.pending_status = false;
         skin_viewport->fgbg_changed = false;
         if (info.line_desc.style&STYLE_GRADIENT)
         {
@@ -1565,6 +1573,11 @@ bool skin_render_viewport(struct skin_element* viewport, struct gui_wps *gwps,
          * clear, so the cover's top row isn't wiped (see pending_aa). */
         if (info.pending_aa)
             draw_pending_aa(display, &skin_viewport->vp, &info);
+        if (info.pending_status)
+        {
+            skinlist_draw_status(display, &skin_viewport->vp);
+            info.drew = true;
+        }
         if (!info.no_line_break)
             info.line_number++;
         line = SKINOFFSETTOPTR(skin_buffer, line->next);

@@ -135,6 +135,11 @@ static const struct tag_info custom_tags[] =
      * (%LC is upstream's row column.) */
     TAG(SKIN_TOKEN_LIST_SELECTED_DESC, "LD", "",           SKIN_REFRESH_DYNAMIC),
 
+    /* The row's status picture, drawn by the list's owner into the viewport
+     * %Ls is in, after the line; nothing on a list that draws none. Today
+     * that is System > Agents' status dots, which animate. */
+    TAG(SKIN_TOKEN_LIST_ITEM_STATUS,   "Ls", "",           SKIN_REFRESH_DYNAMIC),
+
     /* The list's header, from the browser's state as %LD is: bare, the kind
      * of header ("album") or empty; with a field word, that field (name,
      * artist, year, tracks, length, discs); with "art", the cover drawn in

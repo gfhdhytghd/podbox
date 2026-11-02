@@ -88,10 +88,44 @@ static int apply_workspaces(struct hr_model *m, char **cursor)
         w->done = number(f[4]);
         w->idle = number(f[5]);
         hr_copy(w->label, f[6], sizeof w->label);
+        w->tab1 = w->waiting ? 'b' : w->working ? 'w' : w->done ? 'd' :
+                  w->idle ? 'i' : '-';
+        w->other = '-';
     }
     memcpy(m->ws, new_ws, n * sizeof new_ws[0]);
     m->nws = n;
     return 'W';
+}
+
+/* A state letter as S sends it, or '-' */
+static char state(const char *s)
+{
+    return s[0] && strchr("bwdiu", s[0]) && !s[1] ? s[0] : '-';
+}
+
+/* S refers to W's workspaces by id; one W does not name is left out. The
+ * whole message is checked before any of it is applied. */
+static int apply_status(struct hr_model *m, char **cursor)
+{
+    char *f[HR_MAX_FIELDS], *record;
+    int n = 0;
+    while ((record = next_record(cursor)) && n < HR_MAX_WS)
+    {
+        if (split(record, f) != 3)
+            return 0;
+        struct hr_workspace *w = &new_ws[n++];
+        hr_copy(w->id, f[0], sizeof w->id);
+        w->tab1 = state(f[1]);
+        w->other = state(f[2]);
+    }
+    for (int i = 0; i < n; i++)
+        for (int j = 0; j < m->nws; j++)
+            if (!strcmp(m->ws[j].id, new_ws[i].id))
+            {
+                m->ws[j].tab1 = new_ws[i].tab1;
+                m->ws[j].other = new_ws[i].other;
+            }
+    return 'S';
 }
 
 static int apply_agents(struct hr_model *m, const char *ws, char **cursor)
@@ -203,6 +237,8 @@ int hr_model_apply(struct hr_model *m, const char *data, unsigned int length)
     }
     if (!strcmp(type, "W") && n == 2)
         return apply_workspaces(m, &cursor);
+    if (!strcmp(type, "S") && n == 2)
+        return apply_status(m, &cursor);
     if (!strcmp(type, "A") && n == 3)
     {
         char ws[16];

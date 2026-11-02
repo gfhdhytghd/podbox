@@ -115,7 +115,7 @@ class Daemon:
         self.changed = threading.Event()
         self.results = queue.Queue()
         self.answerer = Answerer(self.herdr, self.results, self.changed)
-        self.model = dict(workspaces=[], agents={}, questions={})
+        self.model = dict(workspaces=[], agents={}, others={}, questions={})
         self.model_time = 0.0
         self.herdr_ok = False
         self.port = self.link = None
@@ -124,6 +124,7 @@ class Daemon:
 
     def reset_session(self):
         self.sent_ws = None
+        self.sent_status = None
         self.sent_agents = None
         self.sent_questions = {}
         self.subscribed = None
@@ -188,9 +189,14 @@ class Daemon:
         if self.sent_ws is None:
             return  # the screen has not said hello yet
         ws = hrproto.workspaces(self.model["workspaces"])
+        st = hrproto.status(self.model["workspaces"])
         if ws != self.sent_ws:
             self.send(ws)
             self.sent_ws = ws
+            self.sent_status = None
+        if st != self.sent_status:
+            self.send(st)
+            self.sent_status = st
         if self.subscribed:
             rows = self.model["agents"].get(self.subscribed, [])
             payload = hrproto.agents(self.subscribed, rows)
@@ -312,6 +318,9 @@ def main():
     if args.once:
         daemon.refresh()
         for record in hrproto.decode(hrproto.workspaces(
+                daemon.model["workspaces"])):
+            print("\t".join(record))
+        for record in hrproto.decode(hrproto.status(
                 daemon.model["workspaces"])):
             print("\t".join(record))
         for q in daemon.model["questions"].values():
