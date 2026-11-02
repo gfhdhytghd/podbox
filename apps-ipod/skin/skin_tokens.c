@@ -1756,6 +1756,12 @@ const char *get_token_value(struct gui_wps *gwps,
              * with the browser on top, not a menu over it */
             const char *s;
 
+            /* Every row there that can be chosen has one */
+            if (get_current_activity() == ACTIVITY_AGENTS)
+            {
+                s = skinlist_get_selected_description(buf, buf_size);
+                return s && *s ? s : NULL;
+            }
             if (!browser_showing_episodes()
                 || get_current_activity() != ACTIVITY_DATABASEBROWSER)
                 return NULL;

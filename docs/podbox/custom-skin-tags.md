@@ -1229,6 +1229,7 @@ upstream does not. The numbers never change; a new screen gets the next one.
 | 7 files | 17 time and date | 27 documents | 37 listening progress |
 | 8 database | 18 bookmarks | 28 images | 38 book shelf |
 | 9 *unused* | 19 shortcuts | 29 search | 39 music quiz |
+| | | | 40 agents |
 
 3, 4, 9, 11 and 14 never come up in this build. A skin may test them; it will
 never match.

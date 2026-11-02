@@ -129,7 +129,8 @@ static const struct tag_info custom_tags[] =
 
     /* The selected row's description, wherever it is used: on a list of
      * podcast episodes, the episode's comment tag, or a space where it has
-     * none -- so %?LD says the list is one -- and empty on any other list
+     * none -- so %?LD says the list is one; on System > Agents, the selected
+     * agent's kind, title and last activity; and empty on any other list
      * and on one whose episodes have no notes. For a %wt below the list.
      * (%LC is upstream's row column.) */
     TAG(SKIN_TOKEN_LIST_SELECTED_DESC, "LD", "",           SKIN_REFRESH_DYNAMIC),

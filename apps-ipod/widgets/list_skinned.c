@@ -50,7 +50,7 @@ static struct gui_synclist *current_list;
  * and skinlist_set_cfg() retires the lines when that changes. A layout with
  * more viewports than slots reuses the last one, which is the old behaviour for
  * the overflow only. */
-#define SKINLIST_SEL_VPS 12
+#define SKINLIST_SEL_VPS 32
 static struct skin_viewport selected_vps[NB_SCREENS][SKINLIST_SEL_VPS];
 
 static void skinlist_stop_selected_scroll(enum screen_type screen)
