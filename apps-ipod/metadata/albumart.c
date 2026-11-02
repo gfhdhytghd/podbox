@@ -3,411 +3,293 @@
  * was: apps/recorder/albumart.c
  * Copyright (C) 2007 Nicolas Pennequin
  * GNU General Public License (version 2+)
- *
- * Finds album art for a track: searches the conventional filenames and
- * directories, and reports the best match for a requested size.
+ * Ordered per-track artwork resolution and bounded source decoding.
  ****************************************************************************/
-
 #include <stdio.h>
+#include <string.h>
+#include <stdint.h>
 #include "string-extra.h"
 #include "system.h"
 #include "albumart.h"
-#include "metadata.h"
-#include "rbpaths.h"
-#include "audio/buffering.h"
-#include "dircache.h"
-#include "system/strutil.h"
-#include "pathfuncs.h"
-#include "settings/settings.h"
+#include "database/path_key.h"
 #include "art_cache.h"
-#include "settings/settings.h"
-#include "screens/playback/wps.h"
+#include "itunes_art.h"
+#include "file.h"
+#include "dir.h"
+#include "rbpaths.h"
+#include "system/strutil.h"
 #include "draw/image_load.h"
-#include "draw/gif_load.h"
-#include "draw/webp_load.h"
+#include "draw/bmp.h"
+#include "screens/playback/wps.h"
+#include "settings/settings.h"
 
-/* Define LOGF_ENABLE to enable logf output in this file */
-/*#define LOGF_ENABLE*/
-#include "logf.h"
-
-#define USE_JPEG_COVER
-
-
-/* Strip filename from a full path
- *
- * buf      - buffer to extract directory to.
- * buf_size - size of buffer.
- * fullpath - fullpath to extract from.
- *
- * Split the directory part of the given fullpath and store it in buf
- *   (including last '/').
- * The function return parameter is a pointer to the filename
- *   inside the given fullpath.
- */
-static char* strip_filename(char* buf, int buf_size, const char* fullpath)
+bool albumart_normalize(const char *path, char *out, size_t cap)
 {
-    char* sep;
-    int   len;
-
-    if (!buf || buf_size <= 0 || !fullpath)
-        return NULL;
-
-    /* if 'fullpath' is only a filename return immediately */
-    sep = strrchr(fullpath, '/');
-    if (sep == NULL)
+    size_t n = 0;
+    path = path_key_strip(path);
+    if (!path || !*path || cap < 2) return false;
+    while (*path)
     {
-        buf[0] = 0;
-        return (char*)fullpath;
+        while (*path == '/') path++;
+        if (!*path) break;
+        const char *end = strchr(path, '/');
+        size_t len = end ? (size_t)(end - path) : strlen(path);
+        if (len == 1 && path[0] == '.') { path += len; continue; }
+        if (len == 2 && path[0] == '.' && path[1] == '.')
+        {
+            while (n && out[--n] != '/') ;
+            path += len;
+            continue;
+        }
+        if (n + len + 1 >= cap) return false;
+        out[n++] = '/';
+        for (size_t i = 0; i < len; i++)
+        {
+            unsigned char c = path[i];
+            out[n++] = c >= 'A' && c <= 'Z' ? c + 'a' - 'A' : c;
+        }
+        path += len;
     }
-
-    len = MIN(sep - fullpath + 1, buf_size - 1);
-    strmemccpy(buf, fullpath, len + 1);
-    return (sep + 1);
+    if (!n) out[n++] = '/';
+    out[n] = 0;
+    return true;
 }
 
-/* Whether an image the search has found can be drawn. The JPEG decoder takes
- * baseline and progressive Huffman-coded images only, the PNG reader no
- * very wide ones and the WebP reader no lossless ones; one they cannot read
- * must not stop the search: an arithmetic-coded cover.jpg would otherwise
- * hide a folder.jpg beside it, which the search only reaches later. Reads a
- * JPEG's markers up to the frame header, or a PNG's, GIF's or WebP's
- * headers, by content whatever the name, and leaves anything it cannot place
- * for the decoder to judge. */
+static const char * const extensions[] =
+    { "jpeg", "jpg", "png", "bmp", "gif", "webp" };
+static const char * const common_names[] =
+    { "cover", "folder", "front", "album", "albumart", "artwork" };
+#define NAME_COUNT (2 + ARRAYLEN(common_names) * 2 + 2)
+#define FILE_CANDIDATES (NAME_COUNT * ARRAYLEN(extensions))
+
+static bool file_candidate(const struct mp3entry *id3, unsigned at,
+                            char *out, size_t n)
+{
+    unsigned name = at / ARRAYLEN(extensions);
+    const char *ext = extensions[at % ARRAYLEN(extensions)];
+    char dir[MAX_PATH], stem[MAX_PATH];
+    const char *slash = strrchr(id3->path, '/');
+    if (!slash || (size_t)(slash - id3->path) >= sizeof(dir)) return false;
+    memcpy(dir, id3->path, slash - id3->path);
+    dir[slash - id3->path] = 0;
+    if (name == 0)
+    {
+        strip_extension(stem, sizeof(stem), id3->path);
+        return snprintf(out, n, "%s.%s", stem, ext) < (int)n;
+    }
+    if (name == 1)
+    {
+        if (!id3->album || !*id3->album) return false;
+        strlcpy(stem, id3->album, sizeof(stem));
+        fix_path_part(stem, 0, strlen(stem));
+        return snprintf(out, n, "%s/%s.%s", dir, stem, ext) < (int)n;
+    }
+    name -= 2;
+    if (name < ARRAYLEN(common_names))
+        return snprintf(out, n, "%s/%s.%s", dir, common_names[name], ext) < (int)n;
+    name -= ARRAYLEN(common_names);
+    if (name == 0)
+    {
+        const char *artist = id3->albumartist ? id3->albumartist : id3->artist;
+        if (!artist || !id3->album) return false;
+        int len = snprintf(out, n, ROCKBOX_DIR "/albumart/%s-%s.%s",
+                           artist, id3->album, ext);
+        fix_path_part(out, strlen(ROCKBOX_DIR "/albumart/"),
+                      strlen(out) - strlen(ROCKBOX_DIR "/albumart/"));
+        return len < (int)n;
+    }
+    char *parent = strrchr(dir, '/');
+    if (!parent) return false;
+    *parent = 0;
+    name--;
+    if (name < ARRAYLEN(common_names))
+        return snprintf(out, n, "%s/%s.%s", dir, common_names[name], ext) < (int)n;
+    if (!id3->album || !*id3->album) return false;
+    strlcpy(stem, id3->album, sizeof(stem));
+    fix_path_part(stem, 0, strlen(stem));
+    return snprintf(out, n, "%s/%s.%s", dir, stem, ext) < (int)n;
+}
+
 bool art_file_usable(const char *path)
 {
-    unsigned char b[4];
-    const char *ext = strrchr(path, '.');
-    int fd, i;
-    bool usable = true;
-
-    if (!file_exists(path))
-        return false;
-    if (!ext || (strcasecmp(ext, ".jpg") && strcasecmp(ext, ".jpeg")
-                 && strcasecmp(ext, ".png") && strcasecmp(ext, ".gif")
-                 && strcasecmp(ext, ".webp")))
-        return true;
-
-    fd = open(path, O_RDONLY);
-    if (fd < 0)
-        return false;
-    i = read(fd, b, 2);
-    if (i == 2 && b[0] == 0x89 && b[1] == 'P')
-        usable = png_usable(fd);
-    else if (i == 2 && b[0] == 'G' && b[1] == 'I')
-        usable = gif_usable(fd);
-    else if (i == 2 && b[0] == 'R' && b[1] == 'I')
-        usable = webp_usable(fd);
-    else if (i == 2 && b[0] == 0xff && b[1] == 0xd8)
-    {
-        for (i = 0; i < 64 && read(fd, b, 4) == 4 && b[0] == 0xff; i++)
-        {
-            int marker = b[1], seglen = (b[2] << 8) | b[3];
-
-            if (marker == 0xc0 || marker == 0xc2)
-                break;                          /* baseline, progressive */
-            if (marker >= 0xc1 && marker <= 0xcf
-                && marker != 0xc4 && marker != 0xcc)
-            {
-                usable = false;                 /* arithmetic and the rest */
-                break;
-            }
-            if (seglen < 2 || lseek(fd, seglen - 2, SEEK_CUR) < 0)
-                break;
-        }
-    }
-    close(fd);
-    return usable;
+    int fd = open(path, O_RDONLY);
+    unsigned char b[12];
+    bool ok = fd >= 0 && read(fd, b, sizeof(b)) == sizeof(b) &&
+              ((b[0] == 0xff && b[1] == 0xd8 && b[2] == 0xff) ||
+               !memcmp(b, "\x89PNG\r\n\x1a\n", 8) ||
+               !memcmp(b, "GIF8", 4) || !memcmp(b, "BM", 2) ||
+               (!memcmp(b, "RIFF", 4) && !memcmp(b + 8, "WEBP", 4)));
+    if (fd >= 0) close(fd);
+    return ok;
 }
 
-static const char * const extensions[] = { "jpeg", "jpg", "bmp", "png", "gif",
-                                           "webp" };
-static const unsigned char extension_lens[] = { 4, 3, 3, 3, 3, 4 };
-/* Try checking for several file extensions, return true if a file is found and
- * leaving the path modified to include the matching extension.
- *
- * Callers hand in a path ending in '.' and len counting that dot, so each
- * candidate extension is written straight over the terminator in turn rather
- * than rebuilding the whole path. path must therefore have room for the
- * longest extension plus a NUL beyond len.
- */
-static bool try_exts(char *path, int len)
+bool albumart_source_revision(struct albumart_source *src)
 {
-    int i;
-    for (i = 0; i < (int)ARRAYLEN(extensions); i++)
+    unsigned char buf[512];
+    if (!albumart_normalize(src->path, src->identity, sizeof(src->identity)))
+        return false;
+    int fd = open(src->path, O_RDONLY);
+    if (fd < 0) return false;
+    off_t size = ffilesize(fd);
+    off_t left = src->size < 0 ? size : src->size;
+    if (src->pos < 0 || src->pos > size || left > size - src->pos || left <= 0 ||
+        lseek(fd, src->pos, SEEK_SET) != src->pos)
     {
-        if (extension_lens[i] + len > MAX_PATH)
-            continue;
-        strcpy(path + len, extensions[i]);
-        if (art_file_usable(path))
-            return true;
+        close(fd);
+        return false;
+    }
+    uint64_t hash = 14695981039346656037ull ^ (uint64_t)size;
+    while (left > 0)
+    {
+        size_t n = left < (off_t)sizeof(buf) ? (size_t)left : sizeof(buf);
+        if (read(fd, buf, n) != (ssize_t)n) { close(fd); return false; }
+        for (size_t i = 0; i < n; i++) hash = (hash ^ buf[i]) * 1099511628211ull;
+        left -= n;
+        yield();
+    }
+    close(fd);
+    src->revision = hash;
+    return true;
+}
+
+void albumart_source_key(const struct albumart_source *src, char *out, size_t n)
+{
+    snprintf(out, n, "%s@%llu:%u:%u:%u:%u:%u:%016llx", src->identity,
+             (unsigned long long)src->pos, (unsigned)src->size, src->flags,
+             src->width, src->height, src->stride,
+             (unsigned long long)src->revision);
+}
+
+bool albumart_next_source(const struct mp3entry *id3, enum albumart_role role,
+                          unsigned *cursor, struct albumart_source *src)
+{
+    if (!id3 || !id3->path[0]) return false;
+    while (*cursor <= FILE_CANDIDATES + 1)
+    {
+        unsigned at = (*cursor)++;
+        memset(src, 0, sizeof(*src));
+        if (at == 0)
+        {
+            if (role == AA_ROLE_ARTIST || !id3->has_embedded_albumart ||
+                !image_embedded_usable(id3->albumart.type)) continue;
+            src->kind = AA_SOURCE_EMBEDDED;
+            strlcpy(src->path, id3->path, sizeof(src->path));
+            src->pos = id3->albumart.pos;
+            src->size = id3->albumart.size;
+            src->flags = id3->albumart.type & ~AA_CLEAR_FLAGS_MASK;
+        }
+        else if (at <= FILE_CANDIDATES)
+        {
+            if (role == AA_ROLE_ARTIST)
+            {
+                unsigned index = at - 1;
+                if (index >= ARRAYLEN(common_names) * ARRAYLEN(extensions))
+                    continue;
+                char dir[MAX_PATH];
+                strlcpy(dir, id3->path, sizeof(dir));
+                char *slash = strrchr(dir, '/');
+                if (!slash || slash == dir) continue;
+                *slash = 0;
+                slash = strrchr(dir, '/');
+                if (!slash || slash == dir) continue;
+                *slash = 0;
+                snprintf(src->path, sizeof(src->path), "%s/%s.%s", dir,
+                         common_names[index / ARRAYLEN(extensions)],
+                         extensions[index % ARRAYLEN(extensions)]);
+            }
+            else if (!file_candidate(id3, at - 1, src->path, sizeof(src->path)))
+                continue;
+            if (!art_file_usable(src->path)) continue;
+            src->kind = AA_SOURCE_FILE;
+            src->size = -1;
+        }
+        else
+        {
+            if (role == AA_ROLE_ARTIST || role == AA_ROLE_BOOK ||
+                !itunes_art_find(id3->path, src))
+                continue;
+        }
+        if (albumart_source_revision(src)) return true;
     }
     return false;
 }
 
-/* folder.jpg, then folder.png, folder.gif and folder.webp, in dir */
-static bool try_folder(char *path, size_t size, const char *dir)
+int albumart_decode(const struct albumart_source *src, struct bitmap *bm,
+                    int maxsize, int format, const struct custom_format *cf)
 {
-    snprintf(path, size, "%sfolder.jpg", dir);
-    if (art_file_usable(path))
-        return true;
-    snprintf(path, size, "%sfolder.png", dir);
-    if (art_file_usable(path))
-        return true;
-    snprintf(path, size, "%sfolder.gif", dir);
-    if (art_file_usable(path))
-        return true;
-    snprintf(path, size, "%sfolder.webp", dir);
-    return art_file_usable(path);
-}
-
-/* Deliberately empty: it marks where an extension goes in the path-building
- * format strings below, e.g. "%scover%s." EXT builds "...cover.100x100."
- * for try_exts() to complete. */
-#define EXT
-
-/* Look for the first matching album art bitmap in the following list:
- *  ./<trackname><size>.{jpeg,jpg,bmp,png,gif,webp}
- *  ./<albumname><size>.{jpeg,jpg,bmp,png,gif,webp}
- *  ./cover<size>.bmp
- *  ./folder.{jpg,png,gif,webp}
- *  ../<albumname><size>.{jpeg,jpg,bmp,png,gif,webp}
- *  ../cover<size>.{jpeg,jpg,bmp,png,gif,webp}
- *  ../folder.{jpg,png,gif,webp}
- *  ROCKBOX_DIR/albumart/<artist>-<albumname><size>.{jpeg,jpg,bmp,png,gif,webp}
- * <size> is the value of the size_string parameter, <trackname> and
- * <albumname> are read from the ID3 metadata.
- * If a matching bitmap is found, its filename is stored in buf.
- * Return value is true if a bitmap was found, false otherwise.
- *
- * If the first symbol in size_string is a colon (e.g. ":100x100")
- * then the colon is skipped ("100x100" will be used) and the track
- * specific image (./<trackname><size>.bmp) is tried last instead of first.
- */
-bool search_albumart_files(const struct mp3entry *id3, const char *size_string,
-                           char *buf, int buflen)
-{
-    char path[MAX_PATH + 11]; /* need room for filename and null termination */
-    char dir[MAX_PATH + 1];
-    bool found = false;
-    int track_first = 1;
-    int pass;
-    const char *trackname;
-    const char *artist;
-    int dirlen;
-    int albumlen;
-    int pathlen;
-
-    if (!id3 || !buf)
-        return false;
-
-    trackname = id3->path;
-
-    if (strcmp(trackname, "No file!") == 0)
-        return false;
-
-    if (*size_string == ':')
+    int fd = open(src->path, O_RDONLY);
+    if (fd < 0) return -1;
+    int rc;
+    if (src->kind == AA_SOURCE_ITUNES)
     {
-        size_string++;
-        track_first = 0;
-    }
-
-    strip_filename(dir, sizeof(dir), trackname);
-    dirlen = strlen(dir);
-    albumlen = id3->album ? strlen(id3->album) : 0;
-
-    for(pass = 0; pass < 2 - track_first; pass++)
-    {
-        if (track_first || pass)
+        struct dim source = { src->width, src->height };
+        if (!(format & FORMAT_RESIZE))
+        { bm->width = source.width; bm->height = source.height; }
+        else if (format & FORMAT_KEEP_ASPECT)
         {
-            /* the first file we look for is one specific to the
-               current track */
-            strip_extension(path, sizeof(path) - strlen(size_string) - 4,
-                            trackname);
-            strcat(path, size_string);
-            strcat(path, "." EXT);
-            pathlen = strlen(path);
-            found = try_exts(path, pathlen);
+            struct dim target = { bm->width, bm->height };
+            recalc_dimension(&target, &source);
+            bm->width = target.width; bm->height = target.height;
         }
-        if (pass)
-            break;
-        if (!found && albumlen > 0)
+        size_t bytes = (size_t)bm->width * bm->height * FB_DATA_SZ;
+        rc = -1;
+        if (bm->width > 0 && bm->height > 0 && bytes <= (size_t)maxsize)
         {
-            /* if it doesn't exist,
-            * we look for a file specific to the track's album name */
-            pathlen = snprintf(path, sizeof(path),
-                            "%s%s%s." EXT, dir, id3->album, size_string);
-            fix_path_part(path, dirlen, albumlen);
-            found = try_exts(path, pathlen);
-        }
-
-        if (!found)
-        {
-            /* if it still doesn't exist, we look for a generic file */
-            pathlen = snprintf(path, sizeof(path),
-                            "%scover%s." EXT, dir, size_string);
-            found = try_exts(path, pathlen);
-        }
-
-        if (!found && !*size_string)
-            found = try_folder(path, sizeof(path), dir);
-
-        artist = id3->albumartist != NULL ? id3->albumartist : id3->artist;
-
-        if (!found && artist && id3->album)
-        {
-            /* look in the albumart subdir of .rockbox */
-            pathlen = snprintf(path, sizeof(path),
-                            ROCKBOX_DIR "/albumart/%s-%s%s." EXT,
-                            artist,
-                            id3->album,
-                            size_string);
-            fix_path_part(path, strlen(ROCKBOX_DIR "/albumart/"), MAX_PATH);
-            found = try_exts(path, pathlen);
-        }
-
-        if (!found)
-        {
-            /* if it still doesn't exist,
-            * we continue to search in the parent directory */
-            strcpy(path, dir);
-            path[dirlen - 1] = 0;
-            strip_filename(dir, sizeof(dir), path);
-            dirlen = strlen(dir);
-        }
-
-        /* only try parent if there is one */
-        if (dirlen > 0)
-        {
-            if (!found && albumlen > 0)
+            rc = bytes;
+            if (!(format & FORMAT_RETURN_SIZE))
             {
-                /* we look in the parent directory
-                * for a file specific to the track's album name */
-                pathlen = snprintf(path, sizeof(path),
-                                "%s%s%s." EXT, dir, id3->album, size_string);
-                fix_path_part(path, dirlen, albumlen);
-                found = try_exts(path, pathlen);
+                unsigned char row[640];
+                if (src->width > 320) rc = -1;
+                for (int y = 0; rc > 0 && y < bm->height; y++)
+                {
+                    off_t at = src->pos + (off_t)(y * src->height / bm->height)
+                                          * src->stride * 2;
+                    if (!image_progress(cf, y, bm->height) ||
+                        lseek(fd, at, SEEK_SET) != at ||
+                        read(fd, row, src->width * 2) != (ssize_t)(src->width * 2))
+                    { rc = -1; break; }
+                    fb_data *dst = (fb_data *)bm->data + (size_t)y * bm->width;
+                    for (int x = 0; x < bm->width; x++)
+                    {
+                        int sx = x * src->width / bm->width;
+                        unsigned px = row[sx * 2] | row[sx * 2 + 1] << 8;
+                        dst[x] = LCD_RGBPACK(((px >> 11) & 31) * 255 / 31,
+                                            ((px >> 5) & 63) * 255 / 63,
+                                            (px & 31) * 255 / 31);
+                    }
+                    yield();
+                }
             }
-
-            if (!found)
-            {
-                /* if it still doesn't exist, we look in the parent directory
-                * for a generic file */
-                pathlen = snprintf(path, sizeof(path),
-                                "%scover%s." EXT, dir, size_string);
-                found = try_exts(path, pathlen);
-            }
-
-            if (!found && !*size_string)
-                found = try_folder(path, sizeof(path), dir);
         }
-        if (found)
-            break;
     }
-
-    if (!found)
-        return false;
-
-    strmemccpy(buf, path, buflen);
-    logf("Album art found: %s", path);
-    return true;
-}
-
-/* Look for albumart bitmap in the same dir as the track and in its parent dir.
- * Stores the found filename in the buf parameter.
- * Returns true if a bitmap was found, false otherwise */
-bool find_albumart(const struct mp3entry *id3, char *buf, int buflen,
-                    const struct dim *dim)
-{
-    if (!id3 || !buf)
-        return false;
-
-    char size_string[15];/* .-32768x-32768\0 */
-    logf("Looking for album art for %s", id3->path);
-
-    /* Write the size string, e.g. ".100x100". */
-    snprintf(size_string, sizeof(size_string), ".%dx%d",
-              dim->width, dim->height);
-
-    /* First we look for a bitmap of the right size */
-    if (search_albumart_files(id3, size_string, buf, buflen))
-        return true;
-
-    /* Then we look for generic bitmaps */
-    *size_string = 0;
-    return search_albumart_files(id3, size_string, buf, buflen);
-}
-
-/* One source, if the track has it. */
-static bool try_source(const struct mp3entry *id3, int kind, bool as_stored,
-                       struct albumart_source *src)
-{
-    switch (kind)
+    else
     {
-    case AA_SOURCE_EMBEDDED:
-        if (!id3->has_embedded_albumart || id3->albumart.size <= 0)
-            return false;
-        /* Unsynchronised or base64 bytes are not a JPEG until decoded */
-        if (as_stored ? id3->albumart.type != AA_TYPE_JPG
-                      : !image_embedded_usable(id3->albumart.type))
-            return false;
-        strmemccpy(src->path, id3->path, sizeof(src->path));
-        src->pos = id3->albumart.pos;
-        src->size = id3->albumart.size;
-        break;
-    case AA_SOURCE_FILE:
-    {
-        if (!search_albumart_files(id3, "", src->path, sizeof(src->path)))
-            return false;
-        const char *dot = strrchr(src->path, '.');
-        if (as_stored && !(dot && (!strcasecmp(dot, ".jpg") ||
-                                   !strcasecmp(dot, ".jpeg"))))
-            return false;
-        src->pos = 0;
-        src->size = -1;
-        break;
+        struct image_src image = { fd, src->pos, src->size, src->flags };
+        rc = image_load(&image, bm, maxsize, format, cf);
     }
-    case AA_SOURCE_CACHE:
-    {
-        /* Raw thumbnail pixels: as_stored takes them to encode itself */
-        char dir[MAX_PATH];
-        const char *sep = strrchr(id3->path, '/');
-        const int size_index = art_cache_size_index("wps");
-        bool fallback;
-        if (!sep || size_index < 0 ||
-            sep - id3->path >= (int)sizeof(dir))
-            return false;
-        strmemccpy(dir, id3->path, sep - id3->path + 1);
-        if (!art_cache_lookup(dir, size_index, src->path, sizeof(src->path),
-                              &fallback) || fallback)
-            return false;
-        src->pos = 0;
-        src->size = -1;
-        break;
-    }
-    default:
-        return false;
-    }
-    src->kind = kind;
-    return true;
+    close(fd);
+    return rc;
 }
 
 bool albumart_find_source(const struct mp3entry *id3, int preference,
                           bool as_stored, struct albumart_source *src)
 {
-    static const int order[][3] = {
-        [AA_PREFER_EMBEDDED] =
-            { AA_SOURCE_EMBEDDED, AA_SOURCE_FILE, AA_SOURCE_CACHE },
-        [AA_PREFER_IMAGE_FILE] =
-            { AA_SOURCE_FILE, AA_SOURCE_EMBEDDED, AA_SOURCE_CACHE },
-        [AA_PREFER_CACHE] =
-            { AA_SOURCE_CACHE, AA_SOURCE_EMBEDDED, AA_SOURCE_FILE },
-    };
-
+    if (!id3 || preference <= AA_OFF) return false;
+    if (!as_stored)
+    {
+        unsigned cursor = 0;
+        return albumart_next_source(id3, AA_ROLE_ALBUM, &cursor, src);
+    }
+    /* Exports use the worker's chosen and decoded source, including PNG and
+     * iTunes-only artwork. A sniffed but corrupt JPEG cannot bypass it. */
+    bool fallback;
+    int size = art_cache_size_index("wps");
+    if (size >= 0 && art_cache_lookup(id3->path, size, src->path,
+                                      sizeof(src->path), &fallback) && !fallback)
+    {
+        src->kind = AA_SOURCE_CACHE; src->pos = 0; src->size = -1;
+        return true;
+    }
     src->kind = AA_SOURCE_NONE;
-    if (!id3 || preference <= AA_OFF || preference > AA_PREFER_CACHE)
-        return false;
-    for (int i = 0; i < 3; i++)
-        if (try_source(id3, order[preference][i], as_stored, src))
-            return true;
     return false;
 }

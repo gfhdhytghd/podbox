@@ -56,10 +56,10 @@ void playback_release_aa_slot(int slot);
  *
  * Save to call from other threads */
 void playback_update_aa_dims(void);
+void playback_art_changed(unsigned owner);
 
 struct bufopen_bitmap_data {
     struct dim *dim;
-    struct mp3_albumart *embedded_albumart;
 };
 
 

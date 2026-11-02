@@ -1735,7 +1735,7 @@ static uint32_t encode_cache(const char *path, bool prefetch)
 
     if (fd < 0)
         return 0;
-    if (read(fd, &hdr, sizeof(hdr)) == (ssize_t)sizeof(hdr) &&
+    if (art_cache_read_header(fd, &hdr) &&
         hdr.magic == ART_CACHE_MAGIC &&
         hdr.version == ART_CACHE_FORMAT_VERSION && hdr.layout == AA_ROWS &&
         hdr.width > 0 && hdr.width <= ART_CACHE_MAX_DIM &&

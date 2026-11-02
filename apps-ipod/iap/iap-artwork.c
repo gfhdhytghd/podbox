@@ -82,7 +82,7 @@ static bool art_path(uint32_t track, char *out, int out_len)
     memcpy(dir, info.filename, dlen);
     dir[dlen] = '\0';
 
-    art_cache_thumb_path(art_cache_dir_hash(dir), wps_size, out, out_len);
+    art_cache_thumb_path(art_cache_dir_hash(info.filename), wps_size, out, out_len);
     return true;
 }
 
@@ -115,11 +115,10 @@ int iap_artwork_check(uint32_t track)
     fd = open(path, O_RDONLY);
     if (fd < 0)
         return USB_LOG_IAP_ART_CACHE_NO_FILE;
-    ok = read(fd, &hdr, sizeof(hdr)) == (ssize_t)sizeof(hdr)
+    ok = art_cache_read_header(fd, &hdr)
          && hdr.magic == ART_CACHE_MAGIC
          && hdr.version == ART_CACHE_FORMAT_VERSION
-         && hdr.layout == AA_ROWS && hdr.width == hdr.height
-         && hdr.width >= art_dims[ART_FORMATS - 1];
+         && hdr.layout == AA_ROWS && hdr.width > 0 && hdr.height > 0;
     close(fd);
     return ok ? USB_LOG_IAP_ART_CACHE_OK : USB_LOG_IAP_ART_CACHE_BAD_FILE;
 }
@@ -136,6 +135,7 @@ bool iap_artwork_exists(uint32_t track)
 struct art_key {
     uint32_t track;
     int setting;
+    unsigned generation;
     char path[MAX_PATH];
 };
 static struct art_key playing_want, playing_known = { .track = UINT32_MAX };
@@ -147,7 +147,7 @@ static bool playing_running; /* the background thread is checking */
 
 static bool key_is(const struct art_key *k, uint32_t track, const char *path)
 {
-    return k->track == track && k->setting == global_settings.car_artwork
+    return k->generation == art_cache_generation() && k->track == track && k->setting == global_settings.car_artwork
            && !strcmp(k->path, path);
 }
 
@@ -163,6 +163,7 @@ static void playing_event(const struct queue_event *ev)
     {
         gen = want_gen;
         k = playing_want;
+        k.generation = art_cache_generation();
         result = iap_artwork_check(k.track);
     } while (gen != want_gen);
     playing_known = k;
@@ -183,6 +184,7 @@ int iap_artwork_playing_check(uint32_t track, const char *path)
         return playing_result;
     if (!key_is(&playing_want, track, path))
     {
+        playing_want.generation = art_cache_generation();
         playing_want.track = track;
         playing_want.setting = global_settings.car_artwork;
         strlcpy(playing_want.path, path, sizeof playing_want.path);

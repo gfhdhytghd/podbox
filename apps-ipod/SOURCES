@@ -68,6 +68,7 @@ metadata/mul_id3.c
 metadata/tag_trim.c
 #ifdef HAVE_ALBUMART
 metadata/albumart.c
+metadata/itunes_art.c
 metadata/art_cache.c
 #endif
 

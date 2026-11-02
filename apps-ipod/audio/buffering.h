@@ -91,6 +91,8 @@ ssize_t bufgetdata(int handle_id, size_t size, void **data);
  * buf_back_off_storage: tell buffering thread to take it easy
  ****************************************************************************/
 
+/* Retain an immutable bitmap until the matching bufclose(). */
+bool bufretain(int handle_id);
 bool buf_is_handle(int handle_id);
 int buf_handle_data_type(int handle_id);
 off_t buf_filesize(int handle_id);
