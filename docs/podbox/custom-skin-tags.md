@@ -52,6 +52,7 @@ preceding group repeats.
 | [`%lb`](#lb--background-index-building) | background work running |
 | [`%lw`](#lw--foreground-work-in-progress) | foreground work running |
 | [`%la`](#la--animated-spinner-frame) | spinner frame |
+| [`%lk`](#lk--podlink-link-mode) | PodLink link mode |
 | [`%La(offset[, nowrap, radius, filters])`](#laoffset-nowrap-radius-filters--list-item-album-art) | a list row's cover |
 | [`%Ld`](#ld--does-the-list-on-screen-draw-art-rows) | does this list draw art rows |
 | [`%Lb(label, width, height[, tile, art height])`](#lblabel-width-height-tile-art-height--art-row-height) | changed: art row height |
@@ -492,6 +493,25 @@ If a frame is a literal `|`, escape it as `%|` — a bare one ends the branch:
 ```
 %?la<%||/|-|\>       # an ASCII spinner: | / - \
 ```
+
+### `%lk` — PodLink link mode
+
+Whether a screen that talks to a computer over USB -- **System > PodLink** or
+**System > Agents** -- holds the link. As a conditional it takes the first
+branch while the player waits for the computer, the second once a session is
+open, and the last when link mode is off, which includes an ordinary USB disk
+connection:
+
+```
+%?lk<...waiting...|...connected...|>
+```
+
+Scrim draws `_` (outlined) and `` ` `` (filled) from `24x24-icons.fnt`.
+
+Keep the icon's viewport clear of the title's. A list redraws its title on
+every wheel move, which clears the title viewport, and an icon inside it
+vanishes until the next full skin update. Scrim switches to a shorter title
+viewport while `%lk` is set: `%?lk<%Vd(TitleShort)|%Vd(TitleShort)|%Vd(Title)>`.
 
 ---
 

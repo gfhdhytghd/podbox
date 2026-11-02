@@ -21,6 +21,8 @@ static const struct tag_info custom_tags[] =
     TAG(SKIN_TOKEN_VLED_BUILDING,      "lb", "",     SKIN_REFRESH_DYNAMIC),
     TAG(SKIN_TOKEN_VLED_WORKING,       "lw", "",     SKIN_REFRESH_DYNAMIC),
     TAG(SKIN_TOKEN_LOADING_ANIM,       "la", "",     SKIN_REFRESH_DYNAMIC),
+    /* PodLink's link mode: %?lk<waiting|open|off> */
+    TAG(SKIN_TOKEN_PODLINK,            "lk", "",     SKIN_REFRESH_DYNAMIC),
     /* The alignment argument is lowercase 's', not 'S', so it accepts '-'.
      * Arguments are positional and the parser rejects '-' on an uppercase type
      * outright, so an uppercase one here would make `gap` unreachable without

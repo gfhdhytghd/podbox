@@ -43,7 +43,7 @@
 %V(0,0,-,-,-)
 #
 # Top bar
-%?mv(3)<%Vd(Volume)|%Vd(Chrome)%?St(battery display)<%Vd(ChromeG)|%Vd(ChromeN)>>
+%?mv(3)<%Vd(Volume)|%Vd(Chrome)%?St(battery display)<%Vd(ChromeG)%?lk<%Vd(ChromeGL)|%Vd(ChromeGL)|%Vd(ChromeGT)>|%Vd(ChromeN)%?lk<%Vd(ChromeNL)|%Vd(ChromeNL)|%Vd(ChromeNT)>>>
 #
 # Quick settings. Cover Flow's %VI rides this line because a conditional
 # that flips clears its line's rect, and so does the shorter list a podcast's
@@ -57,17 +57,29 @@
 # and the time have a ChromeG (graphic) and a ChromeN (numeric) copy: the
 # time clears its whole viewport, so each starts where its title ends.
 #
-# - Title
+# - Title. While a screen holds the PodLink link the title is shorter by the
+#   link icon (the L copies), as a title redraw clears its whole viewport.
 %Vl(Chrome,0,0,320,35,3)
-%Vl(ChromeG,10,8,200,20,3)%Vf(000000)
+%Vl(ChromeGT,10,8,200,20,3)%Vf(000000)
 %?if(%cs,=,10)<%Sx(Quick Settings)|%?if(%Lt,=,Rockbox)<PodBox|%s%Lt%?and(%if(%LH,=,album),%if(%ft(themes/scrim.preferences,album header:),=,off),%LH(year))< %(%LH(year)%)>>>
-%Vl(ChromeN,10,8,152,20,3)%Vf(000000)
+%Vl(ChromeNT,10,8,152,20,3)%Vf(000000)
+%?if(%cs,=,10)<%Sx(Quick Settings)|%?if(%Lt,=,Rockbox)<PodBox|%s%Lt%?and(%if(%LH,=,album),%if(%ft(themes/scrim.preferences,album header:),=,off),%LH(year))< %(%LH(year)%)>>>
+%Vl(ChromeGL,10,8,166,20,3)%Vf(000000)
+%?if(%cs,=,10)<%Sx(Quick Settings)|%?if(%Lt,=,Rockbox)<PodBox|%s%Lt%?and(%if(%LH,=,album),%if(%ft(themes/scrim.preferences,album header:),=,off),%LH(year))< %(%LH(year)%)>>>
+%Vl(ChromeNL,10,8,118,20,3)%Vf(000000)
 %?if(%cs,=,10)<%Sx(Quick Settings)|%?if(%Lt,=,Rockbox)<PodBox|%s%Lt%?and(%if(%LH,=,album),%if(%ft(themes/scrim.preferences,album header:),=,off),%LH(year))< %(%LH(year)%)>>>
 #
 # - Status icons. The charging glyphs mirror the level glyphs band for
 #   band; one covers levels 2 to 5, so it stands in four places.
 %Vl(Chrome,289,5,24,24,2)%Vf(000000)
 %ar%?or(%lh,%lb,%lw)<%?la<á|â|ã|ä|å|æ|ç|è>|%?bc<%?bl<·|·|¸|¸|¸|¸|¹|º>|%?bl<1|1|2|3|4|5|6|7>>>
+#
+# - PodLink, while a screen holds the link: outlined while it waits for the
+#   computer, filled once a session is open
+%Vl(ChromeGL,176,5,24,24,2)%Vf(000000)
+%?lk<_|`|>
+%Vl(ChromeNL,128,5,24,24,2)%Vf(000000)
+%?lk<_|`|>
 #
 # - Time, and the battery percentage when the display is numeric
 %Vl(ChromeG,210,8,70,24,1)%Vf(000000)
@@ -126,7 +138,7 @@
 #   The user's own rows have names no skin knows, so they go by %Lk: 10 a
 #   view, 11 a menu.
 %Vl(Rows,2,3,24,24,2)
-%?La<|%?Lm<%?Lc<%Vf(!ffffff)|%Vf(vivid>85:bdbdbd)>%?if(%Lm,=,m)<×|Ö>|%?if(%vg(shape),=,1)<%?Lc<%Vf(!ffffff)|%Vf(vivid>85:bdbdbd)>%?or(%if(%cs,=,7),%if(%cs,=,13),%if(%cs,=,27),%if(%cs,=,28))<%?if(%LT,=,%Sx(Search))<®|%?if(%LT,=,%Sx(By Type))<ª|%?if(%LT,=,%Sx(Moods))<í|%?if(%LT,=,%Sx(Journeys))<î|%sel(%LI,1,¡,0,¥,2,m,33,¦,34,§,35,Ę,36,ė,-1,-,¨)>>>>|%?if(%Lk,=,10)<ċ|%?if(%Lk,=,11)<Ċ|%?and(%if(%Lk,=,5),%if(%LT,=,Album))<d|%?if(%LT,=,%Sx(Now Playing))<%?mp<A|A|B|A|A>|%sel(%LT,%Sx([All Tracks]),b,%Sx([Random]),V,%Sx([Shuffle Albums]),H,%Sx([Resume]),T,%Sx([Featured In]),Z,%Sx([Untagged]),¿,%Sx([By album]),d,Single,a,EP,b,Compilation,Ĉ,Mixtape,Ĉ,Live Album,Z,Soundtrack,ĉ,%Sx(Resume Playback),C,%Sx(Continue Reading),A,%Sx(Music),c,%Sx(Album Covers),f,%Sx(Artist Portraits),i,%Sx(Queue),U,%Sx(Playlists),ð,%Sx(Playback Report),z,%Sx(Files),¢,%Sx(Settings),Ç,%Sx(System),Ò,%Sx(Shortcuts),Ó,%Sx(Random Album),V,%Sx(Playback History),µ,%Sx(Shuffle Songs),H,%Sx(Documents),w,%Sx(Images),x,%Sx(Search),®,%Sx(Featured Artists),é,%Sx(Audiobooks),ê,%Sx(Podcasts),Ď,%Sx([All Episodes]),Ė,%Sx([Play Unplayed]),A,%Sx([In Progress]),ē,%Sx([Not Started]),đ,%Sx([Finished]),Ē,%Sx(Books),Č,%Sx(Book),ë,%Sx(Author),ì,%Sx(Title),l,%Sx(Album),e,%Sx(Albums),e,%Sx(Artist),g,%Sx(Artists),g,%Sx(Album Artist),h,%Sx(Album Artists),h,%Sx(Genre),j,%Sx(Year),¶,%Sx(Composer),k,%Sx(User Rating),²,%Sx(Recently Added),´,%Sx(First Letter),«,%Sx(Tracks by),ª,%Sx(Search by...),¯,%sel(%LT,%Sx(Same as currently played track),Ø,%Sx(By Title),%sel(%cs,38,č,ë),%Sx(By Author),ì,%Sx(By Subject),l,%Sx(Sound Settings),Y,%Sx(Playback Settings),W,%Sx(Library),v,%Sx(Appearance),Ê,%Sx(Battery & Power),Á,%Sx(Settings Mode),Í,%Sx(Changed Settings),É,%Sx(In Progress),ē,%Sx(Not Started),đ,%Sx(Finished),Ē,%Sx(Reading Stats),Ĕ,%Sx(Quiz),ï,%Sx(About),»,%Sx(System Info),ñ,%Sx(Credits),ò,%Sx(Background Tasks),ó,%Sx(License),ô,%Sx(Debug),õ,%Sx(Custom menu),Ċ,%sel(%LI,19,Þ,2,m)))>>>>>>>>
+%?La<|%?Lm<%?Lc<%Vf(!ffffff)|%Vf(vivid>85:bdbdbd)>%?if(%Lm,=,m)<×|Ö>|%?if(%vg(shape),=,1)<%?Lc<%Vf(!ffffff)|%Vf(vivid>85:bdbdbd)>%?or(%if(%cs,=,7),%if(%cs,=,13),%if(%cs,=,27),%if(%cs,=,28))<%?if(%LT,=,%Sx(Search))<®|%?if(%LT,=,%Sx(By Type))<ª|%?if(%LT,=,%Sx(Moods))<í|%?if(%LT,=,%Sx(Journeys))<î|%sel(%LI,1,¡,0,¥,2,m,33,¦,34,§,35,Ę,36,ė,-1,-,¨)>>>>|%?if(%Lk,=,10)<ċ|%?if(%Lk,=,11)<Ċ|%?and(%if(%Lk,=,5),%if(%LT,=,Album))<d|%?if(%LT,=,%Sx(Now Playing))<%?mp<A|A|B|A|A>|%sel(%LT,%Sx([All Tracks]),b,%Sx([Random]),V,%Sx([Shuffle Albums]),H,%Sx([Resume]),T,%Sx([Featured In]),Z,%Sx([Untagged]),¿,%Sx([By album]),d,Single,a,EP,b,Compilation,Ĉ,Mixtape,Ĉ,Live Album,Z,Soundtrack,ĉ,%Sx(Resume Playback),C,%Sx(Continue Reading),A,%Sx(Music),c,%Sx(Album Covers),f,%Sx(Artist Portraits),i,%Sx(Queue),U,%Sx(Playlists),ð,%Sx(Playback Report),z,%Sx(Files),¢,%Sx(Settings),Ç,%Sx(System),Ò,%Sx(Shortcuts),Ó,%Sx(Random Album),V,%Sx(Playback History),µ,%Sx(Shuffle Songs),H,%Sx(Documents),w,%Sx(Images),x,%Sx(Search),®,%Sx(Featured Artists),é,%Sx(Audiobooks),ê,%Sx(Podcasts),Ď,%Sx([All Episodes]),Ė,%Sx([Play Unplayed]),A,%Sx([In Progress]),ē,%Sx([Not Started]),đ,%Sx([Finished]),Ē,%Sx(Books),Č,%Sx(Book),ë,%Sx(Author),ì,%Sx(Title),l,%Sx(Album),e,%Sx(Albums),e,%Sx(Artist),g,%Sx(Artists),g,%Sx(Album Artist),h,%Sx(Album Artists),h,%Sx(Genre),j,%Sx(Year),¶,%Sx(Composer),k,%Sx(User Rating),²,%Sx(Recently Added),´,%Sx(First Letter),«,%Sx(Tracks by),ª,%Sx(Search by...),¯,%sel(%LT,%Sx(Same as currently played track),Ø,%Sx(By Title),%sel(%cs,38,č,ë),%Sx(By Author),ì,%Sx(By Subject),l,%Sx(Sound Settings),Y,%Sx(Playback Settings),W,%Sx(Library),v,%Sx(Appearance),Ê,%Sx(Battery & Power),Á,%Sx(Settings Mode),Í,%Sx(Changed Settings),É,%Sx(In Progress),ē,%Sx(Not Started),đ,%Sx(Finished),Ē,%Sx(Reading Stats),Ĕ,%Sx(Quiz),ï,%Sx(About),»,%Sx(System Info),ñ,%Sx(Credits),ò,%Sx(Background Tasks),ó,PodLink,@,Agents,^,%Sx(License),ô,%Sx(Debug),õ,%Sx(Custom menu),Ċ,%sel(%LI,19,Þ,2,m)))>>>>>>>>
 #
 # - Row number
 %Vl(Rows,0,5,30,20,3)

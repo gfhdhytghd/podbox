@@ -1,0 +1,25 @@
+
+ ▐▛███▛█   Claude Code v2.1.316
+▝▜██████▀  Haiku 5.5 · Claude Team
+ ▝▝   ▝▝   /…/-home-wilf-data-PodJS-podbox-wt-herdr/f8880791-6aa7-4335-baad-1c7a95ca0be1/scratchpad/cwd-claude
+
+
+❯ This is a UI test. Call the AskUserQuestion tool exactly once with one question: '你想用哪种颜色? Which colour?'
+  header 'Colour', options: '红色 Red' (warm), 'Green' (calm), 'Blue' (cool). Then after the answer reply with just
+  the chosen colour.
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ ☐ Colour
+
+你想用哪种颜色? Which colour?
+
+❯ 1. 红色 Red
+     Warm
+  2. Green
+     Calm
+  3. Blue
+     Cool
+  4. Type something.
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  5. Chat about this
+
+Enter to select · ↑/↓ to navigate · Esc to cancel

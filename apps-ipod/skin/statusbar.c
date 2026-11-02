@@ -28,6 +28,9 @@
 #include "statusbar.h"
 #include "system/appevents.h"
 #include "timefuncs.h"
+#ifdef HAVE_USB_PODLINK
+#include "podlink.h"
+#endif
 
 /* FIXME: should be removed from icon.h to avoid redefinition,
    but still needed for compatibility with old system */
@@ -148,6 +151,10 @@ static struct screen * sb_fill_bar_info(struct gui_statusbar * bar)
 
     bar->info.battlevel = battery_level();
     bar->info.usb_inserted = usb_inserted();
+#ifdef HAVE_USB_PODLINK
+    bar->info.podlink = podlink_state() == PODLINK_CLOSED ? 0 :
+                        podlink_state() == PODLINK_CONNECTED ? 2 : 1;
+#endif
     bar->info.inserted = (charger_input_state == CHARGER);
     if (bar->info.inserted)
     {
@@ -221,7 +228,15 @@ void gui_statusbar_draw(struct gui_statusbar * bar, bool force_redraw, struct vi
         if (bar->info.battery_state)
             gui_statusbar_icon_battery(display, bar->info.battlevel,
                                        bar->info.batt_charge_step);
-        if (bar->info.usb_inserted)
+        /* Link mode takes the plug's place: it is a USB connection that
+         * is not the disk */
+        if (bar->info.podlink)
+            display->mono_bitmap(bitmap_icons_7x8[bar->info.podlink == 2 ?
+                                     Icon_PodLinkOpen : Icon_PodLinkWait],
+                                 STATUSBAR_PLUG_X_POS,
+                                 STATUSBAR_Y_POS, STATUSBAR_PLUG_WIDTH,
+                                 SB_ICON_HEIGHT);
+        else if (bar->info.usb_inserted)
             display->mono_bitmap(bitmap_icons_7x8[Icon_USBPlug],
                                  STATUSBAR_PLUG_X_POS,
                                  STATUSBAR_Y_POS, STATUSBAR_PLUG_WIDTH,

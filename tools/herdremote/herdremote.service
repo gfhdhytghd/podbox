@@ -1,0 +1,16 @@
+# User service for HerdRemote. Install:
+#   cp herdremote.service ~/.config/systemd/user/
+#   systemctl --user edit herdremote     (set ExecStart to your checkout)
+#   systemctl --user enable --now herdremote
+#   journalctl --user -u herdremote -f
+[Unit]
+Description=HerdRemote: herdr agents on the iPod's System > Agents
+After=default.target
+
+[Service]
+ExecStart=/usr/bin/python3 %h/podbox/tools/herdremote/herdremote.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

@@ -46,6 +46,7 @@
 #define SKIN_TOKEN_VLED_BUILDING    (SKIN_TOKEN_CUSTOM_BASE + 25)
 #define SKIN_TOKEN_VLED_WORKING     (SKIN_TOKEN_CUSTOM_BASE + 26)
 #define SKIN_TOKEN_LOADING_ANIM     (SKIN_TOKEN_CUSTOM_BASE + 27)
+#define SKIN_TOKEN_PODLINK          (SKIN_TOKEN_CUSTOM_BASE + 28)
 
 /* %LH's fields: what its word names, held in the token's value */
 enum browser_header_field {

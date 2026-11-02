@@ -1,0 +1,40 @@
+
+● Blue
+
+✻ Baked for 2s · done 4:05
+
+❯ UI test 2. Call AskUserQuestion once with TWO questions: Q1 header 'Size' question 'Which size?' options Small,
+  Medium, Large. Q2 header 'Toppings' question 'Which toppings?' multiSelect true, options Cheese, Olives, Basil. Then
+  reply with the answers only.
+
+● User answered Claude's questions:
+  ⎿  · Which size? → Medium
+     · Which toppings? → Cheese, Basil
+
+● Size: Medium
+  Toppings: Cheese, Basil
+
+✻ Brewed for 2s · done 4:06
+
+❯ UI test 3. Use the Bash tool to run exactly: echo herdremote-permission-test > note.txt   (do not use any other
+  tool).
+
+  Writing test text into note.txt in current directory
+  ⎿  $ echo herdremote-permission-test > note.txt
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ Bash command
+ Tip: auto mode handles these prompts for you — choose "switch to auto mode" below
+ Write test text into note.txt in current directory
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+ echo herdremote-permission-test > note.txt
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+ Do you want to proceed?
+ ❯ 1. Yes
+   2. Yes, and always allow access to
+      /tmp/claude-1000/-home-wilf-data-PodJS-podbox-wt-herdr/f8880791-6aa7-4335-baad-1c7a95ca0be1/scratchpad/cwd-claude
+      from this project
+   3. Yes, and switch to auto mode · auto mode handles these prompts for you
+   4. No
+
+ Esc to cancel · Tab to amend

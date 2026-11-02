@@ -587,6 +587,10 @@ wraps at however many branches you give it:
 Note `%|` for a literal `|` — a bare one would end the branch. Backslash needs no
 escaping.
 
+`%lk` is the PodLink indicator: first branch while **System > PodLink** or
+**System > Agents** waits for the computer, second once they are connected,
+last otherwise. See [`custom-skin-tags.md`](custom-skin-tags.md#lk--podlink-link-mode).
+
 ---
 
 ## 8. Options on the player

@@ -1,0 +1,39 @@
+› UI test 2. If you have a request_user_input (ask the user a multiple-choice question) tool, call it once with quest…
+? Pick a fruit
+
+  • Apple
+  • Pear
+  • Plum
+
+? Pick a fruit
+
+  • Apple
+  • Pear
+  • Plum
+
+  Worked for 11s • 4:08 AM
+
+
+› UI test 3. Call request_user_input once: question 'Pick a colour', options Red, Green, Blue. Then reply with the
+  answer only.
+
+
+? Pick a colour
+
+  • Red
+  • Green
+  • Blue
+
+• Working (17s • esc to interrupt)
+
+• Queued follow-up inputs
+
+
+  Pick a colour
+
+  › 1. Red
+    2. Green
+    3. Blue
+    4. Other
+
+  enter submit   ^] skip   shift+→ main prompt

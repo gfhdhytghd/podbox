@@ -58,6 +58,9 @@
 #include "ata.h" /* ata_disk_isssd() */
 #endif
 #include "audio/ab_repeat.h"
+#ifdef HAVE_USB_PODLINK
+#include "podlink.h"
+#endif
 #include "lang.h"
 #include "system/activity.h"
 #include "system/format_time.h"
@@ -2085,6 +2088,26 @@ const char *get_token_value(struct gui_wps *gwps,
             /* generic busy flag for other long-running work; set via
              * ui_set_working() -- no built-in driver yet */
             return sb_show_working() ? "w" : NULL;
+        case SKIN_TOKEN_PODLINK:
+            /* Link mode: absent when off, so normal USB shows nothing; 1
+             * while it waits for the computer, 2 once a session is open */
+#ifdef HAVE_USB_PODLINK
+            switch (podlink_state())
+            {
+                case PODLINK_CLOSED:
+                    return NULL;
+                case PODLINK_CONNECTED:
+                    if (intval)
+                        *intval = 2;
+                    return "o";
+                default:
+                    if (intval)
+                        *intval = 1;
+                    return "w";
+            }
+#else
+            return NULL;
+#endif
         case SKIN_TOKEN_LOADING_ANIM:
             /* Time-cycling frame index for an animated "busy" spinner. A theme
              * conditional (%?la<f0|f1|...|fN>) maps it to N glyphs; the frame
