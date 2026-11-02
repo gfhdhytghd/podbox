@@ -1125,7 +1125,9 @@ static bool find_album_art(int *offset, int *filesize, int *status)
     struct mp3entry *track = audio_current_track();
     struct albumart_source source;
     unsigned cursor = 0;
-    if (!albumart_next_source(track, AA_ROLE_ALBUM, &cursor, &source) ||
+    if (!albumart_next_source(track, AA_ROLE_ALBUM,
+                             global_settings.art_cache_album_source,
+                             &cursor, &source) ||
         source.kind == AA_SOURCE_ITUNES)
         return false;
     strlcpy(np_file, source.path, MAX_PATH);

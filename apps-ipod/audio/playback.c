@@ -243,6 +243,8 @@ struct track_info
     int codec_hid;                  /* Buffered codec handle ID */
     int audio_hid;                  /* Main audio data handle ID */
     }; };
+    unsigned aa_owner[2]; /* album and optional artist dependency */
+    unsigned aa_generation;
 };
 
 /* On-buffer info format; includes links */
@@ -567,6 +569,8 @@ static void track_info_wipe(struct track_info *infop)
 
     FOR_EACH_TRACK_INFO_HANDLE(i)
         infop->handle[i] = ERR_HANDLE_NOT_FOUND;
+    memset(infop->aa_owner, 0, sizeof(infop->aa_owner));
+    infop->aa_generation = 0;
 }
 
 /** Track list **/
@@ -2036,12 +2040,15 @@ void set_albumart_mode(int setting)
 static int audio_load_albumart(struct track_info *infop,
                                 struct mp3entry *track_id3, bool is_current_track)
 {
+    unsigned generation = art_cache_generation();
     FOREACH_ALBUMART(i)
     {
         struct bufopen_bitmap_data user_data;
         int *aa_hid = &infop->aa_hid[i];
         int hid = ERR_UNSUPPORTED_TYPE;
-        if (*aa_hid >= 0 || *aa_hid == ERR_UNSUPPORTED_TYPE ||
+        if (*aa_hid >= 0 ||
+            (*aa_hid == ERR_UNSUPPORTED_TYPE &&
+             infop->aa_generation == generation) ||
             !albumart_slots[i].used)
             continue;
         memset(&user_data, 0, sizeof(user_data));
@@ -2060,14 +2067,27 @@ static int audio_load_albumart(struct track_info *infop,
                 slash = strrchr(owner, '/');
                 if (slash) *slash = 0;
             }
+            infop->aa_owner[0] =
+                !artist || auto_art
+                    ? art_cache_preference_hash(track_id3->path,
+                                                global_settings.album_art)
+                    : 0;
+            infop->aa_owner[1] = artist ? art_cache_dir_hash(owner) : 0;
             bool fallback = false;
             int size = art_cache_size_index("wps");
-            if (size >= 0 && art_cache_lookup(owner, size, path, sizeof(path),
-                                              &fallback) && !fallback)
+            bool found = size >= 0 &&
+                         (artist ? art_cache_lookup(owner, size, path,
+                                                    sizeof(path), &fallback)
+                                 : art_cache_lookup_preference(
+                                       owner, global_settings.album_art, size,
+                                       path, sizeof(path), &fallback));
+            if (found && !fallback)
                 hid = bufopen(path, 0, TYPE_BITMAP, &user_data);
             if (auto_art && hid < 0 && hid != ERR_BUFFER_FULL && size >= 0 &&
-                art_cache_lookup(track_id3->path, size, path, sizeof(path),
-                                 &fallback) && !fallback)
+                art_cache_lookup_preference(track_id3->path,
+                                            global_settings.album_art, size,
+                                            path, sizeof(path), &fallback) &&
+                !fallback)
                 hid = bufopen(path, 0, TYPE_BITMAP, &user_data);
         }
         if (hid >= 0) skin_albumart_art_opened(hid);
@@ -2100,6 +2120,7 @@ static int audio_load_albumart(struct track_info *infop,
         }
     }
 
+    infop->aa_generation = generation;
     (void)is_current_track;
     return true;
 }
@@ -3700,6 +3721,20 @@ static void audio_on_audio_flush(void)
     }
 }
 
+/* Publications affect prefetched tracks as well as the current track.
+ * Rebuffer only when an active slot depends on this owner. */
+static bool audio_art_dependency_changed(unsigned owner)
+{
+    struct track_info info;
+    for (unsigned i = 0; i < track_list_count(); i++)
+    {
+        if (track_list_get_info_from(track_list.first_hid, i, &info) &&
+            (info.aa_owner[0] == owner || info.aa_owner[1] == owner))
+            return true;
+    }
+    return false;
+}
+
 /* Called by audio thread when playback is started */
 void audio_playback_handler(struct queue_event *ev)
 {
@@ -3800,6 +3835,11 @@ void audio_playback_handler(struct queue_event *ev)
             break;
 
         /** Miscellaneous messages **/
+        case Q_AUDIO_ART_CHANGED:
+            if (!audio_art_dependency_changed((unsigned)ev->data))
+                break;
+            ev->data = 0;
+            /* Fall through to reload every affected buffered track. */
         case Q_AUDIO_REMAKE_AUDIO_BUFFER:
             if (ev->data != 0)
             {
@@ -4423,12 +4463,8 @@ void playback_release_aa_slot(int slot)
 
 void playback_art_changed(unsigned owner)
 {
-    struct mp3entry *id3 = audio_current_track();
-    char path[MAX_PATH];
-    if (!id3 || !id3->path[0]) return;
-    strlcpy(path, id3->path, sizeof(path));
-    if (art_cache_dir_hash(path) == owner)
-        audio_queue_post(Q_AUDIO_REMAKE_AUDIO_BUFFER, 0);
+    /* The audio thread owns the buffered track list. */
+    audio_queue_post(Q_AUDIO_ART_CHANGED, owner);
 }
 
 void playback_update_aa_dims(void)
