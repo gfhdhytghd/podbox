@@ -57,6 +57,7 @@ enum
     Q_AUDIO_UPDATE_WATERMARK,   /* buffering watermark needs updating */
     /* -> audio */
     Q_AUDIO_REMAKE_AUDIO_BUFFER, /* buffer needs to be reinitialized */
+    Q_AUDIO_ART_CHANGED,         /* artwork owner published by the worker */
 };
 
 /* (*) If you change these, you must check audio_clear_track_notifications

@@ -19,8 +19,8 @@
 
 static uint32_t le32(const unsigned char *p)
 {
-    return (uint32_t)p[0] | (uint32_t)p[1] << 8 |
-           (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
+    return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 |
+           (uint32_t)p[3] << 24;
 }
 
 static uint64_t le64(const unsigned char *p)
@@ -33,7 +33,11 @@ static bool read_at(int fd, off_t at, void *buf, size_t n)
     return lseek(fd, at, SEEK_SET) == at && read(fd, buf, n) == (ssize_t)n;
 }
 
-struct record { off_t at, body, end; unsigned char h[40]; };
+struct record
+{
+    off_t at, body, end;
+    unsigned char h[40];
+};
 
 static bool record_at(int fd, off_t at, off_t end, const char *kind,
                       struct record *r, bool list)
@@ -52,9 +56,10 @@ static bool record_at(int fd, off_t at, off_t end, const char *kind,
     return read_at(fd, at, r->h, n);
 }
 
-/* UTF-16LE database strings are converted to UTF-8, including surrogate pairs. */
-static bool string_at(int fd, off_t at, unsigned bytes, bool wide,
-                      char *out, size_t cap)
+/* UTF-16LE database strings are converted to UTF-8, including surrogate pairs.
+ */
+static bool string_at(int fd, off_t at, unsigned bytes, bool wide, char *out,
+                      size_t cap)
 {
     size_t used = 0;
     if (bytes > 4096 || (wide && (bytes & 1)))
@@ -83,13 +88,15 @@ static bool string_at(int fd, off_t at, unsigned bytes, bool wide,
         }
         if (!wide || c < 128)
         {
-            if (used + 1 >= cap) return false;
+            if (used + 1 >= cap)
+                return false;
             out[used++] = c == ':' ? '/' : c;
         }
         else
         {
             unsigned n = c < 0x800 ? 2 : c < 0x10000 ? 3 : 4;
-            if (used + n >= cap) return false;
+            if (used + n >= cap)
+                return false;
             for (unsigned j = n - 1; j; j--)
             {
                 out[used + j] = 0x80 | (c & 63);
@@ -103,8 +110,7 @@ static bool string_at(int fd, off_t at, unsigned bytes, bool wide,
     return true;
 }
 
-static bool track_ids(int fd, const char *path, uint64_t *dbid,
-                      uint32_t *link)
+static bool track_ids(int fd, const char *path, uint64_t *dbid, uint32_t *link)
 {
     struct record root, section, list, track, text;
     off_t end = ffilesize(fd);
@@ -135,10 +141,10 @@ static bool track_ids(int fd, const char *path, uint64_t *dbid,
                     return false;
                 unsigned bytes = le32(h + 4);
                 if (bytes > (uint64_t)(text.end - text.body - 16) ||
-                    !string_at(fd, text.body + 16, bytes, true,
-                               candidate, sizeof(candidate)) ||
+                    !string_at(fd, text.body + 16, bytes, true, candidate,
+                               sizeof(candidate)) ||
                     !albumart_normalize(candidate, normalized,
-                                         sizeof(normalized)) ||
+                                        sizeof(normalized)) ||
                     strcmp(normalized, wanted))
                     continue;
                 unsigned char ids[8];
@@ -158,7 +164,7 @@ static bool track_ids(int fd, const char *path, uint64_t *dbid,
 }
 
 static bool thumbnail(int fd, const struct record *image,
-                       struct albumart_source *src)
+                      struct albumart_source *src)
 {
     struct record data, thumb, name;
     bool found = false;
@@ -172,10 +178,17 @@ static bool thumbnail(int fd, const struct record *image,
         unsigned format = le32(thumb.h + 16), dim;
         switch (format)
         {
-        case 1061: dim = 56; break;
-        case 1055: dim = 128; break;
-        case 1060: dim = 320; break;
-        default: continue;
+        case 1061:
+            dim = 56;
+            break;
+        case 1055:
+            dim = 128;
+            break;
+        case 1060:
+            dim = 320;
+            break;
+        default:
+            continue;
         }
         unsigned height = thumb.h[32] | thumb.h[33] << 8;
         unsigned width = thumb.h[34] | thumb.h[35] << 8;
@@ -191,21 +204,25 @@ static bool thumbnail(int fd, const struct record *image,
         unsigned n = le32(name.h + 24);
         char filename[MAX_PATH];
         if (n > (uint64_t)(name.end - name.at - 36) ||
-            !string_at(fd, name.at + 36, n, name.h[28] == 2,
-                       filename, sizeof(filename)))
+            !string_at(fd, name.at + 36, n, name.h[28] == 2, filename,
+                       sizeof(filename)))
             continue;
         const char *base = filename[0] == '/' ? filename + 1 : filename;
         if (!*base || strchr(base, '/') || strstr(base, ".."))
             continue;
-        if (snprintf(src->path, sizeof(src->path),
-                     ITUNES_CONTROL "/Artwork/%s", base) >= (int)sizeof(src->path))
+        char candidate[MAX_PATH];
+        if (snprintf(candidate, sizeof(candidate), ITUNES_CONTROL "/Artwork/%s",
+                     base) >= (int)sizeof(candidate))
             continue;
-        int pixels = open(src->path, O_RDONLY);
+        int pixels = open(candidate, O_RDONLY);
         off_t pos = le32(thumb.h + 20);
         bool valid = pixels >= 0 && pos <= ffilesize(pixels) &&
                      bytes <= (uint64_t)(ffilesize(pixels) - pos);
-        if (pixels >= 0) close(pixels);
-        if (!valid) continue;
+        if (pixels >= 0)
+            close(pixels);
+        if (!valid)
+            continue;
+        strlcpy(src->path, candidate, sizeof(src->path));
         src->kind = AA_SOURCE_ITUNES;
         src->pos = pos + (top * dim + left) * 2;
         src->size = ((height - 1) * dim + width) * 2;
@@ -223,24 +240,31 @@ bool itunes_art_find(const char *path, struct albumart_source *src)
     uint64_t dbid = 0;
     uint32_t link = 0;
     int fd = open(ITUNES_CONTROL "/iTunes/iTunesDB", O_RDONLY);
-    if (fd < 0) return false;
+    if (fd < 0)
+        return false;
     bool found = track_ids(fd, path, &dbid, &link);
     close(fd);
-    if (!found) return false;
+    if (!found)
+        return false;
     fd = open(ITUNES_CONTROL "/Artwork/ArtworkDB", O_RDONLY);
-    if (fd < 0) return false;
+    if (fd < 0)
+        return false;
     struct record root, section, list, image;
     found = false;
     if (!record_at(fd, 0, ffilesize(fd), "mhfd", &root, false))
         goto out;
     for (off_t at = root.body; at < root.end; at = section.end)
     {
-        if (!record_at(fd, at, root.end, "mhsd", &section, false)) break;
-        if (le32(section.h + 12) != 1) continue;
-        if (!record_at(fd, section.body, section.end, "mhli", &list, true)) break;
+        if (!record_at(fd, at, root.end, "mhsd", &section, false))
+            break;
+        if (le32(section.h + 12) != 1)
+            continue;
+        if (!record_at(fd, section.body, section.end, "mhli", &list, true))
+            break;
         for (off_t p = list.body; p < list.end; p = image.end)
         {
-            if (!record_at(fd, p, list.end, "mhii", &image, false)) goto out;
+            if (!record_at(fd, p, list.end, "mhii", &image, false))
+                goto out;
             if ((link && le32(image.h + 16) == link) ||
                 (!link && le64(image.h + 20) == dbid))
             {

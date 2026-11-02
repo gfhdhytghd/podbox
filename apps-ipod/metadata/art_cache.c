@@ -53,20 +53,17 @@
 /*#define LOGF_ENABLE*/
 #include "logf.h"
 
-#define THUMBCACHE_DIR LIB_ART_DIR "/v9"
+#define THUMBCACHE_DIR LIB_ART_DIR "/v10"
 /* Folders a pass found no art for, one path per line, for the health screen
  * (screens/system/art_health.c). Written to a .new and renamed only when a
  * pass finishes, so an aborted pass leaves the previous -- complete -- list
  * standing rather than a partial one that reads as "the rest are fine". */
 #define AA_NOART_ALBUMS  LIB_NO_ART_ALBUMS_FILE
 #define AA_NOART_ARTISTS LIB_NO_ART_ARTISTS_FILE
-/* What each folder's thumbnails were made from, so a pass can tell a replaced
- * or deleted image from an unchanged one: one struct aa_stamp per folder, in a
- * libfile. Later records override earlier ones, which is what lets
- * aa_handle_offer() append rather than rewrite. Its version is the
- * thumbnails' format, and its marks the library the last completed pass
- * covered. A record with folder hash 0, which no folder has, holds
- * aa_marks_key for those marks. */
+/* Per-owner visit stamps and the library marks covered by a full pass.
+ * A record with owner key 0 holds aa_marks_key for those marks. Source
+ * revisions are checked from content; standalone offers publish references
+ * and typed requests separately from this pass table. */
 #define AA_STAMP_FILE   THUMBCACHE_DIR "/stamps.dat"
 #define AA_STAMP_MAGIC  LIB_STAMPS_MAGIC
 
@@ -78,24 +75,18 @@
 /* Bounded owner deduplication. Overflow entries are streamed without dedup. */
 #define AA_SEEN_SLOTS 16384  /* power of two */
 
-/* One folder's entry in the table: its path hash and the stamp of the image
- * its thumbnails were made from. The table is the pass's seen set as well, with
- * a bit per slot saying whether this pass has reached the folder yet. */
+/* An owner's key and source stamp. A bit per table slot records whether
+ * this pass has visited that owner. */
 struct aa_stamp
 {
-    unsigned int key;    /* folder path hash; 0 marks an empty slot */
+    unsigned int key;    /* owner key; 0 marks an empty slot */
     unsigned int stamp;
 };
 #define AA_TABLE_BYTES (AA_SEEN_SLOTS * sizeof(struct aa_stamp) \
                         + AA_SEEN_SLOTS / 8)
 
-/* Stamps that are not an image's. NONE is a folder with no record, whose
- * thumbnails a pass adopts as they stand rather than regenerating -- the case
- * for every folder cached before stamps existed, and after the stamp file is
- * lost. EMBEDDED is art from a track's tags. NO_EMBED is a folder whose track
- * was read and held no art, so a pass does not read it again. 2 is NO_EMBED
- * as recorded when only JPEG was looked for: a pass takes it for neither, and
- * reads the folder again for PNG. */
+/* Sentinel stamps for an unvisited owner, embedded art and a missing source.
+ * Every visited owner is resolved again; these do not bypass source hashing. */
 #define AA_STAMP_NONE     0u
 #define AA_STAMP_EMBEDDED 1u
 #define AA_STAMP_NO_EMBED 3u
@@ -155,7 +146,7 @@ static bool aa_check_abort(void);
  * buffer the pass already keeps the current directory in. */
 static struct art_cache_counts aa_counts;
 
-/* Scratch id3 used only to feed search_albumart_files(); kept out of the
+/* Scratch id3 for source resolution; kept out of the
  * thread stack because struct mp3entry is large. */
 static struct mp3entry aa_id3;
 
@@ -166,7 +157,6 @@ static struct mp3entry aa_id3;
 static char aa_tcs_buf[TAGCACHE_BUFSZ];
 static char aa_dir[MAX_PATH];
 static char aa_artist_dir[MAX_PATH];
-static char aa_probe[MAX_PATH];
 static char aa_check_path[MAX_PATH];
 static char aa_out_path[MAX_PATH];
 static char aa_chain_path[MAX_PATH];
@@ -183,25 +173,25 @@ static struct aa_stamp aa_stamp_io[AA_STAMP_BATCH];
 #define AA_PURGE_BATCH 64
 static char aa_purge_names[AA_PURGE_BATCH][32];
 
-/* Queue event id: the current track's embedded art was offered for caching. */
+/* Queue event id: resolve a track, artist directory or indexed book. */
 #define AA_EVENT_OFFER 1
 
-/* Filled by the track-change hook (playback thread), consumed by the aa thread.
- * Rockbox is cooperatively scheduled, so the two never run at once and no lock is
- * needed; a newer offer simply supersedes one not yet processed. */
-static struct
+/* Persisted beside an owner reference so repair retains its path and role.
+ * policy == -1 follows the cache source setting; WPS overrides name a policy.
+ */
+struct aa_request
 {
-    char          path[MAX_PATH];
-    off_t         pos;
-    unsigned long size;
-    int           flags;
-} aa_offer;
-
-/* An offer is on the queue. A pass does not drain the queue, so each track
- * change posting its own would overflow it; one queued offer reads whichever
- * aa_offer holds when it is handled. The thread drops what is queued across a
- * USB session, so a pass starting and the check after USB clear it too. */
+    uint32_t version;
+    unsigned owner;
+    int role;
+    int policy;
+    char path[MAX_PATH];
+    uint32_t checksum;
+};
+static struct aa_request aa_offer;
 static volatile bool aa_offer_posted;
+static struct timeout aa_offer_tmo;
+static unsigned aa_offer_retries;
 static volatile unsigned aa_offer_generation;
 
 bool art_cache_is_busy(void)
@@ -451,6 +441,7 @@ static void aa_identity_dirs(void)
     mkdir(THUMBCACHE_DIR);
     mkdir(THUMBCACHE_DIR "/keys");
     mkdir(THUMBCACHE_DIR "/refs");
+    mkdir(THUMBCACHE_DIR "/requests");
 }
 
 /* Hashes index a full-key registry. A collision claims a different slot. */
@@ -498,31 +489,49 @@ unsigned int art_cache_dir_hash(const char *path)
 static unsigned aa_referenced(unsigned owner)
 {
     char path[MAX_PATH];
-    uint32_t record[4];
+    uint32_t record[5];
     snprintf(path, sizeof(path), THUMBCACHE_DIR "/refs/%08x.ref", owner);
     int fd = open(path, O_RDONLY);
-    bool ok = fd >= 0 && read(fd, record, sizeof(record)) == sizeof(record)
-              && record[0] == ART_CACHE_FORMAT_VERSION && record[1] == owner &&
-              record[3] == aa_checksum(2166136261u, record, 3 * sizeof(*record));
-    if (fd >= 0) close(fd);
+    bool ok =
+        fd >= 0 && read(fd, record, sizeof(record)) == sizeof(record) &&
+        record[0] == ART_CACHE_FORMAT_VERSION && record[1] == owner &&
+        record[3] == (unsigned)global_settings.art_cache_album_source &&
+        record[4] == aa_checksum(2166136261u, record, 4 * sizeof(*record));
+    if (fd >= 0)
+        close(fd);
     return ok ? record[2] : 0;
 }
 
 static bool aa_reference(unsigned owner, unsigned pixels)
 {
-    if (aa_referenced(owner) == pixels) return true;
+    if (aa_referenced(owner) == pixels)
+        return true;
     char path[MAX_PATH], tmp[MAX_PATH];
-    uint32_t record[] = { ART_CACHE_FORMAT_VERSION, owner, pixels, 0 };
-    record[3] = aa_checksum(2166136261u, record, 3 * sizeof(*record));
+    uint32_t record[] = {ART_CACHE_FORMAT_VERSION, owner, pixels,
+                         global_settings.art_cache_album_source, 0};
+    record[4] = aa_checksum(2166136261u, record, 4 * sizeof(*record));
     snprintf(path, sizeof(path), THUMBCACHE_DIR "/refs/%08x.ref", owner);
     snprintf(tmp, sizeof(tmp), "%s.new", path);
     int fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC, 0666);
-    if (fd < 0) return false;
+    if (fd < 0)
+    {
+        aa_io_failed = true;
+        aa_state = ART_FAILED;
+        return false;
+    }
     bool ok = write(fd, record, sizeof(record)) == sizeof(record);
-    if (close(fd) < 0) ok = false;
-    if (aa_check_abort()) ok = false;
-    if (ok) ok = rename(tmp, path) == 0;
-    if (!ok) { remove(tmp); aa_io_failed = true; aa_state = ART_FAILED; }
+    if (close(fd) < 0)
+        ok = false;
+    if (aa_check_abort())
+        ok = false;
+    if (ok)
+        ok = rename(tmp, path) == 0;
+    if (!ok)
+    {
+        remove(tmp);
+        aa_io_failed = true;
+        aa_state = ART_FAILED;
+    }
     else
     {
         aa_generation++;
@@ -534,6 +543,63 @@ static bool aa_reference(unsigned owner, unsigned pixels)
 }
 
 enum art_cache_state art_cache_status(void) { return aa_state; }
+
+static bool aa_read_request(unsigned owner, struct aa_request *request)
+{
+    char path[MAX_PATH];
+    snprintf(path, sizeof(path), THUMBCACHE_DIR "/requests/%08x.req", owner);
+    int fd = open(path, O_RDONLY);
+    bool ok =
+        fd >= 0 && read(fd, request, sizeof(*request)) == sizeof(*request);
+    if (fd >= 0)
+        close(fd);
+    return ok && request->version == ART_CACHE_FORMAT_VERSION &&
+           request->owner == owner &&
+           (request->role == AA_ROLE_ALBUM || request->role == AA_ROLE_ARTIST ||
+            request->role == AA_ROLE_BOOK) &&
+           request->policy >= -1 && request->policy <= ART_SOURCE_EMBEDDED &&
+           request->path[0] &&
+           memchr(request->path, 0, sizeof(request->path)) &&
+           request->checksum ==
+               aa_checksum(2166136261u, request,
+                           offsetof(struct aa_request, checksum));
+}
+
+static bool aa_save_request(unsigned owner, const char *probe,
+                            enum albumart_role role, int policy)
+{
+    struct aa_request request = {.version = ART_CACHE_FORMAT_VERSION,
+                                 .owner = owner,
+                                 .role = role,
+                                 .policy = policy};
+    struct aa_request stored;
+    strlcpy(request.path, probe, sizeof(request.path));
+    request.checksum = aa_checksum(2166136261u, &request,
+                                   offsetof(struct aa_request, checksum));
+    if (aa_read_request(owner, &stored) &&
+        !memcmp(&stored, &request, sizeof(request)))
+        return true;
+    char path[MAX_PATH], tmp[MAX_PATH];
+    snprintf(path, sizeof(path), THUMBCACHE_DIR "/requests/%08x.req", owner);
+    snprintf(tmp, sizeof(tmp), "%s.new", path);
+    int fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC, 0666);
+    bool ok = fd >= 0;
+    if (ok)
+    {
+        ok = write(fd, &request, sizeof(request)) == sizeof(request);
+        if (close(fd) < 0)
+            ok = false;
+    }
+    if (ok)
+        ok = rename(tmp, path) == 0;
+    if (!ok)
+    {
+        remove(tmp);
+        aa_io_failed = true;
+        aa_state = ART_FAILED;
+    }
+    return ok;
+}
 
 static void aa_request_owner(unsigned owner);
 
@@ -613,8 +679,35 @@ static void aa_ensure_dirs(void)
     }
 }
 
-/* An empty stamp file in this format: no folder stamped, and the format
- * recorded, so a pass cut short after the purge does not purge again */
+/* Prefer Cache uses the library policy; explicit WPS preferences have their
+ * own references so a folder view and the WPS can choose different sources. */
+unsigned art_cache_preference_hash(const char *path, int preference)
+{
+    if (preference == AA_PREFER_CACHE)
+        return art_cache_dir_hash(path);
+    char key[ART_CACHE_IDENTITY_MAX], normalized[MAX_PATH];
+    if (!albumart_normalize(path, normalized, sizeof(normalized)))
+        return 0;
+    snprintf(key, sizeof(key), "/@wps/%d%s", preference, normalized);
+    return art_cache_dir_hash(key);
+}
+
+bool art_cache_lookup_preference(const char *path, int preference, int size,
+                                 char *out, int out_len, bool *fallback)
+{
+    if (preference == AA_OFF)
+        return false;
+    if (preference == AA_PREFER_CACHE)
+        return art_cache_lookup(path, size, out, out_len, fallback);
+    unsigned owner = art_cache_preference_hash(path, preference);
+    int policy = preference == AA_PREFER_IMAGE_FILE ? ART_SOURCE_FILES_FIRST
+                                                    : ART_SOURCE_EMBEDDED_FIRST;
+    if (!owner || !aa_save_request(owner, path, AA_ROLE_ALBUM, policy))
+        return false;
+    return art_cache_lookup_hash(owner, size, out, out_len, fallback);
+}
+
+/* An empty stamp file records the format before a pass writes its entries. */
 static void aa_stamps_clear(void)
 {
     struct libfile_writer w;
@@ -713,12 +806,6 @@ static void aa_purge_thumbs(void)
     debug_log(DEBUG_LOG_ARTCACHE, "purge: done");
 }
 
-/* After a completed pass: every thumbnail of a folder the pass did not reach
- * belongs to one that has gone. fallback.aat, not a hash, is left alone.
- * Collected and removed a batch at a time, as aa_purge_thumbs() does; a stop
- * for USB leaves the rest to the next completed pass. */
-
-
 /* Whether the stamp file says the thumbnails are in this format */
 static bool aa_format_current(void)
 {
@@ -728,14 +815,8 @@ static bool aa_format_current(void)
                         ART_CACHE_FORMAT_VERSION, &h);
 }
 
-/* The generator decides "already cached?" with a bare file_exists(), and the
- * reader rejects any file whose header version doesn't match. So on a format
- * bump the stale files would be skipped forever *and* refused at render time -
- * every cover would silently go blank. Stamp the format version alongside the
- * cache and purge the thumbnails whenever it moves.
- *
- * Being inside the pass, this only ever runs once the pass has been allowed to
- * start; art_cache_init() is what makes sure a bump allows it. */
+/* The stamp header gates the cache format. Missing marks force a pass;
+ * its initial purge also writes the current format's empty stamp file. */
 static bool aa_check_format_version(void)
 {
     if (aa_format_current())
@@ -779,16 +860,7 @@ static void aa_dirname(const char *path, char *dir, int dir_len)
     dir[len] = 0;
 }
 
-/* Whether 'art', found for the folder of 'probe', can stand for it. The search
- * falls back to the folder above, which is the album for a disc folder but the
- * artist for an album folder -- and the artist's picture is no album's cover.
- * So for an album an image from above counts only for a disc folder. For an
- * artist it always counts, except from the volume root: under
- * <artist>/<album_type>/<album> the folder above the album is the type, and
- * the artist's picture is one further up. Trap: under <Music>/<artist> or
- * <genre>/<artist> the folder above is not the artist's, and an image there
- * becomes the picture of every artist without one of their own. */
-/* The table slot for folder hash 'h', claimed with no stamp if it is new.
+/* The table slot for owner key 'h', claimed with no stamp if it is new.
  * NULL when the table is full. h==0 is remapped so 0 can mark an empty slot. */
 static struct aa_stamp *aa_slot(unsigned int h)
 {
@@ -816,8 +888,8 @@ static struct aa_stamp *aa_slot(unsigned int h)
  * orphans, so the pass then removes none. */
 static bool aa_table_full;
 
-/* The slot for 'h' the first time this pass reaches it; NULL if the pass has
- * been here already, or the table is full (the folder is then skipped). */
+/* The slot for an owner's first visit. Full tables use a streaming slot;
+ * only an owner already visited is skipped. */
 static struct aa_stamp *aa_visit(unsigned int h)
 {
     struct aa_stamp *s = aa_slot(h);
@@ -926,11 +998,6 @@ static void aa_stamps_save(bool completed)
     libfile_finish(&w, ok);
 }
 
-/* Record one folder's stamp outside a pass, by appending to the file. */
-/* The stamp of the image at 'path': its path, size and modification time,
- * hashed. Size and time come from the directory entry, so no image is read.
- * Equality is all a stamp is compared for -- a replacement copied in with an
- * older timestamp is still a different one. */
 /* Whether every size of one folder's thumbnails is on disk. */
 static bool aa_thumbs_exist(unsigned int dh)
 {
@@ -1492,46 +1559,65 @@ static bool aa_fill(const struct aa_src *src, unsigned int dh,
 
 /* Resolve candidates in order; publish the owner only after every size is ready. */
 static bool aa_cache_dir(const char *probe_path, unsigned int owner,
-                         struct aa_stamp *slot, bool artist,
+                         struct aa_stamp *slot, bool artist, int policy,
                          void *workbuf, size_t worksz, bool *aborted)
 {
-    struct aa_src src = { .generation = aa_offer_generation };
+    struct aa_src src = {.generation = aa_offer_generation};
+    if (!aa_save_request(owner, probe_path,
+                         artist ? AA_ROLE_ARTIST : AA_ROLE_ALBUM, policy))
+        return false;
+    if (policy < 0)
+        policy = global_settings.art_cache_album_source;
     memset(&aa_id3, 0, sizeof(aa_id3));
-    if (!artist) get_metadata(&aa_id3, -1, probe_path);
+    if (!artist)
+        get_metadata(&aa_id3, -1, probe_path);
     strlcpy(aa_id3.path, probe_path, sizeof(aa_id3.path));
     unsigned cursor = 0;
     unsigned starting_generation = aa_generation;
     bool had_candidate = false;
     aa_record_state(owner, ART_LOADING);
-    while (albumart_next_source(&aa_id3, artist ? AA_ROLE_ARTIST : AA_ROLE_ALBUM,
+    while (albumart_next_source(&aa_id3,
+                                artist ? AA_ROLE_ARTIST : AA_ROLE_ALBUM, policy,
                                 &cursor, &src.resolved))
     {
         had_candidate = true;
         if (aa_check_abort() || src.generation != aa_offer_generation)
-        { *aborted = true; aa_record_state(owner, ART_MISSING); return false; }
+        {
+            *aborted = true;
+            aa_record_state(owner, ART_MISSING);
+            return false;
+        }
         src.path = src.resolved.path;
         src.emb_pos = src.resolved.pos;
         src.emb_size = src.resolved.size;
         src.emb_flags = src.resolved.flags;
         albumart_source_key(&src.resolved, aa_active_identity,
-                             sizeof(aa_active_identity));
+                            sizeof(aa_active_identity));
         /* Registry keys use the same normalized bytes as persisted headers. */
         char normalized[ART_CACHE_IDENTITY_MAX];
         albumart_normalize(aa_active_identity, normalized, sizeof(normalized));
         strcpy(aa_active_identity, normalized);
         unsigned pixels = art_cache_dir_hash(aa_active_identity);
-        if (!pixels) return false;
+        if (!pixels)
+            return false;
         aa_active_id = pixels;
-        unsigned stamp = (unsigned)(src.resolved.revision ^
-                                   (src.resolved.revision >> 32));
+        unsigned stamp =
+            (unsigned)(src.resolved.revision ^ (src.resolved.revision >> 32));
         if (aa_fill(&src, pixels, workbuf, worksz, aborted))
         {
             struct albumart_source checked = src.resolved;
             if (!albumart_source_revision(&checked) ||
                 checked.revision != src.resolved.revision)
-            { *aborted = true; return false; }
+            {
+                *aborted = true;
+                return false;
+            }
             if (aa_check_abort() || src.generation != aa_offer_generation)
-            { *aborted = true; aa_record_state(owner, ART_MISSING); return false; }
+            {
+                *aborted = true;
+                aa_record_state(owner, ART_MISSING);
+                return false;
+            }
             slot->stamp = stamp;
             bool same_reference = aa_referenced(owner) == pixels;
             bool ready = aa_reference(owner, pixels);
@@ -1545,9 +1631,13 @@ static bool aa_cache_dir(const char *probe_path, unsigned int owner,
             aa_record_state(owner, ready ? ART_READY : ART_FAILED);
             return ready;
         }
-        if (src.generation != aa_offer_generation) *aborted = true;
+        if (src.generation != aa_offer_generation)
+            *aborted = true;
         if (*aborted || aa_io_failed)
-        { aa_record_state(owner, aa_io_failed ? ART_FAILED : ART_MISSING); return false; }
+        {
+            aa_record_state(owner, aa_io_failed ? ART_FAILED : ART_MISSING);
+            return false;
+        }
     }
     aa_record_state(owner, had_candidate ? ART_FAILED : ART_MISSING);
     aa_remove_thumbs(owner);
@@ -1567,11 +1657,6 @@ static void aa_log_miss(const char *kind, const char *dir)
                   aa_miss);
 }
 
-/* One full generation pass: walk every track filename, dedup by directory,
- * resolve folder art, and render any missing thumbnails -- both the track's own
- * (album) folder and its parent (artist) folder, for libraries laid out as
- * <artist>/<album>/<track>. Returns BG_INTERRUPTED if it was aborted (USB/DB
- * busy/no memory) and BG_FAILED if the database could not be read to the end. */
 /* The two miss lists a pass is writing. One open file each for the whole pass
  * rather than an open/append/close per folder, which on a library with a lot
  * of coverless folders would be thousands of them. */
@@ -1648,23 +1733,17 @@ static void aa_book_folders(const char *path, struct aa_books_ctx *c)
         dh = art_cache_dir_hash(dir);
         if (!(slot = aa_visit(dh)))
             continue;
-        snprintf(aa_probe, sizeof(aa_probe), "%s/_", dir);
-        aa_cache_dir(aa_probe, dh, slot, true, c->workbuf, c->worksz,
+        aa_cache_dir(dir, dh, slot, true, -1, c->workbuf, c->worksz,
                      c->aborted);
     }
 }
 
-/* One book of the index: a visit, as a folder has one */
-static bool aa_book_visit(const struct book_entry *e, void *data)
+/* Decode an indexed book using its ZIP member metadata. */
+static bool aa_cache_book(const struct book_entry *e, struct aa_books_ctx *c,
+                          unsigned owner, struct aa_stamp *slot)
 {
-    struct aa_books_ctx *c = data;
-    unsigned owner = art_cache_dir_hash(e->path);
-    struct aa_stamp *slot;
-    if (aa_check_abort() || tagcache_is_busy())
-    { *c->aborted = true; return false; }
-    aa_book_folders(e->path, c);
-    if (*c->aborted || !(slot = aa_visit(owner))) return !*c->aborted;
-
+    if (!aa_save_request(owner, e->path, AA_ROLE_BOOK, -1))
+        return false;
     memset(&aa_id3, 0, sizeof(aa_id3));
     strlcpy(aa_id3.path, e->path, sizeof(aa_id3.path));
     unsigned cursor = 0;
@@ -1672,7 +1751,7 @@ static bool aa_book_visit(const struct book_entry *e, void *data)
     aa_record_state(owner, ART_LOADING);
     for (;;)
     {
-        struct aa_src source = { .generation = aa_offer_generation };
+        struct aa_src source = {.generation = aa_offer_generation};
         bool temporary = false;
         if (embedded)
         {
@@ -1680,7 +1759,8 @@ static bool aa_book_visit(const struct book_entry *e, void *data)
             source.resolved.kind = AA_SOURCE_EMBEDDED;
             source.resolved.pos = e->cover_at;
             source.resolved.size = e->cover_csize;
-            strlcpy(source.resolved.path, e->path, sizeof(source.resolved.path));
+            strlcpy(source.resolved.path, e->path,
+                    sizeof(source.resolved.path));
             if (e->cover_method != 0)
             {
                 if (!zip_member_to_file(e->path, e->cover_at, e->cover_csize,
@@ -1695,14 +1775,19 @@ static bool aa_book_visit(const struct book_entry *e, void *data)
                         sizeof(source.resolved.path));
             }
             if (!albumart_source_revision(&source.resolved))
-            { if (temporary) remove(AA_COVER_TMP); continue; }
+            {
+                if (temporary)
+                    remove(AA_COVER_TMP);
+                continue;
+            }
             albumart_normalize(e->path, source.resolved.identity,
                                sizeof(source.resolved.identity));
             source.resolved.revision ^= (uint64_t)e->cover_at << 32;
             source.resolved.revision ^= e->cover_csize;
         }
-        else if (!albumart_next_source(&aa_id3, AA_ROLE_BOOK, &cursor,
-                                        &source.resolved))
+        else if (!albumart_next_source(&aa_id3, AA_ROLE_BOOK,
+                                       ART_SOURCE_EMBEDDED_FIRST, &cursor,
+                                       &source.resolved))
             break;
         char key[ART_CACHE_IDENTITY_MAX];
         albumart_source_key(&source.resolved, key, sizeof(key));
@@ -1713,19 +1798,59 @@ static bool aa_book_visit(const struct book_entry *e, void *data)
         ready = aa_active_id && aa_fill(&source, aa_active_id, c->workbuf,
                                         c->worksz, c->aborted);
         aa_book = false;
-        if (temporary) remove(AA_COVER_TMP);
+        if (temporary)
+            remove(AA_COVER_TMP);
         if (ready)
         {
             slot->stamp = (unsigned)source.resolved.revision;
             ready = aa_reference(owner, aa_active_id);
             break;
         }
-        if (*c->aborted || aa_io_failed) break;
+        if (*c->aborted || aa_io_failed)
+            break;
     }
-    if (!ready && !*c->aborted && !aa_io_failed) aa_remove_thumbs(owner);
-    aa_record_state(owner, ready ? ART_READY :
-                    aa_io_failed ? ART_FAILED : ART_MISSING);
+    if (!ready && !*c->aborted && !aa_io_failed)
+        aa_remove_thumbs(owner);
+    aa_record_state(owner, ready          ? ART_READY
+                           : aa_io_failed ? ART_FAILED
+                                          : ART_MISSING);
     return !*c->aborted;
+}
+
+/* One visit per indexed book during a full pass. */
+static bool aa_book_visit(const struct book_entry *e, void *data)
+{
+    struct aa_books_ctx *c = data;
+    unsigned owner = art_cache_dir_hash(e->path);
+    struct aa_stamp *slot;
+    if (aa_check_abort() || tagcache_is_busy())
+    {
+        *c->aborted = true;
+        return false;
+    }
+    aa_book_folders(e->path, c);
+    if (*c->aborted || !(slot = aa_visit(owner)))
+        return !*c->aborted;
+    return aa_cache_book(e, c, owner, slot);
+}
+
+struct aa_book_repair
+{
+    const struct aa_request *request;
+    struct aa_books_ctx context;
+};
+
+static bool aa_repair_book(const struct book_entry *e, void *data)
+{
+    struct aa_book_repair *repair = data;
+    char key[MAX_PATH], wanted[MAX_PATH];
+    if (!albumart_normalize(e->path, key, sizeof(key)) ||
+        !albumart_normalize(repair->request->path, wanted, sizeof(wanted)) ||
+        strcmp(key, wanted))
+        return true;
+    struct aa_stamp slot = {0};
+    aa_cache_book(e, &repair->context, repair->request->owner, &slot);
+    return false;
 }
 
 static enum bg_result aa_run_pass(void)
@@ -1836,10 +1961,8 @@ static enum bg_result aa_run_pass(void)
             break;
         }
 
-        /* The track's own folder (the album), keyed by its path hash. Skip the
-         * per-folder work entirely once this folder has been visited this pass
-         * (aa_visit records it), so later tracks of the same album are
-         * cheap. */
+        /* Each track owns its reference, even when tags or directories match.
+         * Album counts include only the database's representative tracks. */
         aa_dirname(tcs.result, aa_dir, sizeof(aa_dir));
         dh = art_cache_dir_hash(tcs.result);
         if ((slot = aa_visit(dh)))
@@ -1848,7 +1971,7 @@ static enum bg_result aa_run_pass(void)
             bool representative = tagcache_album_get(tagcache_album_of(tcs.idx_id),
                                                        &album) && album.first == tcs.idx_id;
             if (representative) aa_counts.albums++;
-            if (aa_cache_dir(tcs.result, dh, slot, false, workbuf, worksz,
+            if (aa_cache_dir(tcs.result, dh, slot, false, -1, workbuf, worksz,
                              &aborted))
             {
                 if (representative) aa_counts.album_art++;
@@ -1862,21 +1985,17 @@ static enum bg_result aa_run_pass(void)
         if (aborted)
             break;
 
-        /* The parent folder (the artist), cached from <artist>/folder.jpg etc.
-         * for <artist>/<album>/<track> layouts, and from the folder above it
-         * for <artist>/<album_type>/<album>/<track>. Deduped independently of
-         * the album so an artist whose first album has no cover still gets
-         * resolved. Skipped when there is no distinct parent (flat/rooted layouts). */
+        /* Artist art belongs to the directory above the album, for the
+         * <artist>/<album>/<track> layout, deduplicated across tracks. */
         aa_dirname(aa_dir, aa_artist_dir, sizeof(aa_artist_dir));
         if (aa_artist_dir[0] && strcmp(aa_artist_dir, aa_dir) != 0)
         {
             ah = art_cache_dir_hash(aa_artist_dir);
             if ((slot = aa_visit(ah)))
             {
-                snprintf(aa_probe, sizeof(aa_probe), "%s/_", aa_artist_dir);
                 aa_counts.artists++;
-                if (aa_cache_dir(tcs.result, ah, slot, true, workbuf, worksz,
-                                 &aborted))
+                if (aa_cache_dir(aa_artist_dir, ah, slot, true, -1, workbuf,
+                                 worksz, &aborted))
                     aa_counts.artist_art++;
                 else if (!aborted)
                 {
@@ -1946,56 +2065,96 @@ static bool aa_disk_asleep(void)
 #endif
 }
 
-/* Tick: an offer held for a sleeping disk goes on the queue once something
- * else has spun it up. Making the thumbnails reads the art out of the track,
- * so handling it sooner would wake the disk for nothing but this. */
-/* Cache the offered track's embedded art into any of its folder's thumbnails
- * that don't exist yet. Fill-only: never overwrites art already cached (folder
- * images are the preferred on-disk source) -- this just gives a coverless folder
- * the art playback already had parsed for the WPS, at no decode cost to it.
- * Stamped EMBEDDED, so a pass that later finds folder art replaces it. */
+/* Poll storage state without spinning it up for artwork. */
+static int aa_offer_poll(struct timeout *tmo)
+{
+    (void)tmo;
+    if (!aa_offer.path[0])
+        return 0;
+    if (aa_disk_asleep())
+        return HZ;
+    if (!aa_offer_posted)
+    {
+        aa_offer_posted = true;
+        bg_task_post(&art_cache_task, AA_EVENT_OFFER);
+    }
+    return 0;
+}
+
+/* Resolve a typed owner request. A newer offer supersedes an older one.
+ * Scratch shortages get at most three retries, without shrinking audio. */
 static void aa_handle_offer(void)
 {
     aa_offer_posted = false;
-    if (!aa_offer.path[0] || aa_disk_asleep()) return;
-    char path[MAX_PATH];
-    strlcpy(path, aa_offer.path, sizeof(path));
+    if (!aa_offer.path[0])
+        return;
+    if (aa_disk_asleep())
+    {
+        timeout_register(&aa_offer_tmo, aa_offer_poll, HZ, 0);
+        return;
+    }
+    aa_io_failed = false;
+    struct aa_request request = aa_offer;
+    if (!request.owner)
+    {
+        int preference =
+            request.policy == ART_SOURCE_FILES_FIRST      ? AA_PREFER_IMAGE_FILE
+            : request.policy == ART_SOURCE_EMBEDDED_FIRST ? AA_PREFER_EMBEDDED
+                                                          : AA_PREFER_CACHE;
+        request.owner = art_cache_preference_hash(request.path, preference);
+        if (!request.owner)
+            return;
+    }
     size_t size = aa_work_bytes();
-    if (core_allocatable() < size) return;
-    int handle = core_alloc(size);
-    if (handle <= 0) return;
+    int handle = core_allocatable() >= size ? core_alloc(size) : 0;
+    if (handle <= 0)
+    {
+        if (aa_offer_retries++ < 3)
+            timeout_register(&aa_offer_tmo, aa_offer_poll, 5 * HZ, 0);
+        return;
+    }
     void *work = core_get_data_pinned(handle);
     bool aborted = false;
     struct aa_stamp slot = {0};
     aa_ensure_dirs();
-    aa_cache_dir(path, art_cache_dir_hash(path), &slot, false, work, size,
-                 &aborted);
+    if (request.role == AA_ROLE_BOOK)
+    {
+        static struct book_index_text text;
+        struct aa_book_repair repair = {&request, {work, size, &aborted}};
+        book_index_each(aa_repair_book, &repair, &text);
+    }
+    else
+        aa_cache_dir(request.path, request.owner, &slot,
+                     request.role == AA_ROLE_ARTIST, request.policy, work, size,
+                     &aborted);
     core_unpin(handle);
     core_free(handle);
 }
 
 static void aa_request_owner(unsigned owner)
 {
-    static struct { unsigned key, generation; long until; } misses[32];
+    static struct
+    {
+        unsigned key, generation;
+        long until;
+    } misses[32];
     static unsigned next;
-    if (!owner) return;
+    if (!owner)
+        return;
     for (unsigned i = 0; i < ARRAYLEN(misses); i++)
         if (misses[i].key == owner && misses[i].generation == aa_generation &&
-            TIME_BEFORE(current_tick, misses[i].until)) return;
+            TIME_BEFORE(current_tick, misses[i].until))
+            return;
     misses[next].key = owner;
     misses[next].generation = aa_generation;
     misses[next].until = current_tick + 5 * HZ;
     next = (next + 1) % ARRAYLEN(misses);
-    char path[MAX_PATH], key[ART_CACHE_IDENTITY_MAX];
-    snprintf(path, sizeof(path), THUMBCACHE_DIR "/keys/%08x.key", owner);
-    int fd = open(path, O_RDONLY);
-    if (fd < 0) return;
-    ssize_t n = read(fd, key, sizeof(key));
-    close(fd);
-    if (n < 2 || key[n - 1] || strchr(key, '@') || strlen(key) >= MAX_PATH)
+    struct aa_request request;
+    if (!aa_read_request(owner, &request))
         return;
     aa_record_state(owner, ART_LOADING);
-    strlcpy(aa_offer.path, key, sizeof(aa_offer.path));
+    aa_offer = request;
+    aa_offer_retries = 0;
     if (!aa_offer_posted)
     {
         aa_offer_posted = true;
@@ -2003,25 +2162,31 @@ static void aa_request_owner(unsigned owner)
     }
 }
 
-/* Playback thread: a track became current. If it carries embedded art, hand
- * its location to the aa thread (reusing the metadata playback already parsed) --
- * no decoding here. */
+/* A current track requests the cache policy or its explicit WPS policy. */
 static void aa_track_change_cb(unsigned short id, void *event_data)
 {
-    (void)id; (void)event_data;
+    (void)id;
+    (void)event_data;
     struct mp3entry *id3 = audio_current_track();
-    if (!id3)
+    if (!id3 || !id3->path[0])
         return;
-
+    if (global_settings.album_art == AA_OFF)
+        return;
     aa_offer_generation++;
+    memset(&aa_offer, 0, sizeof(aa_offer));
     strlcpy(aa_offer.path, id3->path, sizeof(aa_offer.path));
-    aa_offer.pos = id3->albumart.pos;
-    aa_offer.size = id3->albumart.size;
-    aa_offer.flags = id3->albumart.type;
-    if (aa_offer_posted)
-        return;
-    aa_offer_posted = true;
-    bg_task_post(&art_cache_task, AA_EVENT_OFFER);
+    aa_offer.role = AA_ROLE_ALBUM;
+    aa_offer.policy = global_settings.album_art == AA_PREFER_IMAGE_FILE
+                          ? ART_SOURCE_FILES_FIRST
+                      : global_settings.album_art == AA_PREFER_EMBEDDED
+                          ? ART_SOURCE_EMBEDDED_FIRST
+                          : -1;
+    aa_offer_retries = 0;
+    if (!aa_offer_posted)
+    {
+        aa_offer_posted = true;
+        bg_task_post(&art_cache_task, AA_EVENT_OFFER);
+    }
 }
 
 /* A pass trusts each folder's stamp for what its tags hold, so a change of
@@ -2032,6 +2197,7 @@ static int aa_applied_source = -1;
 void art_cache_album_source_callback(int source)
 {
     aa_applied_source = source;
+    aa_offer_generation++;
     bg_task_update(&art_cache_task);
 }
 
@@ -2174,8 +2340,7 @@ void art_cache_init(void)
 
     bg_task_init(&art_cache_task);
 
-    /* Opportunistically cache the embedded art of tracks as they play, for
-     * folders that have no on-disk cover (fill-only -- see aa_handle_offer). */
+    /* Track changes resolve the selected source policy on the worker. */
     add_event(PLAYBACK_EVENT_TRACK_CHANGE, aa_track_change_cb);
 }
 

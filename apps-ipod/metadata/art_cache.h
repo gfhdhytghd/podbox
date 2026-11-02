@@ -19,9 +19,9 @@ struct bitmap;
  * (fb_data) pixels in the order the header's 'layout' names. Exposed so
  * consumers (e.g. Cover Flow) can read a cached thumbnail directly. */
 #define ART_CACHE_MAGIC          0x5441u  /* 'AT' */
-/* Version 9 adds verified source identity, request metadata and a checksum.
- * It lives in art/v9; version 8 files are never interpreted as this format. */
-#define ART_CACHE_FORMAT_VERSION 9
+/* Format 10 adds typed repair requests and policy-aware owner references.
+ * It lives in art/v10; older cache formats are regenerated, not interpreted. */
+#define ART_CACHE_FORMAT_VERSION 10
 #define ART_CACHE_IDENTITY_MAX 512
 
 struct art_cache_header
@@ -99,11 +99,11 @@ unsigned int art_cache_generation(void);
  * scratch. bg_task_update() runs a pass without purging, so artwork added
  * since the last one is picked up -- needed because the thread otherwise idles
  * until the database's track count changes, and adding a folder.jpg does not
- * change it. That pass is cheap, since a folder whose image is unchanged is
- * skipped on its directory entry without reading the image. */
+ * change it. Each owner is resolved again and its source bytes are hashed;
+ * valid derivatives avoid decoding. */
 extern struct bg_task art_cache_task;
 
-/* Values retained for reading configurations written before format 9. */
+/* Candidate order for album-cache generation. Artist art uses files only. */
 enum art_album_source
 {
     ART_SOURCE_FILES,           /* image files only */
@@ -112,27 +112,32 @@ enum art_album_source
     ART_SOURCE_EMBEDDED,        /* embedded art only */
 };
 
-/* The setting's callback: a change re-resolves every folder. */
+/* The setting's callback: a change re-resolves every owner. */
 void art_cache_album_source_callback(int source);
 
 /* From settings_apply(): the same for a change a loaded .cfg made, which
  * runs no setting's callback. */
 void art_cache_settings_applied(void);
 
-/* Resolve the cache-file path for a given album folder and size index.
+/* Resolve an owner's cache-file path for a given size index.
  * Returns true and fills 'out' if a thumbnail is available, false otherwise.
  * 'dir' is a track path, or the artist directory for the artist role.
  *
  * When the folder has no real art, the shared placeholder thumbnail is returned
  * instead (if generated), so callers get a valid thumbnail without managing a
- * "missing art" case. 'is_fallback' (may be NULL) is set true in that case, so a
- * caller that wants to prefer another source (e.g. embedded ID3 art) still can. */
+ * "missing art" case. 'is_fallback' (may be NULL) is set true in that case, so
+ * a caller that wants to prefer another source (e.g. embedded ID3 art) still
+ * can. */
 bool art_cache_lookup(const char *dir, int size_index,
                            char *out, int out_len, bool *is_fallback);
 
 /* Stable registry key, with complete normalized-key collision checking.
  * Returns zero for an invalid identity or a registry write failure. */
 unsigned int art_cache_dir_hash(const char *dir);
+/* WPS preferences use separate owner references, sharing derivative pixels. */
+unsigned art_cache_preference_hash(const char *path, int preference);
+bool art_cache_lookup_preference(const char *path, int preference, int size,
+                                 char *out, int out_len, bool *fallback);
 bool art_cache_lookup_hash(unsigned int dir_hash, int size_index,
                            char *out, int out_len, bool *is_fallback);
 
