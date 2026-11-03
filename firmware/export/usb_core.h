@@ -74,6 +74,11 @@ bool usb_core_bus_resetting(void);
 #ifdef HAVE_USB_CHARGING_ENABLE
 /* Controller suspend/resume notification; safe from IRQ context. */
 void usb_core_bus_suspend(bool suspended);
+/* Saved USB charging policy (off/on/force). */
+int usb_charging_get_mode(void);
+/* Active host grant only; 0 if unconfigured, suspended, reset or unplugged.
+ * Unlike maxcurrent, this excludes force/no-host and DAC allowances. */
+int usb_charging_current_grant(void);
 #endif
 void usb_core_enable_driver(int driver,bool enabled);
 bool usb_core_driver_enabled(int driver);

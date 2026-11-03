@@ -526,6 +526,10 @@ void usb_core_init(void)
     usb_no_host = false;
     usb_suspended = false;
     usb_charging_current_requested = 100;
+    usb_charging_current_granted = 100;
+    /* Settings at boot and extraction can leave the input suspended (0 mA).
+     * Restore the safe attached budget even if no host ever configures us. */
+    usb_charging_maxcurrent_change(usb_charging_maxcurrent());
     timeout_register(&usb_no_host_timeout, usb_no_host_callback, HZ*10, 0);
 #endif
     logf("usb_core_init() finished");
@@ -1751,6 +1755,19 @@ void usb_charging_enable(int state)
 {
     usb_charging_mode = state;
     usb_charging_maxcurrent_change(usb_charging_maxcurrent());
+}
+
+int usb_charging_get_mode(void)
+{
+    return usb_charging_mode;
+}
+
+int usb_charging_current_grant(void)
+{
+    if (usb_detect() == USB_EXTRACTED || !initialized || usb_suspended ||
+        bus_reset_pending || usb_state != CONFIGURED)
+        return 0;
+    return usb_charging_current_granted;
 }
 
 int usb_charging_maxcurrent(void)

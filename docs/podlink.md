@@ -132,11 +132,18 @@ cannot establish physical USB, iPod startup, or real-device throughput.
 PodLink and normal storage use the same saved **Charge During USB Connection**
 setting (**Settings > Battery & Power**). With `on` or `force`, both request 500 mA
 (`bMaxPower` byte 250, in 2 mA units). With `off`, both request 100 mA
-(`bMaxPower` byte 50) and do not enable battery charging from an enumerated
-computer. Select the setting before reconnecting: a host's existing 100 mA
+(`bMaxPower` byte 50) and do not enable USB battery charging, including the
+unconfigured wall-charger probe. The default is `on`; an absent `usb charging`
+line in config.cfg uses that default. Select the setting before reconnecting:
+a host's existing 100 mA
 grant is not raised merely because the setting changed.
 
-Before configuration, the device limits USB input to 100 mA. A configured
+Before configuration, the device restores USB input to 100 mA on every attach,
+including after boot settings or unplug set SUSP. With `on`, a host that never
+configures us stays at that safe limit; the target's existing no-host charger
+probe may enable battery charging within the same 100 mA total budget. `force`
+retains the explicit 500 mA no-host override after ten seconds. This override
+is not a negotiated host grant. A configured
 500 mA source enables the iPod6g charger and reports a charging source to the
 battery status bar, without waiting for a storage-mode handover. Suspend
 disables USB input and battery charging; resume restores the existing grant.
@@ -163,8 +170,14 @@ device directory under `/sys/bus/usb/devices` by its `idVendor=05ac` and
 and `1`). Record the directory and serial. Do not select a tty by number.
 
 Confirm the battery animation while the link is active. For a separate
-diagnostic run, enable the Debug menu and open System > Debug > Battery;
-record `USB current limit` and the hardware charging state. Opening that
+diagnostic run, select Settings > System > Show Debug Menu = Yes, then open
+System > Debug > Battery. Scroll down once from the voltage graph to the status
+page. Record `USB current limit`, `Input: USB / dock`, `Host grant`,
+`Charge enabled` (C1/C2 gates), `USB setting`, `SUSP`, `HPWR`, battery mV,
+and `Pwr status` (the hardware !CHRG pin). `Host grant` is zero before host
+configuration or during suspend, reset and unplug; force/DAC allowances are
+shown only in `USB current limit`. These are policy and GPIO observations,
+not a battery current meter. Opening that
 screen requires leaving PodLink, so do not label it a simultaneous observation
 of PodLink charging. A full battery may correctly stop charging.
 Repeat after the screen/backlight has been off for at least 15 seconds.

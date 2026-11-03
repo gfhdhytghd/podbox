@@ -8,6 +8,7 @@
 
 long current_tick;
 static bool connected, leased, host_probe, exclusive, host_present;
+static bool backlight_on = true;
 static int applied_ma, update_pending, profile;
 static int speed = 1;
 uint32_t test_gpio, test_pcon11, test_pcon12, test_pdat;
@@ -46,6 +47,11 @@ struct usb_class_driver usb_cdrv_serial = {
     .set_first_interface = first_interface,
     .get_config_descriptor = interface_descriptor,
 };
+struct usb_class_driver usb_cdrv_charging_only = {
+    .config = 1,
+    .set_first_interface = first_interface,
+    .get_config_descriptor = interface_descriptor,
+};
 
 bool usb_drive_only(void)
 {
@@ -74,7 +80,7 @@ bool usb_host_is_present(void)
 bool is_backlight_on(bool ignore)
 {
     (void)ignore;
-    return true;
+    return backlight_on;
 }
 int pmu_firewire_present(void)
 {
@@ -231,15 +237,31 @@ static void configure(int config)
     usb_core_control_request_handler(&req, usb_control_data,
                                      sizeof(usb_control_data));
 }
+static void attach(int mode)
+{
+    /* Settings apply before the cable is inserted, including at cold boot. */
+    connected = false;
+    host_present = false;
+    leased = profile == 1;
+    usb_charging_enable(mode);
+    assert(usb_charging_get_mode() == mode);
+    assert(usb_charging_current_grant() == 0);
+    connected = true;
+    usb_core_init();
+    /* Attach must undo the unplug/boot SUSP command before any host request.
+     * Do not drain an artificial charger event: insertion queues none. */
+    assert(usb_committed_ma == 100);
+    assert(previous_previous_gpio == 0xb070e);
+    assert(previous_gpio == 0xb060e);
+    assert(test_gpio == 0xc010f);
+    usb_core_enable_driver(USB_DRIVER_SERIAL, leased);
+    usb_core_enable_driver(USB_DRIVER_MASS_STORAGE, profile == 0);
+    usb_core_enable_driver(USB_DRIVER_CHARGING_ONLY, profile == 2);
+    assert(usb_charging_current_grant() == 0);
+}
 static void insert(int mode)
 {
-    connected = true;
-    host_present = false;
-    leased = profile != 0;
-    usb_charging_enable(mode);
-    usb_core_init();
-    usb_core_enable_driver(USB_DRIVER_SERIAL, leased);
-    usb_core_enable_driver(USB_DRIVER_MASS_STORAGE, !leased);
+    attach(mode);
     usb_core_notify_set_address(1);
     usb_charger_update();
     expect_current(100);
@@ -253,7 +275,7 @@ static void unplug(void)
 }
 int main(void)
 {
-    for (profile = 0; profile < 2; ++profile)
+    for (profile = 0; profile < 3; ++profile)
         for (speed = 0; speed < 2; ++speed)
             for (int mode = USB_CHARGING_DISABLE; mode <= USB_CHARGING_FORCE;
                  ++mode)
@@ -263,20 +285,25 @@ int main(void)
                 descriptor(USB_DT_CONFIG, grant / 2);
                 descriptor(USB_DT_OTHER_SPEED_CONFIG, grant / 2);
                 configure(1);
-                assert(exclusive == !leased);
+                assert(exclusive == (profile == 0));
+                assert(usb_charging_current_grant() == grant);
                 expect_current(grant);
                 usb_core_bus_suspend(true);
+                assert(usb_charging_current_grant() == 0);
                 expect_current(0);
                 /* No-host timeout and force must never defeat suspend. */
                 usb_no_host_callback(&usb_no_host_timeout);
                 expect_current(0);
                 usb_core_bus_suspend(false);
+                assert(usb_charging_current_grant() == grant);
                 expect_current(grant);
                 configure(0);
+                assert(usb_charging_current_grant() == 0);
                 expect_current(100);
                 configure(1);
                 expect_current(grant);
                 usb_core_bus_reset();
+                assert(usb_charging_current_grant() == 0);
                 expect_current(100);
                 usb_core_notify_set_address(1);
                 /* Hosts can reuse the descriptor across a bus reset. */
@@ -313,6 +340,64 @@ int main(void)
     usb_charging_enable(USB_CHARGING_DISABLE);
     expect_current(100);
     unplug();
+    /* A real no-host attachment: no SET_ADDRESS and no fake charger update.
+     * Off must never start the wall probe, even with a stale detection. */
+    for (int light = 0; light < 2; ++light)
+    {
+        backlight_on = light != 0;
+        attach(USB_CHARGING_DISABLE);
+        usb_charger_detected = true;
+        for (int poll = 0; poll < 24; ++poll)
+        {
+            assert(power_input_status() == POWER_INPUT_USB);
+            assert(test_gpio == 0xc010f);
+            current_tick += HZ/2;
+        }
+        usb_no_host_callback(&usb_no_host_timeout);
+        expect_current(100);
+        unplug();
+
+        /* On retains the safe 100 mA input without enumeration. The existing
+         * wall probe may permit battery charging inside that total budget. */
+        attach(USB_CHARGING_ENABLE);
+        assert(power_input_status() == POWER_INPUT_USB);
+        assert(test_gpio == 0xc010e);
+        for (int poll = 0; poll < 8; ++poll)
+        {
+            current_tick += HZ/2;
+            power_input_status();
+        }
+        assert(usb_charger_detected);
+        assert(power_input_status() & POWER_INPUT_USB_CHARGER);
+        assert(usb_charging_maxcurrent() == 100);
+        assert(usb_charging_current_grant() == 0);
+        usb_no_host_callback(&usb_no_host_timeout);
+        drain_charger();
+        assert(usb_committed_ma == 100 && test_gpio == 0xc010e);
+        current_tick += 20*HZ;
+        assert(power_input_status() & POWER_INPUT_USB_CHARGER);
+        usb_charging_enable(USB_CHARGING_DISABLE);
+        expect_current(100);
+        unplug();
+    }
+    backlight_on = true;
+    /* A host can read a descriptor and never configure us. That request
+     * cancels the no-host timer, so it cannot rescue an input left in SUSP. */
+    attach(USB_CHARGING_ENABLE);
+    struct usb_ctrlrequest req = {
+        .bRequest = USB_REQ_GET_DESCRIPTOR,
+        .bRequestType = USB_DIR_IN,
+        .wValue = USB_DT_DEVICE << 8,
+        .wLength = sizeof(struct usb_device_descriptor),
+    };
+    usb_core_control_request_handler(&req, usb_control_data,
+                                    sizeof(usb_control_data));
+    assert(!usb_no_host_timeout.active);
+    assert(usb_committed_ma == 100);
+    assert(usb_charging_current_grant() == 0);
+    host_present = true;
+    expect_current(100);
+    unplug();
     /* Force/no-host and the DAC probe retain their existing power policy,
      * but neither can override unplug, off or suspend. */
     insert(USB_CHARGING_FORCE);
@@ -340,6 +425,8 @@ int main(void)
     usb_core_bus_suspend(true);
     expect_current(0);
     unplug();
-    puts("USB charging: storage/PodLink, both speeds, off/on/force PASS");
+    puts("USB charging: storage/PodLink/charge-only, both speeds, "
+         "off/on/force, cold attach/replug/no-host, "
+         "input restoration and policy PASS");
     return 0;
 }

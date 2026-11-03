@@ -110,9 +110,8 @@ bool ide_powered()
 
 /* The current the USB side has committed to: 500 from a computer that
  * configured the player, from USB Charging = Force with no computer, or from
- * a charger feeding a USB DAC. Such a source keeps C1 low while
- * power_input_status() is not probing; it is still probed, and reported as a
- * charger only once proven. */
+ * a charger feeding a USB DAC. A 500 mA commitment enables C1 and reports
+ * a charging source immediately, independently of the wall-charger probe. */
 static int usb_committed_ma;
 
 /* A charger proven by power_input_status() while it probes. It keeps
@@ -128,10 +127,12 @@ void usb_charging_maxcurrent_change(int maxcurrent)
     bool fast_charging = (maxcurrent >= 500);
 
     usb_committed_ma = maxcurrent;
+    if (usb_charging_get_mode() == USB_CHARGING_DISABLE
 #ifndef BOOTLOADER
-    if (usb_host_is_present())
-        usb_charger_detected = false;
+        || usb_host_is_present()
 #endif
+       )
+        usb_charger_detected = false;
 
     /* This GPIO is connected to the LTC4066's SUSP pin */
     /* Setting it high prevents any power being drawn over USB */
@@ -190,7 +191,8 @@ unsigned int power_input_status(void)
          * Never let the wall-charger probe override a host's current limit
          * or USB suspend. This also respects Charge During USB = off. */
         int maxcurrent = usb_charging_maxcurrent();
-        if (maxcurrent >= 500 || maxcurrent < 100
+        if (maxcurrent >= 500 || maxcurrent < 100 ||
+            usb_charging_get_mode() == USB_CHARGING_DISABLE
 #ifndef BOOTLOADER
             || usb_host_is_present()
 #endif
