@@ -166,6 +166,9 @@ R <req> <ok|err> <text>
 
 `text` (120 bytes) is what the player shows: `Focused <label>`,
 `Answered`, `Updated` (a multi-select box changed), or why it failed.
+For a local focus with no moved clients, the computer sends
+`R <req> err No local herdr window`. The existing screen shows the reason
+as a focus failure; no new message type is needed.
 
 ### `T` — tick
 
@@ -185,6 +188,17 @@ is `0` while herdr cannot be reached.
 | `fw <req> <ws>` | Show this workspace, at its first tab, on the computer |
 | `fp <req> <pane>` | Show this pane on the computer |
 | `a <req> <qid> <number>` | Choose option `number` of question `qid` |
+
+For `fw` and `fp`, the computer probes herdr's `ping` capability
+`client_targeted_focus` on connection, after a herdr reconnect, and before
+focus. With the capability set to `true`, `fw` calls `client.focus` with
+`workspace_id`, the first `tab_id` when present, and `clients: "local"`;
+`fp` uses `pane_id` and `clients: "local"`. Remote clients keep their
+workspace/tab views, but pane focus remains shared with clients already
+viewing that tab. `moved: []` is a focus failure (see `R`). Without the
+capability, `fw` uses `workspace.focus` then `tab.focus` when present, and
+`fp` uses `pane.focus`; these legacy calls move all clients. Probe and focus
+errors return `R <req> err` without retrying through legacy focus calls.
 
 `a` with `number` `0` presses a multi-select's **Submit**. An answer to a
 `qid` that is no longer on screen fails with `R <req> err`, and no key

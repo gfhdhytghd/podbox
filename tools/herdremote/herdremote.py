@@ -5,7 +5,7 @@ Finds the iPod's PodLink tty, keeps a PodLink session open whenever the
 player is attached with the Agents screen running, and keeps the screen's
 picture of herdr current: workspaces, the agents in each workspace's first
 tab, and any choice question an agent is asking. Commands from the player
-focus herdr's local client or answer the question.
+focus local herdr clients (all clients on older servers) or answer the question.
 
     python3 tools/herdremote/herdremote.py            # run until stopped
     python3 tools/herdremote/herdremote.py --once     # print the model once
@@ -133,6 +133,8 @@ class Daemon:
     # --- herdr ---------------------------------------------------------
     def refresh(self):
         try:
+            if not self.herdr_ok:
+                self.herdr.detect_capabilities()
             snapshot = self.herdr.snapshot()
             self.model = self.order.apply(
                 hrherdr.build_model(snapshot, self.herdr.read))

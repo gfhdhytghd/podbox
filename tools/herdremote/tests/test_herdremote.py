@@ -232,6 +232,10 @@ class CrossLanguage(unittest.TestCase):
                 for m in messages:
                     f.write(struct.pack("<H", len(m)) + m)
             out = subprocess.check_output([exe, path]).decode("utf-8")
+            failure = hrproto.result("6", False, "No local herdr window")
+            with open(path, "wb") as f:
+                f.write(struct.pack("<H", len(failure)) + failure)
+            failure_out = subprocess.check_output([exe, path]).decode("utf-8")
         lines = out.splitlines()
         self.assertEqual(lines[0], "hello=1 herdr_ok=1 age=3")
         # The daemon cuts to its byte budgets on a character boundary, and
@@ -242,6 +246,8 @@ class CrossLanguage(unittest.TestCase):
         self.assertIn("? Do you want to proceed?", lines)
         self.assertIn("o 4 No", lines)
         self.assertEqual(lines[-1], "R 5 1 Answered")
+        self.assertEqual(failure_out.splitlines()[-1],
+                         "R 6 0 No local herdr window")
 
 
 # --- end to end ---------------------------------------------------------
@@ -440,6 +446,14 @@ class FakeHerdr(threading.Thread):
         self.server.listen(8)
         self.pane_text = sample("claude-ask.txt")
         self.calls = []
+        self.pong = dict(type="pong", version="test", protocol=1)
+        self.moved = [1]
+        self.errors = {}
+
+    def stop(self):
+        self.server.shutdown(socket.SHUT_RDWR)
+        self.server.close()
+        self.join(5)
 
     def snapshot(self):
         return dict(
@@ -475,11 +489,19 @@ class FakeHerdr(threading.Thread):
                 request = json.loads(data)
                 method, params = request["method"], request["params"]
                 self.calls.append((method, params))
+                if method in self.errors:
+                    conn.sendall(json.dumps(dict(id=request["id"], error=dict(
+                        message=self.errors[method]))).encode() + b"\n")
+                    continue
                 if method == "events.subscribe":
                     conn.sendall(b'{"id":"watch","result":{}}\n')
                     time.sleep(0.2)
                     continue
-                if method == "session.snapshot":
+                if method == "ping":
+                    result = self.pong
+                elif method == "client.focus":
+                    result = dict(type="client_focus", moved=self.moved)
+                elif method == "session.snapshot":
                     result = dict(snapshot=self.snapshot())
                 elif method == "pane.read":
                     text = self.pane_text if params["pane_id"] == "w1:p1" \
@@ -493,6 +515,142 @@ class FakeHerdr(threading.Thread):
                     result = {}
                 conn.sendall(json.dumps(dict(id=request["id"],
                                              result=result)).encode() + b"\n")
+
+
+class Focus(unittest.TestCase):
+    """Focus API selection and player results, using only a private socket."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.server = FakeHerdr(os.path.join(self.tmp.name, "herdr.sock"))
+        self.server.start()
+        self.daemon = herdremote.Daemon(types.SimpleNamespace(
+            socket=self.server.path, state=None))
+        self.messages = []
+        self.daemon.send = self.messages.append
+
+    def tearDown(self):
+        self.server.stop()
+        self.tmp.cleanup()
+
+    def command(self, payload):
+        self.server.calls.clear()
+        self.messages.clear()
+        self.daemon.command(payload)
+        return hrproto.decode(self.messages[-1])[0]
+
+    def test_capability_probed_on_connection(self):
+        self.server.pong["capabilities"] = dict(client_targeted_focus=True)
+        self.daemon.refresh()
+        self.assertTrue(self.daemon.herdr_ok)
+        self.assertTrue(self.daemon.herdr.client_targeted_focus)
+        self.assertEqual(self.server.calls[:2],
+                         [("ping", {}), ("session.snapshot", {})])
+        self.server.calls.clear()
+        self.daemon.refresh()
+        self.assertNotIn(("ping", {}), self.server.calls)
+
+    def test_local_workspace_and_pane(self):
+        self.server.pong["capabilities"] = dict(client_targeted_focus=True)
+        self.daemon.refresh()
+        self.assertEqual(self.command(b"fw\t1\tw2"),
+                         ["R", "1", "ok", "Focused other"])
+        self.assertEqual(self.server.calls, [("ping", {}), ("client.focus", {
+            "workspace_id": "w2", "tab_id": "w2:t3", "clients": "local"})])
+        self.assertEqual(self.command(b"fp\t2\tw1:p1"),
+                         ["R", "2", "ok", "Focused pane"])
+        self.assertEqual(self.server.calls, [("ping", {}), ("client.focus", {
+            "pane_id": "w1:p1", "clients": "local"})])
+
+    def test_local_workspace_without_tab(self):
+        self.server.pong["capabilities"] = dict(client_targeted_focus=True)
+        self.daemon.herdr.focus_workspace("w1")
+        self.assertEqual(self.server.calls, [("ping", {}), ("client.focus", {
+            "workspace_id": "w1", "clients": "local"})])
+
+    def test_legacy_without_capability(self):
+        for fields in ({}, {"capabilities": None}, {"capabilities": {}},
+                       {"capabilities": {"client_targeted_focus": False}}):
+            with self.subTest(pong=fields):
+                self.server.pong = dict(type="pong", **fields)
+                self.daemon.refresh()
+                self.assertEqual(self.command(b"fw\t1\tw2"),
+                                 ["R", "1", "ok", "Focused other"])
+                self.assertEqual(self.server.calls, [
+                    ("ping", {}), ("workspace.focus", {"workspace_id": "w2"}),
+                    ("tab.focus", {"tab_id": "w2:t3"})])
+                self.assertEqual(self.command(b"fp\t2\tw1:p1"),
+                                 ["R", "2", "ok", "Focused pane"])
+                self.assertEqual(self.server.calls, [
+                    ("ping", {}), ("pane.focus", {"pane_id": "w1:p1"})])
+
+    def test_no_local_window_reports_failure(self):
+        self.server.pong["capabilities"] = dict(client_targeted_focus=True)
+        self.server.moved = []
+        self.daemon.refresh()
+        for payload in (b"fw\t7\tw2", b"fp\t7\tw1:p1"):
+            with self.subTest(payload=payload):
+                self.assertEqual(self.command(payload),
+                                 ["R", "7", "err", "No local herdr window"])
+                self.assertEqual([m for m, _ in self.server.calls],
+                                 ["ping", "client.focus"])
+
+    def test_focus_error_does_not_fall_back(self):
+        self.server.pong["capabilities"] = dict(client_targeted_focus=True)
+        self.server.errors["client.focus"] = "unknown method"
+        self.daemon.refresh()
+        self.assertEqual(self.command(b"fp\t7\tw1:p1"),
+                         ["R", "7", "err", "client.focus: unknown method"])
+        self.assertEqual([m for m, _ in self.server.calls],
+                         ["ping", "client.focus"])
+
+    def test_probe_error_does_not_fall_back(self):
+        self.server.pong["capabilities"] = dict(client_targeted_focus=True)
+        self.daemon.refresh()
+        self.server.errors["ping"] = "unavailable"
+        self.assertEqual(self.command(b"fw\t7\tw2"),
+                         ["R", "7", "err", "ping: unavailable"])
+        self.assertEqual(self.server.calls, [("ping", {})])
+        self.assertFalse(self.daemon.herdr.client_targeted_focus)
+
+    def test_reconnect_rechecks_capabilities(self):
+        for supported in (True, False):
+            with self.subTest(supported=supported):
+                self.server.pong["capabilities"] = dict(
+                    client_targeted_focus=not supported)
+                self.daemon.refresh()
+                path = self.server.path
+                self.server.stop()
+                self.daemon.refresh()
+                self.assertFalse(self.daemon.herdr_ok)
+                os.unlink(path)
+                self.server = FakeHerdr(path)
+                self.server.pong["capabilities"] = dict(
+                    client_targeted_focus=supported)
+                self.server.start()
+                self.daemon.refresh()
+                self.assertTrue(self.daemon.herdr_ok)
+                self.assertEqual(self.server.calls[:2],
+                                 [("ping", {}), ("session.snapshot", {})])
+                self.assertEqual(self.daemon.herdr.client_targeted_focus,
+                                 supported)
+                self.command(b"fp\t7\tw1:p1")
+                self.assertEqual(self.server.calls[-1][0],
+                                 "client.focus" if supported else "pane.focus")
+
+    def test_server_change_between_refresh_and_focus(self):
+        for supported in (True, False):
+            with self.subTest(supported=supported):
+                self.server.pong["capabilities"] = dict(
+                    client_targeted_focus=not supported)
+                self.daemon.refresh()
+                self.server.pong["capabilities"] = dict(
+                    client_targeted_focus=supported)
+                self.command(b"fp\t7\tw1:p1")
+                self.assertEqual(self.server.calls, [("ping", {}), (
+                    "client.focus" if supported else "pane.focus",
+                    dict(pane_id="w1:p1", **({"clients": "local"}
+                                             if supported else {})))])
 
 
 class FakeIpod:
@@ -568,7 +726,7 @@ class EndToEnd(unittest.TestCase):
     def tearDown(self):
         self.daemon.stopping.set()
         self.thread.join(5)
-        self.herdr.server.close()
+        self.herdr.stop()
         self.tmp.cleanup()
 
     def test_session(self):

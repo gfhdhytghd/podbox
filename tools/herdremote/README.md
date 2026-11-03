@@ -15,6 +15,19 @@ computer onto the iPod, in **System > Agents**. From the player you can:
 
 It talks only to herdr's local socket. It never reaches another machine.
 
+On connection and after a herdr reconnect, HerdRemote checks `ping`'s
+`capabilities.client_targeted_focus`. It checks again before each focus
+request, in case the server changed between refreshes. When this capability
+is `true`, workspace/first-tab and pane selections use `client.focus` with
+`clients: "local"`: remote clients keep their workspace/tab views. Pane
+focus is shared within a tab, so other clients already viewing that tab
+also see its focused pane change. If `client.focus` returns `moved: []`,
+the player shows **No local herdr window** as a focus failure.
+
+Without the capability, HerdRemote uses the older `workspace.focus` plus
+`tab.focus`, or `pane.focus`; these move all herdr clients. A failed probe
+or focus request reports a failure rather than retrying with these calls.
+
 ## Requirements
 
 - Python 3.9 or later, and pyserial (`pip install pyserial`, or your

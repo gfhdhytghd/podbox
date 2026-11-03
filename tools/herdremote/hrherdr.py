@@ -26,6 +26,7 @@ class Herdr:
         self.path = path or default_socket()
         self.timeout = timeout
         self.counter = 0
+        self.client_targeted_focus = False
 
     def call(self, method, **params):
         self.counter += 1
@@ -54,6 +55,13 @@ class Herdr:
             raise HerdrError("%s: %s" % (method, reply["error"].get("message")))
         return reply["result"]
 
+    def detect_capabilities(self):
+        # A failed probe must not retain a previous server's capabilities.
+        self.client_targeted_focus = False
+        capabilities = self.call("ping").get("capabilities") or {}
+        self.client_targeted_focus = \
+            capabilities.get("client_targeted_focus") is True
+
     def snapshot(self):
         return self.call("session.snapshot")["snapshot"]
 
@@ -65,12 +73,28 @@ class Herdr:
         self.call("pane.send_keys", pane_id=pane_id, keys=list(keys))
 
     def focus_workspace(self, workspace_id, tab_id=None):
+        if self._focus_local(workspace_id=workspace_id,
+                             **({"tab_id": tab_id} if tab_id else {})):
+            return
         self.call("workspace.focus", workspace_id=workspace_id)
         if tab_id:
             self.call("tab.focus", tab_id=tab_id)
 
     def focus_pane(self, pane_id):
+        if self._focus_local(pane_id=pane_id):
+            return
         self.call("pane.focus", pane_id=pane_id)
+
+    def _focus_local(self, **target):
+        # Each API request uses a fresh connection. Probe again before focus
+        # so a server replacement between refreshes cannot leave stale support.
+        self.detect_capabilities()
+        if not self.client_targeted_focus:
+            return False
+        result = self.call("client.focus", clients="local", **target)
+        if not result["moved"]:
+            raise HerdrError("No local herdr window")
+        return True
 
 
 class Watcher(threading.Thread):
