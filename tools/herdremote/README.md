@@ -5,8 +5,10 @@ computer onto the iPod, in **System > Agents**. From the player you can:
 
 - see every herdr workspace, with how many of its agents are working,
   waiting for you, done or idle, in any tab;
-- open a workspace, which also shows it in herdr on this computer, and see
-  its first tab's agents with each one's last activity;
+- select a workspace, which shows it in herdr on this computer;
+- open a workspace with RIGHT (the wheel's right, fast-forward) and see its
+  first tab's agents with each one's last activity; this changes nothing in
+  herdr;
 - select an agent, which shows its pane in herdr;
 - answer a choice question an agent is asking: Claude Code's questions and
   permission prompts, and Codex's approvals and questions.

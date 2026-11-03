@@ -10,13 +10,15 @@
  * back focus and answer commands. Three views share one list:
  *
  *   spaces    workspaces with their agent counts; SELECT focuses one on the
- *             computer and opens it
+ *             computer, RIGHT opens it
  *   agents    the first tab's agents, each with its last activity under it;
  *             SELECT focuses that pane, or opens its question
  *   question  the question and its options; SELECT answers
  *
  * A pending question puts an alert row at the top of the other two views.
- * MENU and LEFT go back one view; from the spaces view they leave.
+ * RIGHT opens a workspace, the alert's question or an agent's question, and
+ * sends nothing to the computer. MENU and LEFT go back one view; from the
+ * spaces view they leave.
  *
  * The theme draws the rows. The screen is %cs 40, and each row's %Lv is a
  * style letter, an icon letter and the text for the row's right-hand side:
@@ -841,6 +843,39 @@ static void leave_question(void)
     question_pane[0] = '\0';
 }
 
+/* Act on RIGHT: open the selected workspace or question, sending nothing
+ * to the computer. Returns true when the view changed. */
+static bool enter(struct gui_synclist *list)
+{
+    int sel = gui_synclist_get_sel_pos(list);
+    if (!selectable(sel))
+        return false;
+    const struct row *r = &rows[sel];
+    switch (r->kind)
+    {
+        case ROW_ALERT:
+            open_question(model.questions[0].pane);
+            return true;
+        case ROW_SPACE:
+            snprintf(space_id, sizeof space_id, "%s",
+                     model.ws[r->index].id);
+            subscribe(space_id);
+            view = VIEW_AGENTS;
+            return true;
+        case ROW_AGENT:
+        {
+            const struct hr_agent *a = &model.agents[r->index];
+            if (a->question && hr_model_question_for(&model, a->pane))
+            {
+                open_question(a->pane);
+                return true;
+            }
+            return false;
+        }
+    }
+    return false;
+}
+
 /* Act on SELECT. Returns true when the view changed. */
 static bool activate(struct gui_synclist *list)
 {
@@ -855,14 +890,8 @@ static bool activate(struct gui_synclist *list)
             open_question(model.questions[0].pane);
             return true;
         case ROW_SPACE:
-        {
-            const struct hr_workspace *w = &model.ws[r->index];
-            snprintf(space_id, sizeof space_id, "%s", w->id);
-            queue_request("fw", space_id);
-            subscribe(space_id);
-            view = VIEW_AGENTS;
-            return true;
-        }
+            queue_request("fw", model.ws[r->index].id);
+            return false;
         case ROW_AGENT:
         {
             const struct hr_agent *a = &model.agents[r->index];
@@ -1064,11 +1093,20 @@ int agents_screen(void)
         switch (action)
         {
             case ACTION_STD_OK:
-                if (activate(&list))
+            {
+                /* The list keymap gives SELECT and RIGHT the same action;
+                 * RIGHT sends it on the press only, so a held RIGHT opens
+                 * one view */
+                int button;
+                get_action_statuscode(&button);
+                bool opened = (button & BUTTON_RIGHT) ? enter(&list)
+                                                      : activate(&list);
+                if (opened)
                     show(&list, 0);
                 else
                     show_same(&list);
                 break;
+            }
             case ACTION_STD_CANCEL:
             case ACTION_STD_MENU:
                 if (view == VIEW_QUESTION)
