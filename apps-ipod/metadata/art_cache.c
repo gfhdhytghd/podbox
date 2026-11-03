@@ -1533,7 +1533,8 @@ static bool aa_fill(const struct aa_src *src, unsigned int dh,
         s = order[i];
         aa_cache_path(aa_check_path, sizeof(aa_check_path), s, dh);
         int existing = open(aa_check_path, O_RDONLY);
-        struct art_cache_header h;
+        /* This decoder pass runs only on bgtask. */
+        static struct art_cache_header h;
         bool valid = existing >= 0 && art_cache_read_header(existing, &h);
         if (existing >= 0) close(existing);
         if (valid) continue;
@@ -1562,7 +1563,9 @@ static bool aa_cache_dir(const char *probe_path, unsigned int owner,
                          struct aa_stamp *slot, bool artist, int policy,
                          void *workbuf, size_t worksz, bool *aborted)
 {
-    struct aa_src src = {.generation = aa_offer_generation};
+    /* Only bgtask enters this non-reentrant resolver. */
+    static struct aa_src src;
+    src = (struct aa_src){.generation = aa_offer_generation};
     if (!aa_save_request(owner, probe_path,
                          artist ? AA_ROLE_ARTIST : AA_ROLE_ALBUM, policy))
         return false;
@@ -1594,7 +1597,7 @@ static bool aa_cache_dir(const char *probe_path, unsigned int owner,
         albumart_source_key(&src.resolved, aa_active_identity,
                             sizeof(aa_active_identity));
         /* Registry keys use the same normalized bytes as persisted headers. */
-        char normalized[ART_CACHE_IDENTITY_MAX];
+        static char normalized[ART_CACHE_IDENTITY_MAX];
         albumart_normalize(aa_active_identity, normalized, sizeof(normalized));
         strcpy(aa_active_identity, normalized);
         unsigned pixels = art_cache_dir_hash(aa_active_identity);
@@ -1605,7 +1608,8 @@ static bool aa_cache_dir(const char *probe_path, unsigned int owner,
             (unsigned)(src.resolved.revision ^ (src.resolved.revision >> 32));
         if (aa_fill(&src, pixels, workbuf, worksz, aborted))
         {
-            struct albumart_source checked = src.resolved;
+            static struct albumart_source checked;
+            checked = src.resolved;
             if (!albumart_source_revision(&checked) ||
                 checked.revision != src.resolved.revision)
             {
