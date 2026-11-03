@@ -1,5 +1,6 @@
 """Complete resolver/iTunes/decoder modules with generated image and DB fixtures."""
 import shlex
+import os
 from pathlib import Path
 import struct
 from PIL import Image
@@ -43,6 +44,11 @@ author = FIX / 'library/author'
 for target, color in [(author / 'folder.png', 'red'), (author.parent / 'folder.png', 'blue'),
                       (FIX / 'embedded.png', 'red'), (FIX / 'folder.png', 'blue')]:
     Image.new('RGB', (20, 20), color).save(target)
+for name in ['isolated/embedded-only', 'isolated/file-only', 'parent-only/album']:
+    (FIX / name).mkdir(parents=True, exist_ok=True)
+Image.new('RGB', (20, 20), 'red').save(FIX / 'isolated/embedded-only/track.mp3', format='PNG')
+Image.new('RGB', (20, 20), 'blue').save(FIX / 'isolated/file-only/folder.png')
+Image.new('RGB', (20, 20), 'green').save(FIX / 'parent-only/folder.png')
 
 flags = shlex.split((OUT / 'decode-compile-flags.txt').read_text())
 cc, flags = flags[0], flags[1:]
@@ -110,6 +116,7 @@ int art_cache_size_index(const char *a)
 }
 '''
 prog += '#define NEXT(i,r,p,c,s) albumart_next_source(i,r,' + ('p,' if modern else '') + 'c,s)\n'
+prog += '#define POLICY_AWARE %d\n' % modern
 prog += r'''
 
 int main(int argc, char **argv)
@@ -117,7 +124,64 @@ int main(int argc, char **argv)
     assert(argc == 3);
     struct albumart_source s = {0};
     struct mp3entry id3 = {0};
-    if (!strcmp(argv[2], "R7"))
+    if (!strcmp(argv[2], "DEVICE-policy"))
+    {
+        /* Format 9 ignored these settings. Format 10 deliberately filters
+         * sources: restrictive policies can remove the only old candidate. */
+        snprintf(id3.path, sizeof(id3.path), "%s/isolated/embedded-only/track.mp3",
+                 argv[1]);
+        int fd = open(id3.path, O_RDONLY);
+        assert(fd >= 0);
+        int n = ffilesize(fd);
+        close(fd);
+        id3.has_embedded_albumart = true;
+        id3.albumart.type = AA_TYPE_PNG;
+        id3.albumart.size = n;
+        unsigned c = 0;
+        assert(NEXT(&id3, AA_ROLE_ALBUM, ART_SOURCE_FILES, &c, &s) ==
+               !POLICY_AWARE);
+        c = 0;
+        assert(NEXT(&id3, AA_ROLE_ALBUM, ART_SOURCE_FILES_FIRST, &c, &s));
+        assert(s.kind == AA_SOURCE_EMBEDDED);
+        memset(&id3, 0, sizeof(id3));
+        snprintf(id3.path, sizeof(id3.path), "%s/isolated/file-only/track.mp3",
+                 argv[1]);
+        c = 0;
+        assert(NEXT(&id3, AA_ROLE_ALBUM, ART_SOURCE_EMBEDDED, &c, &s) ==
+               !POLICY_AWARE);
+        c = 0;
+        assert(NEXT(&id3, AA_ROLE_ALBUM, ART_SOURCE_EMBEDDED_FIRST, &c, &s));
+        assert(s.kind == AA_SOURCE_FILE);
+        strcpy(id3.path, "/iPod_Control/Music/F00/track.mp3");
+        c = 0;
+        assert(NEXT(&id3, AA_ROLE_ALBUM, ART_SOURCE_FILES, &c, &s) ==
+               !POLICY_AWARE);
+        c = 0;
+        assert(NEXT(&id3, AA_ROLE_ALBUM, ART_SOURCE_FILES_FIRST, &c, &s));
+        assert(s.kind == AA_SOURCE_ITUNES);
+        printf("DEVICE-policy: policy-aware=%d; files-only embedded/iTunes=%s; "
+               "embedded-only file=%s; fallback policies retain all three\n",
+               POLICY_AWARE, POLICY_AWARE ? "missing" : "present",
+               POLICY_AWARE ? "missing" : "present");
+    }
+    else if (!strcmp(argv[2], "DEVICE-directory"))
+    {
+        snprintf(id3.path, sizeof(id3.path), "%s/parent-only/album", argv[1]);
+        unsigned c = 0;
+        assert(NEXT(&id3, AA_ROLE_ARTIST, ART_SOURCE_FILES, &c, &s) ==
+               !POLICY_AWARE);
+        /* Album fallback to the parent remains supported. The changed
+         * artist contract does not remove this album candidate. */
+        snprintf(id3.path, sizeof(id3.path),
+                 "%s/parent-only/album/track.mp3", argv[1]);
+        c = 0;
+        assert(NEXT(&id3, AA_ROLE_ALBUM, ART_SOURCE_FILES, &c, &s));
+        assert(strstr(s.path, "/parent-only/folder.png"));
+        printf("DEVICE-directory: policy-aware=%d; direct artist=%s; "
+               "album parent-folder fallback still works\n", POLICY_AWARE,
+               POLICY_AWARE ? "missing" : "borrowed ancestor");
+    }
+    else if (!strcmp(argv[2], "R7"))
     {
         assert(itunes_art_find("/iPod_Control/Music/F00/track.mp3", &s));
         assert(s.width == 56 && s.height == 56 && s.stride == 56 &&
@@ -185,8 +249,16 @@ int main(int argc, char **argv)
 (OUT / 'resolver.c').write_text(prog)
 run([cc, *flags, OUT / 'resolver.c', *objects, '-Wl,--gc-sections', '-o', OUT / 'resolver'], 'link-resolver')
 failed = []
-for case in ['R3', 'R6', 'R7']:
+cases = os.environ.get('ART_RESOLVER_CASES',
+                       'R3 R6 R7 DEVICE-policy DEVICE-directory').split()
+for case in cases:
     try:
+        # Isolate policy behavior from R7's rejected-larger-candidate bug.
+        candidates = small + large + short if case == 'R7' else small
+        art = record(b'mhfd', 12, record(b'mhsd', 16, record(b'mhli', 12,
+                     record(b'mhii', 40, candidates,
+                            [(16, '<I', 7), (20, '<Q', 123)])), [(12, '<I', 1)]))
+        (CTRL / 'Artwork/ArtworkDB').write_bytes(art)
         print(run([OUT / 'resolver', FIX, case], case + '-resolver'), end='', flush=True)
     except RuntimeError as error:
         print(error, flush=True)

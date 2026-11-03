@@ -75,3 +75,36 @@ runner does not disable leak detection or recover from undefined behavior.
 These are host tests. They do not establish device playback, audio timing,
 physical disk wake behavior, USB IRQ scheduling, stack high-water use or
 power-loss recovery. The queue adapter does not run the firmware scheduler.
+
+## DEVICE-BUGS-1 coverage
+
+The resolver also checks three format-9-to-10 source losses: files-only with
+embedded-only art, files-only with iTunes-only art, and embedded-only with
+file-only art. Fallback policies retain all three. Directory tests distinguish
+a direct artist portrait from an ancestor picture and retain the album's
+parent-folder fallback. Registry tests check an initially empty v10 namespace,
+policy invalidation, and failure to persist a typed request on ENOSPC.
+
+For an isolated format-9 source comparison, generate decoder objects first,
+then select just the comparison cases (existing R1-R8 checks intentionally
+reject that older implementation):
+
+```sh
+python3 tools/tests/albumart/run.py --source-root /tmp/art-v9 \
+    --output /tmp/art-v9-results --only decode
+ART_RESOLVER_CASES='DEVICE-policy DEVICE-directory' \
+    python3 tools/tests/albumart/run.py --source-root /tmp/art-v9 \
+    --output /tmp/art-v9-results --only resolver
+```
+
+Adjacent UI checks run with `python3 tools/tests/device_ui_test.py`. They execute
+the production list action wrapper and charging monitor with deterministic
+adapters, and check Scrim's battery/busy viewport separation. They do not draw
+the theme on a display.
+
+`tools/tests/arm_skin_stack.py --build <ARM-build> --elf <rockbox.elf>` executes
+the ELF's renderer instructions using Unicorn and reads ABI offsets using that
+build's compiler. Install `unicorn` and `pyelftools` in a separate environment.
+The default 52-conditional fixture exceeds the old 8 KiB stack budget and fits
+after keeping drawing scratch out of the recursive frame. The evaluator is an
+adapter; this stress case does not reconstruct the reported device action.

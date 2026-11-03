@@ -314,11 +314,12 @@ static bool aa_check_abort(void)
 {
     return false;
 }
-static int fail_ref_open, open_calls;
+static int fail_ref_open, fail_request_open, open_calls;
 static int checked_open(const char *p, int flags, ...)
 {
     open_calls++;
-    if (fail_ref_open && strstr(p, "/refs/") && strstr(p, ".ref.new"))
+    if ((fail_ref_open && strstr(p, "/refs/") && strstr(p, ".ref.new")) ||
+        (fail_request_open && strstr(p, "/requests/") && strstr(p, ".req.new")))
     {
         errno = ENOSPC;
         return -1;
@@ -503,6 +504,9 @@ static void book_index_each(bool (*fn)(const struct book_entry *, void *),
 }
 '''
 cache = cache.replace('#define ART_CACHE_FORMAT_VERSION 9', re.search(r'#define ART_CACHE_FORMAT_VERSION \d+', header).group())
+cache = cache.replace('#define THUMBCACHE_DIR CACHE_ROOT "/v9"',
+                      '#define THUMBCACHE_DIR CACHE_ROOT "/v%d"' %
+                      int(re.search(r'#define ART_CACHE_FORMAT_VERSION (\d+)', header)[1]))
 cache += re.search(r'struct art_cache_header\s*\{.*?\};', header, re.S).group()
 # Small cache probes use the real normalization, registry and publication code.
 for path, name in [('apps-ipod/database/path_key.c','path_key_strip'),
@@ -539,7 +543,49 @@ int main(int argc, char **argv)
     mkdir(CACHE_ROOT);
     aa_identity_dirs();
     unsigned owner = art_cache_dir_hash("/library/author");
-    if (!strcmp(argv[1], "R2"))
+    if (!strcmp(argv[1], "DEVICE-cold"))
+    {
+        /* Old, otherwise usable references are outside the new namespace. */
+        mkdir(CACHE_ROOT "/v9");
+        mkdir(CACHE_ROOT "/v9/refs");
+        char path[MAX_PATH];
+        snprintf(path, sizeof(path), CACHE_ROOT "/v9/refs/%08x.ref", owner);
+        uint32_t record[] = {9, owner, 123, 0};
+        record[3] = aa_checksum(2166136261u, record, 3 * sizeof(*record));
+        int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+        assert(fd >= 0 && write(fd, record, sizeof(record)) == sizeof(record));
+        close(fd);
+        assert(aa_referenced(owner) == 0);
+        assert(aa_reference(owner, 123));
+        assert(aa_referenced(owner) == 123);
+        global_settings.art_cache_album_source = ART_SOURCE_FILES_FIRST;
+        assert(aa_referenced(owner) == 0);
+        assert(aa_reference(owner, 456));
+        assert(aa_referenced(owner) == 456);
+        puts("DEVICE-cold: v9 references do not satisfy v10; publication and "
+             "policy rebuild restore the owner");
+    }
+#ifdef CURRENT_HEAD
+    else if (!strcmp(argv[1], "DEVICE-request-io"))
+    {
+        /* Format 10 persists a typed request before resolution. Running out
+         * of directory entries/space now fails before trying the old source. */
+        bool aborted = false;
+        struct aa_stamp slot = {0};
+        fail_request_open = 1;
+        assert(!aa_cache_dir("/library/track.mp3", owner, &slot, false, -1,
+                             NULL, 0, &aborted));
+        assert(aa_io_failed && aa_state == ART_FAILED && candidates == 0);
+        fail_request_open = 0;
+        assert(aa_save_request(owner, "/library/track.mp3", AA_ROLE_ALBUM, -1));
+        struct aa_request request;
+        assert(aa_read_request(owner, &request));
+        assert(request.role == AA_ROLE_ALBUM && request.policy == -1);
+        puts("DEVICE-request-io: request ENOSPC precedes resolution; writable "
+             "storage permits the same request");
+    }
+#endif
+    else if (!strcmp(argv[1], "R2"))
     {
         assert(aa_save_request(owner, "/library/author", AA_ROLE_ARTIST, -1));
         aa_request_owner(owner);
@@ -655,7 +701,7 @@ int main(int argc, char **argv)
 cache_exe = build('cache-flows', cache)
 failed = []
 for exe, case in [(play_exe, 'R1'), (play_exe, 'R3-playback'),
-                  *[(cache_exe, c) for c in ['R2', 'R3-reference', 'R4', 'R5', 'R6', 'R8']]]:
+                  *[(cache_exe, c) for c in ['R2', 'R3-reference', 'R4', 'R5', 'R6', 'R8', 'DEVICE-cold', 'DEVICE-request-io']]]:
     try:
         if exe == cache_exe:
             shutil.rmtree(OUT / 'cache', ignore_errors=True)
