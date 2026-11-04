@@ -11,7 +11,12 @@ computer onto the iPod, in **System > Agents**. From the player you can:
   herdr;
 - select an agent, which shows its pane in herdr;
 - answer a choice question an agent is asking: Claude Code's questions and
-  permission prompts, and Codex's approvals and questions.
+  permission prompts, and Codex's approvals and questions;
+- press LEFT (the wheel's left, rewind) on the workspace list to see each AI
+  service's 5-hour and weekly limits, its tokens this week and their API
+  price; RIGHT or MENU goes back.
+
+LEFT goes back one view everywhere else. Only MENU leaves Agents for System.
 
 It talks only to herdr's local socket. It never reaches another machine.
 

@@ -45,6 +45,19 @@ static void dump(void)
     }
     if (m.result_new)
         printf("R %s %d %s\n", m.result_req, m.result_ok, m.result_text);
+    if (m.usage.have)
+    {
+        const struct hr_usage *u = &m.usage;
+        printf("U %d %d %u\n", u->age, u->ok, u->serial);
+        for (int i = 0; i < HR_USAGE_SVCS; i++)
+        {
+            const struct hr_service *s = &u->svc[i];
+            printf("P %s %c %d %d %d %d %lld %lld %s\n", s->name, s->state,
+                   s->h5_pct, s->h5_reset, s->wk_pct, s->wk_reset,
+                   s->tokens, s->usd_milli, s->note);
+        }
+        printf("N %lld %lld\n", u->tokens, u->usd_milli);
+    }
 }
 
 static int replay(const char *path)
@@ -126,6 +139,56 @@ int main(int argc, char **argv)
     assert(m.result_new && !m.result_ok && !strcmp(m.result_req, "7"));
     assert(apply("T\t12\t0") == 'T' && m.herdr_age == 12 && !m.herdr_ok);
 
+    /* U: one P per service, by name; '-' is -1 */
+    assert(apply("U\t12\t1\n"
+                 "P\tcodex\tok\t42\t7980\t61\t273600\t12300000\t41200\tPro\n"
+                 "P\tclaude\ttok\t-\t-\t-\t-\t900\t5\t\n"
+                 "P\tgrok\tnone\t-\t-\t-\t-\t0\t0\tnot used\n"
+                 "P\tgemini\terr\t-\t-\t-\t-\t0\t0\ttimeout\n"
+                 "N\t12300900\t41205") == 'U');
+    const struct hr_usage *u = &m.usage;
+    assert(u->have && u->ok && u->age == 12 && u->serial == 1);
+    assert(u->svc[0].state == 'o' && u->svc[0].h5_pct == 42);
+    assert(u->svc[0].h5_reset == 7980 && u->svc[0].wk_reset == 273600);
+    assert(u->svc[0].tokens == 12300000 && u->svc[0].usd_milli == 41200);
+    assert(!strcmp(u->svc[0].note, "Pro"));
+    assert(u->svc[1].state == 't' && u->svc[1].h5_pct == -1);
+    assert(u->svc[2].state == 'n' && u->svc[3].state == 'e');
+    assert(!strcmp(u->svc[3].note, "timeout"));
+    assert(u->tokens == 12300900 && u->usd_milli == 41205);
+    /* Tokens past 32 bits */
+    assert(apply("U\t0\t1\nP\tclaude\tok\t1\t2\t3\t4\t9876543210\t1\t\n"
+                 "P\tsomeone\tok\t1\t2\t3\t4\t5\t6\t\n"
+                 "N\t9876543210\t1") == 'U');
+    assert(u->svc[1].tokens == 9876543210LL && u->serial == 2);
+    assert(u->svc[0].state == 'n' && u->svc[0].tokens == -1);
+    /* Every collector failed: the figures stay, marked not ok */
+    assert(apply("U\t3\t0\nP\tclaude\terr\t-\t-\t-\t-\t0\t0\tx\n"
+                 "N\t0\t0") == 'U');
+    assert(!u->ok && u->serial == 2 && u->svc[1].tokens == 9876543210LL);
+    /* Bad records leave the model as it was */
+    assert(apply("U\t1\t1\nP\tcodex\tok\t101\t-\t-\t-\t0\t0\t\nN\t0\t0")
+           == 0);
+    assert(apply("U\t1\t1\nP\tcodex\tbad\t-\t-\t-\t-\t0\t0\t\nN\t0\t0")
+           == 0);
+    assert(apply("U\t1\t1\nP\tcodex\tok\t1\t-\t-\t-\t0\t0\t") == 0);
+    assert(apply("U\t1\t1\nP\tcodex\tok\t1\t-\t-\t-\t1x\t0\t\nN\t0\t0")
+           == 0);
+    assert(apply("U\t-1\t1\nN\t0\t0") == 0);
+    assert(u->serial == 2 && !u->ok);
+    assert(apply("U\t1\t1\nN\t0\t0") == 'U' && u->ok && u->serial == 3);
+    /* Past 10^18 a count is held there */
+    assert(apply("U\t1\t1\nN\t123456789012345678901234\t0") == 'U');
+    assert(u->tokens == 999999999999999999LL);
+    /* The largest counts the computer sends; seconds are held at three
+     * years */
+    assert(apply("U\t999999999999999999\t1\n"
+                 "P\tcodex\tok\t100\t999999999999999999\t0\t0\t"
+                 "999999999999999999\t999999999999999999\t\n"
+                 "N\t999999999999999999\t999999999999999999") == 'U');
+    assert(u->age == 99999999 && u->svc[0].h5_reset == 99999999);
+    assert(u->svc[0].tokens == 999999999999999999LL);
+
     /* Cut on a character boundary: 汉 is three bytes */
     char small[5];
     hr_copy(small, "汉字", sizeof small);
@@ -145,7 +208,7 @@ int main(int argc, char **argv)
     {
         char junk[256];
         int n = 1 + rand() % sizeof junk;
-        static const char alphabet[] = "WSAQXRTHo?\t\n1fbw-汉 ";
+        static const char alphabet[] = "WSAQXRTUPNHo?\t\n1fbw-汉 ";
         for (int j = 0; j < n; j++)
             junk[j] = alphabet[rand() % (sizeof alphabet - 1)];
         hr_model_apply(&m, junk, n);

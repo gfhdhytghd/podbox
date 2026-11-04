@@ -28,6 +28,7 @@ import hrdetect  # noqa: E402
 import hrherdr  # noqa: E402
 import hrorder  # noqa: E402
 import hrproto  # noqa: E402
+import hrusage  # noqa: E402
 
 VERSION = "herdremote-1"
 DEVICE = dict(vid=0x05AC, pid=0x1261, manufacturer="PodBox",
@@ -120,6 +121,7 @@ class Daemon:
         self.herdr_ok = False
         self.port = self.link = None
         self.stopping = threading.Event()
+        self.usage = hrusage.UsageCache()
         self.reset_session()
 
     def reset_session(self):
@@ -233,6 +235,9 @@ class Daemon:
         elif name == "sub":
             self.subscribed = None if args[0] == "-" else args[0]
             self.sent_agents = None
+        elif name == "us":
+            self.send(hrproto.usage(self.usage.snapshot(), time.time()))
+            self.usage.request()
         elif name in ("fw", "fp"):
             self.focus(name, *args)
         elif name == "a":
@@ -313,9 +318,29 @@ def main():
     parser.add_argument("--once", action="store_true",
                         help="print the model as the player would get it, "
                         "then exit")
+    parser.add_argument("--usage-dump", action="store_true",
+                        help="print one read-only usage frame; no herdr/serial access")
+    parser.add_argument("--usage-wait", type=float, default=6,
+                        help="usage-dump indexing budget in seconds (default: 6)")
     args = parser.parse_args()
     logging.basicConfig(stream=sys.stdout, level=logging.INFO,
                         format="%(asctime)s %(levelname)s %(message)s")
+    if args.usage_dump:
+        cache = hrusage.UsageCache()
+        try:
+            cache.request()
+            deadline = time.monotonic() + max(0, args.usage_wait)
+            while time.monotonic() < deadline:
+                rows = cache.snapshot()
+                if all(r["note"] != "collecting usage" and
+                       not r["note"].startswith("indexing local logs") for r in rows):
+                    break
+                cache.request()
+                time.sleep(0.02)
+            print(hrproto.usage(cache.snapshot(), time.time()).decode())
+        finally:
+            cache.close()
+        return
     daemon = Daemon(args)
     if args.once:
         daemon.refresh()
@@ -335,6 +360,7 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
+        daemon.usage.close()
         daemon.close_link()
 
 

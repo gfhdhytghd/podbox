@@ -23,6 +23,8 @@ MAX_OPTIONS = 8
 MAX_WORKSPACES = 32
 MAX_AGENTS = 16
 MAX_QUESTIONS = 6
+USAGE_SERVICES = ("codex", "claude", "grok", "gemini")
+USAGE_NOTE_BYTES = 40
 
 STATUS_CODES = {"working": "w", "blocked": "b", "done": "d", "idle": "i",
                 "unknown": "u"}
@@ -124,6 +126,40 @@ def tick(age_seconds, herdr_ok):
     return encode([["T", str(int(age_seconds)), "1" if herdr_ok else "0"]])
 
 
+def usage(items, now):
+    """One U frame, four P records, and N. Reset fields are absolute in cache."""
+    by_service = {item["svc"]: item for item in items}
+    rows = []
+    total_tokens = total_usd = 0
+    oldest = now
+    any_success = False
+    # Bound numeric fields as well as text, so all four rows always fit.
+    def integer(value):
+        return str(max(0, min(10**18 - 1, int(value or 0))))
+
+    for service in USAGE_SERVICES:
+        item = by_service.get(service, {})
+        state = item.get("state", "none")
+        if state not in ("ok", "tok", "none", "err"):
+            state = "err"
+        any_success |= state != "err"
+        oldest = min(oldest, item.get("sampled_at", now))
+        fields = ["P", service, state]
+        for prefix in ("h5", "wk"):
+            pct = item.get(prefix + "_pct")
+            reset = item.get(prefix + "_reset")
+            fields += ["-" if pct is None else str(max(0, min(100, int(pct)))),
+                       "-" if reset is None else integer(reset - now)]
+        tokens = int(integer(item.get("tokens")))
+        usd = int(integer(item.get("usd_milli")))
+        total_tokens += tokens
+        total_usd += usd
+        rows.append(fields + [str(tokens), str(usd),
+                              clean(item.get("note", ""), USAGE_NOTE_BYTES)])
+    return encode([["U", integer(now - oldest), "1" if any_success else "0"]]
+                  + rows + [["N", str(total_tokens), str(total_usd)]])
+
+
 def parse_command(payload):
     """An iPod->PC message as (name, args), or None if it is not one."""
     try:
@@ -132,7 +168,9 @@ def parse_command(payload):
         return None
     fields = records[0]
     name, args = fields[0], fields[1:]
-    shapes = {"hr": 1, "sub": 1, "fw": 2, "fp": 2, "a": 3}
+    shapes = {"hr": 1, "sub": 1, "fw": 2, "fp": 2, "a": 3, "us": 0}
+    if name == "us" and len(records) != 1:
+        return None
     if shapes.get(name) != len(args):
         return None
     return name, args

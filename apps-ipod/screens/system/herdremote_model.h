@@ -18,6 +18,7 @@
 #define HR_MAX_QUESTIONS 6
 #define HR_MAX_LINES     4
 #define HR_MAX_OPTIONS   8
+#define HR_USAGE_SVCS    4
 
 struct hr_workspace {
     char id[16];
@@ -56,6 +57,28 @@ struct hr_question {
     struct hr_option options[HR_MAX_OPTIONS];
 };
 
+/* One service's row of U. A '-' field is -1. */
+struct hr_service {
+    char name[8];           /* codex, claude, grok, gemini */
+    char state;             /* o ok, t tok, n none, e err */
+    int h5_pct, h5_reset;   /* used percent; seconds until reset */
+    int wk_pct, wk_reset;
+    long long tokens;
+    long long usd_milli;
+    char note[44];
+};
+
+/* The last U. A U whose ok is 0 after one that had data leaves the data,
+ * clears ok and keeps serial: the screen shows the old figures as stale. */
+struct hr_usage {
+    bool have;
+    bool ok;
+    unsigned int serial;    /* counts the U messages that replaced the data */
+    int age;                /* seconds old when sent */
+    struct hr_service svc[HR_USAGE_SVCS];
+    long long tokens, usd_milli;
+};
+
 struct hr_model {
     bool hello;             /* the daemon has introduced itself */
     bool herdr_ok;
@@ -72,11 +95,12 @@ struct hr_model {
     bool result_new, result_ok;
     char result_req[8];
     char result_text[124];
+    struct hr_usage usage;
 };
 
 /* Apply one message. Returns its type letter ('W', 'S', 'A', 'Q', 'X', 'R',
- * 'T', 'H' for the hello), or 0 if it was not a HerdRemote v1 message, in which
- * case the model is unchanged. */
+ * 'T', 'U', 'H' for the hello), or 0 if it was not a HerdRemote v1 message,
+ * in which case the model is unchanged. */
 int hr_model_apply(struct hr_model *m, const char *data, unsigned int length);
 
 void hr_model_reset(struct hr_model *m);

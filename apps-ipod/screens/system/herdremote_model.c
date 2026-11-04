@@ -11,7 +11,7 @@
 #include "herdremote_model.h"
 
 #define HR_MESSAGE_MAX 4096
-#define HR_MAX_FIELDS  8
+#define HR_MAX_FIELDS  10
 
 /* Static rather than on the stack: the UI thread's stack is small, and a
  * message is parsed into these before it replaces anything in the model. */
@@ -19,6 +19,7 @@ static char scratch[HR_MESSAGE_MAX + 1];
 static struct hr_workspace new_ws[HR_MAX_WS];
 static struct hr_agent new_agents[HR_MAX_AGENTS];
 static struct hr_question new_question;
+static struct hr_usage new_usage;
 
 void hr_copy(char *dst, const char *src, unsigned int n)
 {
@@ -214,6 +215,115 @@ static int apply_question(struct hr_model *m, char **head, int nhead,
     return 'Q';
 }
 
+/* A count, held at max, or '-', which is -1. Returns false for anything
+ * else. */
+static bool count(const char *s, long long max, long long *out)
+{
+    if (!strcmp(s, "-"))
+    {
+        *out = -1;
+        return true;
+    }
+    if (!*s)
+        return false;
+    long long v = 0;
+    for (; *s; s++)
+    {
+        if (*s < '0' || *s > '9')
+            return false;
+        v = v > (max - (*s - '0')) / 10 ? max : v * 10 + (*s - '0');
+    }
+    *out = v;
+    return true;
+}
+
+/* The computer sends counts below 10^18; anything larger is held there */
+#define HR_BIG 999999999999999999LL
+
+/* A count kept as an int: a percent, which must be no more than max, or a
+ * number of seconds, held at max */
+static bool small_count(const char *s, int max, bool clamp, int *out)
+{
+    long long v;
+    if (!count(s, HR_BIG, &v) || (!clamp && v > max))
+        return false;
+    *out = v > max ? max : v;
+    return true;
+}
+
+#define HR_SECONDS 99999999     /* over three years */
+
+/* U, then one P per service and N. A P for a service this screen does not
+ * know is left out. */
+static int apply_usage(struct hr_model *m, char **head, int nhead,
+                       char **cursor)
+{
+    static const char *const names[HR_USAGE_SVCS] =
+        { "codex", "claude", "grok", "gemini" };
+    char *f[HR_MAX_FIELDS], *record;
+    struct hr_usage *u = &new_usage;
+    bool total = false;
+    if (nhead != 3 || !small_count(head[1], HR_SECONDS, true, &u->age) ||
+        u->age < 0 || (strcmp(head[2], "0") && strcmp(head[2], "1")))
+        return 0;
+    memset(u->svc, 0, sizeof u->svc);
+    for (int i = 0; i < HR_USAGE_SVCS; i++)
+    {
+        hr_copy(u->svc[i].name, names[i], sizeof u->svc[i].name);
+        u->svc[i].state = 'n';
+        u->svc[i].h5_pct = u->svc[i].h5_reset = -1;
+        u->svc[i].wk_pct = u->svc[i].wk_reset = -1;
+        u->svc[i].tokens = u->svc[i].usd_milli = -1;
+    }
+    u->ok = head[2][0] == '1';
+    u->tokens = u->usd_milli = -1;
+    while ((record = next_record(cursor)))
+    {
+        int n = split(record, f);
+        if (n == 3 && !strcmp(f[0], "N"))
+        {
+            if (!count(f[1], HR_BIG, &u->tokens) ||
+                !count(f[2], HR_BIG, &u->usd_milli))
+                return 0;
+            total = true;
+            continue;
+        }
+        if (n != 10 || strcmp(f[0], "P"))
+            return 0;
+        struct hr_service s;
+        static const char states[][5] = { "ok", "tok", "none", "err" };
+        s.state = 0;
+        for (unsigned int i = 0; i < sizeof states / sizeof states[0]; i++)
+            if (!strcmp(f[2], states[i]))
+                s.state = states[i][0];
+        if (!s.state || !small_count(f[3], 100, false, &s.h5_pct) ||
+            !small_count(f[4], HR_SECONDS, true, &s.h5_reset) ||
+            !small_count(f[5], 100, false, &s.wk_pct) ||
+            !small_count(f[6], HR_SECONDS, true, &s.wk_reset) ||
+            !count(f[7], HR_BIG, &s.tokens) ||
+            !count(f[8], HR_BIG, &s.usd_milli))
+            return 0;
+        hr_copy(s.note, f[9], sizeof s.note);
+        for (int i = 0; i < HR_USAGE_SVCS; i++)
+            if (!strcmp(f[1], names[i]))
+            {
+                hr_copy(s.name, names[i], sizeof s.name);
+                u->svc[i] = s;
+            }
+    }
+    if (!total)
+        return 0;
+    if (!u->ok && m->usage.have)
+    {
+        m->usage.ok = false;
+        return 'U';
+    }
+    u->have = true;
+    u->serial = m->usage.serial + 1;
+    m->usage = *u;
+    return 'U';
+}
+
 int hr_model_apply(struct hr_model *m, const char *data, unsigned int length)
 {
     char *f[HR_MAX_FIELDS];
@@ -262,6 +372,8 @@ int hr_model_apply(struct hr_model *m, const char *data, unsigned int length)
         m->result_new = true;
         return 'R';
     }
+    if (!strcmp(type, "U"))
+        return apply_usage(m, f, n, &cursor);
     if (!strcmp(type, "T") && n == 3)
     {
         m->herdr_age = number(f[1]);

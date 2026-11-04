@@ -7,18 +7,20 @@
  * (docs/podbox/herdremote-protocol.md) describing herdr's workspaces, the
  * agents in each workspace's first tab and any choice question one of them
  * is asking. This screen keeps that picture in herdremote_model.c and sends
- * back focus and answer commands. Three views share one list:
+ * back focus and answer commands. Four views share one list:
  *
  *   spaces    workspaces with their agent counts; SELECT focuses one on the
- *             computer, RIGHT opens it
+ *             computer, RIGHT opens it, LEFT opens usage
  *   agents    the first tab's agents, each with its last activity under it;
  *             SELECT focuses that pane, or opens its question
  *   question  the question and its options; SELECT answers
+ *   usage     each AI service's limits, tokens and cost, drawn by this file
+ *             over an empty list; RIGHT goes back to spaces
  *
- * A pending question puts an alert row at the top of the other two views.
- * RIGHT opens a workspace, the alert's question or an agent's question, and
- * sends nothing to the computer. MENU and LEFT go back one view; from the
- * spaces view they leave.
+ * A pending question puts an alert row at the top of the agents and spaces
+ * views. RIGHT opens a workspace, the alert's question or an agent's
+ * question, and sends nothing to the computer. LEFT and MENU go back one
+ * view; only MENU leaves, from the spaces view.
  *
  * The theme draws the rows. The screen is %cs 40, and each row's %Lv is a
  * style letter, an icon letter and the text for the row's right-hand side:
@@ -54,7 +56,7 @@
 #include "herdremote_model.h"
 #include "agents_screen.h"
 
-enum view { VIEW_SPACES, VIEW_AGENTS, VIEW_QUESTION };
+enum view { VIEW_SPACES, VIEW_AGENTS, VIEW_QUESTION, VIEW_USAGE };
 
 enum row_kind {
     ROW_STATUS,     /* connection trouble; not selectable */
@@ -104,6 +106,13 @@ static long pending_until;
 static long last_message;
 static bool was_connected;
 
+/* The usage view asks again this often while it is open */
+#define USAGE_EVERY (20 * HZ)
+static long usage_next;         /* when to ask next */
+static long usage_at;           /* when the shown figures came */
+static unsigned int usage_serial;
+static struct row usage_from;   /* the spaces row to go back to */
+
 /* A free outbox slot, or NULL while the link is wedged (the user can press
  * again) */
 static char *outbox_slot(void)
@@ -122,6 +131,14 @@ static void queue_request(const char *name, const char *args)
     /* An answer waits up to five seconds for the pane to change */
     pending_until = current_tick + 8 * HZ;
     snprintf(slot, sizeof outbox[0], "%s\t%s\t%s", name, pending_req, args);
+}
+
+static void ask_usage(void)
+{
+    char *slot = outbox_slot();
+    if (slot)
+        strcpy(slot, "us");
+    usage_next = current_tick + USAGE_EVERY;
 }
 
 static void subscribe(const char *ws)
@@ -577,6 +594,8 @@ static void build_rows(struct gui_synclist *list)
 {
     char buf[48];
     nrows = 0;
+    if (view == VIEW_USAGE)
+        return;
     if (view != VIEW_QUESTION)
     {
         if (trouble(buf, sizeof buf))
@@ -832,7 +851,204 @@ static const char *view_title(void)
         snprintf(title, sizeof title, "%s", q ? q->agent : "Question");
         return title;
     }
+    if (view == VIEW_USAGE)
+        return "Usage";
     return "Agents";
+}
+
+/* The usage view's colours. The grey is Scrim's unselected row text, the
+ * darkest that stays legible on a blue cover. */
+#define USE_TEXT    LCD_RGBPACK(255, 255, 255)
+#define USE_SOFT    LCD_RGBPACK(216, 216, 216)
+#define USE_DIM     LCD_RGBPACK(189, 189, 189)
+#define USE_WARN    LCD_RGBPACK(255, 183, 77)
+#define USE_FULL    LCD_RGBPACK(255, 110, 110)
+#define USE_LINE    21      /* pixels from one text line to the next */
+#define USE_BLOCK   40      /* pixels a service takes */
+
+/* Seconds since the shown figures were sent */
+static int usage_age(void)
+{
+    return model.usage.age + (current_tick - usage_at) / HZ;
+}
+
+/* A reset time sent seconds ago, counted down: "3d4h", "2h13m", "13m" */
+static const char *fmt_reset(char *buf, size_t size, int secs)
+{
+    if (secs < 0)
+        return "—";
+    secs -= (current_tick - usage_at) / HZ;
+    if (secs < 60)
+        return "<1m";
+    if (secs >= 86400)
+        snprintf(buf, size, "%dd%dh", secs / 86400, secs % 86400 / 3600);
+    else if (secs >= 3600)
+        snprintf(buf, size, "%dh%dm", secs / 3600, secs % 3600 / 60);
+    else
+        snprintf(buf, size, "%dm", secs / 60);
+    return buf;
+}
+
+/* "950", "12.3k", "123M", "4.5B" */
+static const char *fmt_tokens(char *buf, size_t size, long long n)
+{
+    static const char units[] = "kMBT";
+    if (n < 0)
+        return "—";
+    if (n < 1000)
+    {
+        snprintf(buf, size, "%d", (int)n);
+        return buf;
+    }
+    int i = 0;
+    long long u = 1000;
+    for (; i < 3 && n / u >= 1000; i++)
+        u *= 1000;
+    int tenths = n / (u / 10);
+    if (tenths < 1000)
+        snprintf(buf, size, "%d.%d%c", tenths / 10, tenths % 10, units[i]);
+    else
+        snprintf(buf, size, "%d%c", tenths / 10, units[i]);
+    return buf;
+}
+
+/* "$41.20", or whole dollars from $1000 */
+static const char *fmt_usd(char *buf, size_t size, long long milli)
+{
+    if (milli < 0)
+        return "—";
+    long long cents = (milli + 5) / 10;
+    if (cents < 100000)
+        snprintf(buf, size, "$%d.%02d", (int)(cents / 100),
+                 (int)(cents % 100));
+    else
+        snprintf(buf, size, "$%ld", (long)MIN(cents / 100, 999999999LL));
+    return buf;
+}
+
+static int text_w(struct screen *d, const char *text)
+{
+    int w, h;
+    d->getstringsize((const unsigned char *)text, &w, &h);
+    return w;
+}
+
+static void text_at(struct screen *d, int x, int y, unsigned colour,
+                    const char *text)
+{
+    d->set_foreground(colour);
+    d->putsxy(x, y, (const unsigned char *)text);
+}
+
+/* One limit in a cell w wide: its label, a bar, and the used percent and
+ * reset time at the cell's right. A bar with no room is left out. */
+static void draw_limit(struct screen *d, int x, int y, int w,
+                       const char *label, int pct, int reset, bool dim)
+{
+    char r[16], text[24];
+    if (pct < 0)
+        snprintf(text, sizeof text, "—");
+    else
+        snprintf(text, sizeof text, "%d%% %s", pct,
+                 fmt_reset(r, sizeof r, reset));
+    unsigned colour = dim ? USE_DIM : USE_TEXT;
+    int lw = text_w(d, label), tw = text_w(d, text);
+    text_at(d, x, y, USE_DIM, label);
+    text_at(d, x + w - tw, y, colour, text);
+    int bx = x + lw + 5, bw = w - lw - tw - 11;
+    if (bw < 12)
+        return;
+    int by = y + 6, bh = 8;
+    d->set_foreground(dim ? USE_DIM : USE_SOFT);
+    d->drawrect(bx, by, bw, bh);
+    if (pct > 0)
+    {
+        d->set_foreground(dim ? USE_DIM : pct >= 95 ? USE_FULL :
+                          pct >= 80 ? USE_WARN : USE_TEXT);
+        d->fillrect(bx + 1, by + 1, MAX(1, (bw - 2) * pct / 100), bh - 2);
+    }
+}
+
+/* A service: its name, tokens and cost, then its two limits. A service
+ * with nothing to show, or whose figures could not be read, is greyed and
+ * gives its note in place of the limits. */
+static void draw_service(struct screen *d, int y, int w,
+                         const struct hr_service *s, bool stale)
+{
+    static const char *const names[HR_USAGE_SVCS] =
+        { "Codex", "Claude", "Grok", "Gemini" };
+    char t[16], c[16], right[40];
+    bool grey = s->state == 'n' || s->state == 'e';
+    bool dim = stale || grey;
+    int i = s - model.usage.svc;
+    text_at(d, 0, y, dim ? USE_DIM : USE_TEXT,
+            names[i]);
+    if (s->state == 'e' || (s->state == 'n' && s->tokens <= 0))
+        snprintf(right, sizeof right, "—");
+    else
+        snprintf(right, sizeof right, "%s  %s",
+                 fmt_tokens(t, sizeof t, s->tokens),
+                 fmt_usd(c, sizeof c, s->usd_milli));
+    text_at(d, w - text_w(d, right), y, dim ? USE_DIM : USE_SOFT, right);
+    y += USE_LINE - 2;
+    if (grey)
+    {
+        char note[48];
+        text_at(d, 0, y, USE_DIM, fit(note, sizeof note,
+                s->note[0] ? s->note : s->state == 'e' ? "Cannot read"
+                                                       : "Not used", w));
+        return;
+    }
+    int half = (w - 12) / 2;
+    draw_limit(d, 0, y, half, "5h", s->h5_pct, s->h5_reset, dim);
+    draw_limit(d, w - half, y, half, "wk", s->wk_pct, s->wk_reset, dim);
+}
+
+/* Draw the usage view over the empty list, which has cleared its area */
+static void draw_usage(struct gui_synclist *list)
+{
+    struct screen *d = &screens[SCREEN_MAIN];
+    struct viewport *vp = list->parent[SCREEN_MAIN];
+    const struct hr_usage *u = &model.usage;
+    char buf[48], t[16], c[16];
+    d->set_viewport(vp);
+    unsigned fg = vp->fg_pattern;
+    d->clear_viewport();
+    const char *t_trouble = trouble(buf, sizeof buf);
+    if (!u->have)
+    {
+        const char *msg = t_trouble ? t_trouble : "Waiting for usage…";
+        text_at(d, (vp->width - text_w(d, msg)) / 2,
+                (vp->height - USE_LINE) / 2, USE_DIM, msg);
+    }
+    else
+    {
+        int age = usage_age();
+        bool stale = t_trouble || !u->ok || age > 3 * USAGE_EVERY / HZ;
+        for (int i = 0; i < HR_USAGE_SVCS; i++)
+            draw_service(d, i * USE_BLOCK, vp->width, &u->svc[i], stale);
+        int y = HR_USAGE_SVCS * USE_BLOCK;
+        d->set_foreground(USE_DIM);
+        d->hline(0, vp->width - 1, y);
+        y += 3;
+        snprintf(buf, sizeof buf, "%s  %s", fmt_tokens(t, sizeof t, u->tokens),
+                 fmt_usd(c, sizeof c, u->usd_milli));
+        text_at(d, 0, y, stale ? USE_DIM : USE_TEXT, "Total");
+        text_at(d, text_w(d, "Total") + 10, y, stale ? USE_DIM : USE_TEXT,
+                buf);
+        if (age < 60)
+            snprintf(t, sizeof t, "%ds", age);
+        else if (age < 3600)
+            snprintf(t, sizeof t, "%dm", age / 60);
+        else
+            snprintf(t, sizeof t, "%dh", age / 3600);
+        snprintf(buf, sizeof buf, stale ? "stale, %s ago" : "%s ago", t);
+        text_at(d, vp->width - text_w(d, buf), y,
+                stale ? USE_WARN : USE_DIM, buf);
+    }
+    d->set_foreground(fg);
+    d->update_viewport();
+    d->set_viewport(NULL);
 }
 
 /* Rebuild and draw, selecting the first row that can be chosen from select
@@ -853,6 +1069,8 @@ static void show_at(struct gui_synclist *list, int select, int top)
         top = select - gui_synclist_get_nb_lines(list, SCREEN_MAIN) + 1;
     gui_synclist_set_top_item(list, top);
     gui_synclist_draw(list);
+    if (view == VIEW_USAGE)
+        draw_usage(list);
 }
 
 static void show(struct gui_synclist *list, int select)
@@ -898,6 +1116,27 @@ static void leave_question(void)
 {
     view = question_from;
     question_pane[0] = '\0';
+}
+
+static void open_usage(struct gui_synclist *list)
+{
+    int sel = gui_synclist_get_sel_pos(list);
+    usage_from = sel >= 0 && sel < nrows ? rows[sel] : (struct row){0};
+    view = VIEW_USAGE;
+    ask_usage();
+    show(list, 0);
+}
+
+/* Back to the spaces view, on the row the usage view was opened from */
+static void close_usage(struct gui_synclist *list)
+{
+    view = VIEW_SPACES;
+    build_rows(list);
+    int i = 0;
+    while (i < nrows && (rows[i].kind != usage_from.kind ||
+                         strcmp(rows[i].id, usage_from.id)))
+        i++;
+    show(list, i < nrows ? i : 0);
 }
 
 /* Act on RIGHT: open the selected workspace or question, sending nothing
@@ -993,8 +1232,10 @@ static bool poll_link(void)
             char *slot = outbox_slot();
             if (slot)
                 strcpy(slot, "hr\t1");
-            if (view != VIEW_SPACES)
+            if (view == VIEW_AGENTS || view == VIEW_QUESTION)
                 subscribe(space_id);
+            if (view == VIEW_USAGE)
+                ask_usage();
         }
         changed = true;
     }
@@ -1014,6 +1255,11 @@ static bool poll_link(void)
         changed = true;
         if (type == 'Q' && model.nquestions > before && !had)
             backlight_on();
+        if (type == 'U' && model.usage.serial != usage_serial)
+        {
+            usage_serial = model.usage.serial;
+            usage_at = current_tick;
+        }
     }
     flush_outbox();
     return changed;
@@ -1060,6 +1306,7 @@ int agents_screen(void)
     pending_answer = was_connected = false;
     nout = 0;
     last_message = current_tick;
+    usage_serial = model.usage.serial;
 
     FOR_NB_SCREENS(i)
         viewportmanager_theme_enable(i, true, NULL);
@@ -1087,8 +1334,21 @@ int agents_screen(void)
         }
         /* Status rows count seconds, so they redraw once a second */
         const char *t = trouble(buf, sizeof buf);
-        if (changed || t != shown_trouble ||
-            (t && TIME_AFTER(current_tick, redraw_at)))
+        if (view == VIEW_USAGE)
+        {
+            /* Its times count down, and its age up, once a second */
+            if (TIME_AFTER(current_tick, usage_next))
+                ask_usage();
+            if (changed || t != shown_trouble ||
+                TIME_AFTER(current_tick, redraw_at))
+            {
+                shown_trouble = t;
+                redraw_at = current_tick + HZ;
+                draw_usage(&list);
+            }
+        }
+        else if (changed || t != shown_trouble ||
+                 (t && TIME_AFTER(current_tick, redraw_at)))
         {
             shown_trouble = t;
             redraw_at = current_tick + HZ;
@@ -1108,6 +1368,12 @@ int agents_screen(void)
         int before_top = list.start_item[SCREEN_MAIN];
         if (list_do_action(CONTEXT_LIST, ANIM_TICKS, &list, &action))
         {
+            if (view == VIEW_USAGE)
+            {
+                /* The wheel has nothing to move, but the list redraws */
+                draw_usage(&list);
+                continue;
+            }
             int sel = gui_synclist_get_sel_pos(&list);
             int lines = gui_synclist_get_nb_lines(&list, SCREEN_MAIN);
             if (sel > before && before >= before_top + lines)
@@ -1156,6 +1422,12 @@ int agents_screen(void)
                  * one view */
                 int button;
                 get_action_statuscode(&button);
+                if (view == VIEW_USAGE)
+                {
+                    if (button & BUTTON_RIGHT)
+                        close_usage(&list);
+                    break;
+                }
                 bool opened = (button & BUTTON_RIGHT) ? enter(&list)
                                                       : activate(&list);
                 if (opened)
@@ -1166,22 +1438,42 @@ int agents_screen(void)
             }
             case ACTION_STD_CANCEL:
             case ACTION_STD_MENU:
+            {
+                /* LEFT and MENU both go back a view, but only MENU leaves
+                 * Agents: LEFT on the spaces view opens usage. LEFT acts on
+                 * the press alone. */
+                int button;
+                int status = get_action_statuscode(&button);
+                bool left = action == ACTION_STD_CANCEL &&
+                            (button & BUTTON_LEFT);
+                if (left && (status & ACTION_REPEAT))
+                    break;
+                if (view == VIEW_USAGE)
+                {
+                    if (!left)
+                        close_usage(&list);
+                    break;
+                }
+                if (view == VIEW_SPACES)
+                {
+                    if (left)
+                        open_usage(&list);
+                    else
+                        done = true;
+                    break;
+                }
                 if (view == VIEW_QUESTION)
                     leave_question();
-                else if (view == VIEW_AGENTS)
+                else
                 {
                     view = VIEW_SPACES;
                     space_id[0] = '\0';
                     subscribe("");
                 }
-                else
-                {
-                    done = true;
-                    break;
-                }
                 pending_req[0] = '\0';
                 show(&list, 0);
                 break;
+            }
             case ACTION_NONE:
                 break;
             default:

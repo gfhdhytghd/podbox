@@ -180,6 +180,50 @@ T <age> <herdr_ok>
 `age` is how many seconds old the computer's picture of herdr is. `herdr_ok`
 is `0` while herdr cannot be reached.
 
+### `U`, `P`, `N` — subscription usage
+
+Reply to `us` in one TEXT frame. Record/field separators are newline/tab,
+as above. There are exactly four `P` rows in this order: `codex`, `claude`,
+`grok`, `gemini`.
+
+```
+U <age> <ok>
+P <svc> <state> <h5_pct> <h5_reset> <wk_pct> <wk_reset> <tokens> <usd_milli> <note>
+P ...
+P ...
+P ...
+N <tokens> <usd_milli>
+```
+
+- `age`: integer seconds since the oldest service sample. `ok` is `0` when
+  every collector failed, otherwise `1`. This flag is independent of `T`'s
+  herdr status.
+- `state`: `ok` for limits and tokens, `tok` for tokens without limits,
+  `none` for no service data, `err` for collector failure.
+- `h5_pct`, `wk_pct`: used percent, integer 0–100; `-` for unavailable.
+- `h5_reset`, `wk_reset`: integer seconds from **now** until reset, at
+  least zero; `-` for unavailable. The iPod clock is not trusted.
+- `tokens`: disjoint input, cached input, cache write, output and reasoning
+  tokens in the service's current weekly window (weekly reset minus seven
+  days). Where no current weekly window is known, use the last seven days.
+  Cached input/reasoning that are subsets of other counters count once.
+- `usd_milli`: equivalent API list price for those tokens, per model and
+  token class, in 1/1000 USD. This is not subscription spend. Unknown-model
+  tokens count with cost zero and a note.
+- `note`: at most 40 UTF-8 bytes, sanitized like other text fields; can be
+  empty. An error note explains failure. Initial collection and incomplete
+  cold indexing return `err`, rather than advertising complete totals.
+- `N`: sums of all four `P` rows, including any retained counters on error.
+
+The whole message fits `MAX_MESSAGE` (4096 bytes). The computer answers
+from cache immediately, then schedules a refresh when at least 20 seconds
+old. Collectors never block the link thread. The first reply can be the
+initial `err/collecting usage` cache. The next `us` receives the refreshed
+cache. The player sends `us` on Usage open and every 20 seconds while open;
+it counts reset seconds down locally and stops requests on close. Link
+down or `ok=0`: retain last data and mark it stale. See
+[usage sources and caveats](herdremote-usage.md).
+
 ## Player to computer
 
 | Message | Meaning |
@@ -189,6 +233,7 @@ is `0` while herdr cannot be reached.
 | `fw <req> <ws>` | Show this workspace, at its first tab, on the computer |
 | `fp <req> <pane>` | Show this pane on the computer |
 | `a <req> <qid> <number>` | Choose option `number` of question `qid` |
+| `us` | Send the cached `U/P/N` usage frame now; request a refresh when due |
 
 For `fw` and `fp`, the computer probes herdr's `ping` capability
 `client_targeted_focus` on connection, after a herdr reconnect, and before
