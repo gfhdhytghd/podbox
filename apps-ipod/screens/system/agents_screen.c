@@ -992,7 +992,7 @@ static void draw_limit(struct screen *d, int x, int y, int w,
     }
 }
 
-/* A service: its name, tokens and cost, then its two limits. A service
+/* A service: its name, tokens and cost, then its limits. A service
  * with nothing to show, or whose figures could not be read, is greyed and
  * gives its note in place of the limits. */
 static void draw_service(struct screen *d, int y, int w,
@@ -1020,6 +1020,12 @@ static void draw_service(struct screen *d, int y, int w,
         text_at(d, 0, y, USE_DIM, fit(note, sizeof note,
                 s->note[0] ? s->note : s->state == 'e' ? "Cannot read"
                                                        : "Not used", w));
+        return;
+    }
+    /* A service with no 5h limit has one bar, the week's, the row wide */
+    if (s->h5_pct < 0 && s->h5_reset < 0)
+    {
+        draw_limit(d, 0, y, w, "Week", s->wk_pct, s->wk_reset, dim);
         return;
     }
     int half = (w - 12) / 2;
@@ -1059,15 +1065,8 @@ static void draw_usage(struct gui_synclist *list)
         text_at(d, 0, y, stale ? USE_DIM : USE_TEXT, "Total");
         text_at(d, text_w(d, "Total") + 10, y, stale ? USE_DIM : USE_TEXT,
                 buf);
-        if (age < 60)
-            snprintf(t, sizeof t, "%ds", age);
-        else if (age < 3600)
-            snprintf(t, sizeof t, "%dm", age / 60);
-        else
-            snprintf(t, sizeof t, "%dh", age / 3600);
-        snprintf(buf, sizeof buf, stale ? "stale, %s ago" : "%s ago", t);
-        text_at(d, vp->width - text_w(d, buf), y,
-                stale ? USE_WARN : USE_DIM, buf);
+        if (stale)
+            text_at(d, vp->width - text_w(d, "stale"), y, USE_WARN, "stale");
     }
     d->set_foreground(fg);
     d->update_viewport();
@@ -1534,7 +1533,7 @@ int agents_screen(void)
         const char *t = trouble(buf, sizeof buf);
         if (view == VIEW_USAGE)
         {
-            /* Its times count down, and its age up, once a second */
+            /* Its times count down once a second, and it goes stale with age */
             if (TIME_AFTER(current_tick, usage_next))
                 ask_usage();
             if (changed || t != shown_trouble ||
