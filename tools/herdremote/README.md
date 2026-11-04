@@ -81,13 +81,14 @@ A workspace's dot is for its first tab, unless only another tab is busy:
 |---|---|
 | red, blinking | waiting for you |
 | green, breathing | working |
-| red with three dots | waiting for you in another tab |
-| green with three dots | working in another tab |
+| red with a … badge | waiting for you in another tab |
+| green with a … badge | working in another tab |
 | teal ● | done |
 | green ○ | idle |
 | grey · | unknown, or no agents |
 
 The last three are herdr's own dots and colours (`catppuccin-latte`).
+Each dot has a thin white edge, so it shows on any album's colours.
 Other themes show the row's text only.
 
 A question waiting anywhere puts a ⚠ row at the top of every list. Select

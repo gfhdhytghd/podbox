@@ -85,8 +85,8 @@ The first match wins:
 |---|---|
 | `tab1` is `b`; an agent asking | red, blinking |
 | `tab1` is `w`; an agent working | green, breathing |
-| `other` is `b` | red, three dots in it |
-| `other` is `w` | green, three dots in it |
+| `other` is `b` | red, with a … badge |
+| `other` is `w` | green, with a … badge |
 | either is `d` | teal ● |
 | either is `i` | green ○ |
 | anything else | grey · |
@@ -94,7 +94,8 @@ The first match wins:
 The rest are herdr's own dot indicators (`status_indicators = "dots"`) in
 its `catppuccin-latte` colours: blocked red `#d20f39`, done teal `#179299`,
 idle green `#40a02b`, unknown grey `#9ca0b0`, working yellow `#df8e1d`.
-Working and asking take green and red here instead, and move.
+Working and asking take green and red here instead, and move. Every dot has
+a thin white edge, so it shows on any album's colours.
 
 ### `A` — agents of one workspace
 

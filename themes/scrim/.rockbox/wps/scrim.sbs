@@ -177,9 +177,9 @@
 #   u) has no glyph, as %Ls draws its status dot there. The question row is
 #   in the accent. Each line has one branch: a false branch beside it would
 #   clear the row's text drawn by the viewport before.
-%Vl(Rows,2,3,24,24,2)
+%Vl(Rows,0,3,24,24,2)
 %?and(%if(%vg(shape),=,4),%or(%if(%ss(0,1,%Lv),=,r),%if(%ss(0,1,%Lv),=,q)))<%Ls%?if(%ss(1,1,%Lv),=,a)<%Vf(vivid>60:ffb74d)|%?if(%ss(0,1,%Lv),=,q)<%Vf(vivid>85.70:8a8a8a)|%?Lc<%Vf(!ffffff)|%Vf(vivid>85:bdbdbd)>>>%sel(%ss(1,1,%Lv),a,!,l,/,s,=,c,Ö,x,×,1,ę,2,Ě,3,ě,4,Ĝ,5,ĝ,6,Ğ,7,ğ,8,Ġ)>
-%Vl(Rows,36,0,3,30,-)
+%Vl(Rows,38,0,3,30,-)
 %?and(%if(%vg(shape),=,4),%if(%ss(0,1,%Lv),=,r),%Lc)<%dr(0,0,3,30,vivid>60:ffffff,-,14,3)>
 %Vl(Rows,46,5,160,20,-)
 %?and(%if(%vg(shape),=,4),%if(%ss(0,1,%Lv),=,r),%ss(2,-1,%Lv))<%?Lc<%Vf(!ffffff)%s%LT|%Vf(vivid>85:bdbdbd)%LT>>

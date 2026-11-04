@@ -196,8 +196,8 @@ enum dot {
     DOT_NONE,
     DOT_ASKING,         /* red, blinking */
     DOT_WORKING,        /* green, breathing */
-    DOT_ASKING_ELSEWHERE,   /* in another tab: red, three dots */
-    DOT_WORKING_ELSEWHERE,  /* in another tab: green, three dots */
+    DOT_ASKING_ELSEWHERE,   /* in another tab: red, a … badge */
+    DOT_WORKING_ELSEWHERE,  /* in another tab: green, a … badge */
     DOT_DONE,           /* herdr's teal dot */
     DOT_IDLE,           /* herdr's green ring */
     DOT_UNKNOWN,        /* herdr's small grey dot */
@@ -246,6 +246,7 @@ static enum dot row_dot(int item)
 #define DOT_GREEN   LCD_RGBPACK(64, 160, 43)
 #define DOT_TEAL    LCD_RGBPACK(23, 146, 153)
 #define DOT_GREY    LCD_RGBPACK(156, 160, 176)
+#define DOT_HALO    LCD_RGBPACK(255, 255, 255)
 
 /* One frame in ANIM_STEPS of the breathing: (1 - cos) / 2 from 40% up */
 #define ANIM_STEPS 24
@@ -266,46 +267,93 @@ static int dot_strength(enum dot dot)
     return 255;
 }
 
-/* Coverage of a pixel of a dot, 0 to 16, from 4x4 samples. Lengths are
- * in eighths of a pixel; radii are tenths of a pixel at a 24-pixel cell and
- * scale with it. */
-static int dot_cover(enum dot dot, int x, int y, int size)
+/* Each dot is two coverage masks in the format alpha_bitmap_part() reads:
+ * 4 bits a pixel, two to a byte, 0 opaque and 15 clear. The halo is a light
+ * edge round the shape, so a dot stands out on any cover; the fill is the
+ * shape in the state's colour. Both are worked out once per cell size from
+ * 8x8 samples a pixel. Lengths are sixteenths of a pixel at a 24-pixel cell
+ * and scale with it. */
+#define DOT_MAX 32
+#define DOT_BYTES ((DOT_MAX * DOT_MAX + 1) / 2)
+enum { SHAPE_DISC, SHAPE_RING, SHAPE_SMALL, SHAPE_BADGE, SHAPES };
+static unsigned char dot_masks[SHAPES][2][DOT_BYTES];
+static unsigned char dot_faded[DOT_BYTES];
+static int dot_masks_size;
+
+/* Whether the point (x, y) from the cell's centre is inside one layer */
+static bool dot_inside(int shape, bool halo, int x, int y, int size)
 {
-#define R(tenths) ((tenths) * size * 8 / 240)
-    int c = size * 4;
-    int n = 0;
-    for (int sy = 0; sy < 4; sy++)
-        for (int sx = 0; sx < 4; sx++)
+#define L(sixteenths) ((sixteenths) * size / 24)
+#define IN(cx, cy, r) (((x) - (cx)) * ((x) - (cx)) + \
+                       ((y) - (cy)) * ((y) - (cy)) <= (r) * (r))
+    switch (shape)
+    {
+        case SHAPE_DISC:
+            return halo ? IN(0, 0, L(108)) && !IN(0, 0, L(88))
+                        : IN(0, 0, L(88));
+        case SHAPE_RING:
+            return halo ? IN(0, 0, L(108)) && !IN(0, 0, L(88))
+                        : IN(0, 0, L(88)) && !IN(0, 0, L(56));
+        case SHAPE_SMALL:
+            return halo ? IN(0, 0, L(64)) && !IN(0, 0, L(44))
+                        : IN(0, 0, L(44));
+        default:
         {
-            int dx = x * 8 + sx * 2 + 1 - c, dy = y * 8 + sy * 2 + 1 - c;
-            int d2 = dx * dx + dy * dy;
-            bool in;
-            switch (dot)
-            {
-                case DOT_IDLE:      /* a ring */
-                    in = d2 <= R(70) * R(70) && d2 >= R(50) * R(50);
-                    break;
-                case DOT_UNKNOWN:   /* a small dot */
-                    in = d2 <= R(30) * R(30);
-                    break;
-                case DOT_ASKING_ELSEWHERE:
-                case DOT_WORKING_ELSEWHERE:
-                    /* a larger dot, three holes across its middle */
-                    in = d2 <= R(80) * R(80);
-                    for (int k = -1; in && k <= 1; k++)
-                    {
-                        int hx = dx - k * R(45);
-                        in = hx * hx + dy * dy > R(16) * R(16);
-                    }
-                    break;
-                default:
-                    in = d2 <= R(65) * R(65);
-                    break;
-            }
-            n += in;
+            /* A disc up and left, and below right of it a light badge
+             * holding three dots in the disc's colour: "busy, elsewhere" */
+            int d = L(-28), by = L(104), bx = L(80);
+            int run = L(56), br = L(44);
+            int ex = x < bx - run ? bx - run : x > bx + run ? bx + run : x;
+            bool badge = (x - ex) * (x - ex) + (y - by) * (y - by) <=
+                         br * br;
+            if (halo)
+                return badge || (IN(d, d, L(108)) && !IN(d, d, L(88)));
+            if (badge)
+                return IN(bx - L(48), by, L(16)) || IN(bx, by, L(16)) ||
+                       IN(bx + L(48), by, L(16));
+            return IN(d, d, L(88));
         }
-    return n;
-#undef R
+    }
+#undef IN
+#undef L
+}
+
+static void dot_build(int size)
+{
+    for (int shape = 0; shape < SHAPES; shape++)
+        for (int halo = 0; halo < 2; halo++)
+        {
+            unsigned char *m = dot_masks[shape][halo];
+            memset(m, 0xff, DOT_BYTES);
+            for (int y = 0; y < size; y++)
+                for (int x = 0; x < size; x++)
+                {
+                    int n = 0;
+                    for (int sy = 0; sy < 8; sy++)
+                        for (int sx = 0; sx < 8; sx++)
+                            n += dot_inside(shape, halo,
+                                            x * 16 + sx * 2 + 1 - size * 8,
+                                            y * 16 + sy * 2 + 1 - size * 8,
+                                            size);
+                    int i = y * size + x;
+                    unsigned a = 15 - (n * 15 + 32) / 64;
+                    m[i / 2] = i & 1 ? (m[i / 2] & 0x0f) | (a << 4)
+                                     : (m[i / 2] & 0xf0) | a;
+                }
+        }
+    dot_masks_size = size;
+}
+
+static int dot_shape(enum dot dot)
+{
+    switch (dot)
+    {
+        case DOT_IDLE:              return SHAPE_RING;
+        case DOT_UNKNOWN:           return SHAPE_SMALL;
+        case DOT_ASKING_ELSEWHERE:
+        case DOT_WORKING_ELSEWHERE: return SHAPE_BADGE;
+        default:                    return SHAPE_DISC;
+    }
 }
 
 static unsigned dot_colour(enum dot dot)
@@ -320,7 +368,9 @@ static unsigned dot_colour(enum dot dot)
     }
 }
 
-/* The %Ls callback: the row's dot, blended over the viewport's background */
+/* The %Ls callback. The halo is drawn solid, which blends it with the
+ * backdrop itself and so also wipes the cell's last frame; the fill is
+ * then blended over it. */
 static bool draw_dot(int item, void *data, struct screen *display,
                      struct viewport *vp)
 {
@@ -328,27 +378,34 @@ static bool draw_dot(int item, void *data, struct screen *display,
     enum dot dot = row_dot(item);
     if (dot == DOT_NONE)
         return false;
-    int size = MIN(MIN(vp->width, vp->height), 32);
+    int size = MIN(MIN(vp->width, vp->height), DOT_MAX);
     int strength = dot_strength(dot);
     if (!strength)
         return true;
-    unsigned fg = dot_colour(dot), bg = vp->bg_pattern;
-    int fr = RGB_UNPACK_RED(fg), fgn = RGB_UNPACK_GREEN(fg);
-    int fb = RGB_UNPACK_BLUE(fg);
-    int br = RGB_UNPACK_RED(bg), bgn = RGB_UNPACK_GREEN(bg);
-    int bb = RGB_UNPACK_BLUE(bg);
-    int ox = (vp->width - size) / 2, oy = (vp->height - size) / 2;
-    for (int y = 0; y < size; y++)
-        for (int x = 0; x < size; x++)
+    if (size != dot_masks_size)
+        dot_build(size);
+    int shape = dot_shape(dot);
+    const unsigned char *fill = dot_masks[shape][0];
+    if (strength < 255)
+    {
+        /* A breath: the fill alone fades, towards the backdrop */
+        for (int i = 0; i < (size * size + 1) / 2; i++)
         {
-            int a = dot_cover(dot, x, y, size) * strength / 16;
-            if (!a)
-                continue;
-            display->set_foreground(LCD_RGBPACK(
-                br + (fr - br) * a / 255, bgn + (fgn - bgn) * a / 255,
-                bb + (fb - bb) * a / 255));
-            display->drawpixel(ox + x, oy + y);
+            int lo = 15 - (15 - (fill[i] & 15)) * strength / 255;
+            int hi = 15 - (15 - (fill[i] >> 4)) * strength / 255;
+            dot_faded[i] = lo | hi << 4;
         }
+        fill = dot_faded;
+    }
+    int ox = (vp->width - size) / 2, oy = (vp->height - size) / 2;
+    display->set_drawmode(DRMODE_SOLID);
+    display->set_foreground(DOT_HALO);
+    display->alpha_bitmap_part(dot_masks[shape][1], 0, 0, size,
+                               ox, oy, size, size);
+    display->set_drawmode(DRMODE_FG);
+    display->set_foreground(dot_colour(dot));
+    display->alpha_bitmap_part(fill, 0, 0, size, ox, oy, size, size);
+    display->set_drawmode(DRMODE_SOLID);
     return true;
 }
 
