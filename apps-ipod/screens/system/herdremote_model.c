@@ -407,7 +407,9 @@ const struct hr_question *hr_model_question_for(const struct hr_model *m,
 static bool hr_keys_opposite(const char *a, const char *b)
 {
     return (!strcmp(a, "left") && !strcmp(b, "right")) ||
-           (!strcmp(a, "right") && !strcmp(b, "left"));
+           (!strcmp(a, "right") && !strcmp(b, "left")) ||
+           (!strcmp(a, "wleft") && !strcmp(b, "wright")) ||
+           (!strcmp(a, "wright") && !strcmp(b, "wleft"));
 }
 
 bool hr_keys_add(struct hr_keys *k, const char *key)
@@ -442,4 +444,19 @@ bool hr_keys_take(struct hr_keys *k, struct hr_key_run *out)
     k->nruns--;
     memmove(&k->runs[0], &k->runs[1], k->nruns * sizeof k->runs[0]);
     return true;
+}
+
+const char *hr_wheel_step(struct hr_wheel *w, long now, int dir, long fast)
+{
+    bool is_fast = w->dir == dir && now - w->last <= fast;
+    w->last = now;
+    w->dir = dir;
+    if (!is_fast)
+    {
+        w->fast = 0;
+        return dir > 0 ? "right" : "left";
+    }
+    if (w->fast++ % HR_WORD_STEPS)
+        return NULL;
+    return dir > 0 ? "wright" : "wleft";
 }

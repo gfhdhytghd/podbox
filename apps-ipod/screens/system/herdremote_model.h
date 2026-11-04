@@ -116,7 +116,8 @@ void hr_copy(char *dst, const char *src, unsigned int n);
 
 /* Key taps waiting to be sent while one k is in flight, as runs of one key
  * and a count, oldest first. A tap of the newest run's key adds to its
- * count; an arrow against the newest run's opposite arrow takes one off. */
+ * count; an arrow against the newest run's opposite arrow, character or
+ * word, takes one off. */
 #define HR_KEY_RUNS  4
 #define HR_KEY_COUNT 32     /* taps in one run, the most one k carries */
 struct hr_key_run {
@@ -134,5 +135,20 @@ bool hr_keys_add(struct hr_keys *k, const char *key);
 
 /* Take the oldest run into out. Returns false when there is none. */
 bool hr_keys_take(struct hr_keys *k, struct hr_key_run *out);
+
+/* The wheel as arrow keys. A step in the same direction as the previous
+ * one and no more than fast ticks after it is fast. A slow step is one
+ * character (left, right); fast steps are words (wleft, wright), one for
+ * the first fast step and one for every HR_WORD_STEPS after it. */
+#define HR_WORD_STEPS 3
+struct hr_wheel {
+    long last;      /* when the previous step came */
+    int dir;        /* its direction: -1, 1, or 0 for none */
+    int fast;       /* fast steps since the last slow one */
+};
+
+/* The key one wheel step in direction dir (-1 or 1) at tick now types, or
+ * NULL when the step types nothing */
+const char *hr_wheel_step(struct hr_wheel *w, long now, int dir, long fast);
 
 #endif

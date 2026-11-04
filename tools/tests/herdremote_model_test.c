@@ -234,6 +234,30 @@ int main(int argc, char **argv)
     /* bs and enter never cancel each other */
     assert(hr_keys_add(&keys, "enter") && keys.nruns == 2);
 
+    /* The wheel: a slow step is a character; fast steps in one direction
+     * are words, the first and then every HR_WORD_STEPS-th */
+    struct hr_wheel wh = { .dir = 0 };
+    assert(!strcmp(hr_wheel_step(&wh, 100, 1, 5), "right"));
+    assert(!strcmp(hr_wheel_step(&wh, 120, 1, 5), "right"));
+    const char *flick[9];
+    for (int i = 0; i < 9; i++)
+        flick[i] = hr_wheel_step(&wh, 123 + i * 2, 1, 5);
+    for (int i = 0; i < 9; i++)
+        assert(i % HR_WORD_STEPS ? !flick[i] : !strcmp(flick[i], "wright"));
+    /* Turning back is slow however quick, and so is a pause */
+    assert(!strcmp(hr_wheel_step(&wh, 141, -1, 5), "left"));
+    assert(!strcmp(hr_wheel_step(&wh, 143, -1, 5), "wleft"));
+    assert(!strcmp(hr_wheel_step(&wh, 149, -1, 5), "left"));
+    assert(!strcmp(hr_wheel_step(&wh, 154, -1, 5), "wleft"));
+    /* Word runs: separate from character runs, opposite words cancel */
+    struct hr_keys wk = { .nruns = 0 };
+    assert(hr_keys_add(&wk, "right") && hr_keys_add(&wk, "wright") &&
+           hr_keys_add(&wk, "wright") && hr_keys_add(&wk, "wleft"));
+    assert(wk.nruns == 2 && !strcmp(wk.runs[1].key, "wright") &&
+           wk.runs[1].count == 1);
+    assert(hr_keys_add(&wk, "wleft") && wk.nruns == 1);
+    assert(hr_keys_add(&wk, "left") && wk.nruns == 0);
+
     /* Cut on a character boundary: 汉 is three bytes */
     char small[5];
     hr_copy(small, "汉字", sizeof small);

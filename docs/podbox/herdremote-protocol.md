@@ -246,7 +246,7 @@ down or `ok=0`: retain last data and mark it stale. See
 | `fp <req> <pane>` | Show this pane on the computer |
 | `vd <req> <target>` | Start hold-to-talk; target is a pane id, `w:<ws>`, or `-` |
 | `vu <req>` | Release hold-to-talk |
-| `k <req> <key> [<n>]` | Tap `bs`, `left`, `right` or `enter` 1–32 times (default 1) at the computer's current keyboard focus |
+| `k <req> <key> [<n>]` | Tap `bs`, `left`, `right`, `enter`, `wleft` or `wright` 1–32 times (default 1) at the computer's current keyboard focus |
 | `a <req> <qid> <number>` | Choose option `number` of question `qid` |
 | `us` | Send the cached `U/P/N` usage frame now; request a refresh when due |
 
@@ -305,11 +305,12 @@ plus a 15-byte workspace id). Control characters are rejected.
 
 In Usage, LEFT press/repeat sends `k <req> bs`, wheel counter-clockwise
 sends `k <req> left`, clockwise sends `k <req> right`, and SELECT sends
-`k <req> enter` once per press. Optional `n` batches consecutive taps of
+`k <req> enter` once per press. Fast wheel movement uses `wleft` (Ctrl+Left)
+or `wright` (Ctrl+Right), one word jump per tap. Optional `n` batches consecutive taps of
 the same key: `k <req> <key> [<n>]`. Missing `n` means 1; otherwise it must
 be an unsigned decimal integer from 1 to 32. Noninteger or out-of-range
 values return `R <req> err Invalid key count` without running a tool.
-The whitelist is exactly `bs`, `left`, `right`, `enter`; any other key
+The whitelist is exactly `bs`, `left`, `right`, `enter`, `wleft`, `wright`; any other key
 returns `R <req> err Unsupported key`. Each command occupies one record
 with three or four fields, a nonempty request id of at most 7 bytes, and
 no control characters. Malformed frames are ignored as above. A command
@@ -322,9 +323,14 @@ prefers `ydotool key --key-delay=2` followed by all `n` down/up pairs
 `-k <symbol>` arguments (`BackSpace`, `Left`, `Right`, `Return`)
 when ydotool or its socket is absent. `HERDREMOTE_KEY_TOOL`/`--key-tool`
 select `auto` (default), `ydotool`, or `wtype`. Each batch is one tool call.
+Each word tap is `29:1 105:1 105:0 29:0` for ydotool (`106` for right),
+or `-M ctrl -k Left -m ctrl` for wtype (`Right` for right). The entire
+sequence repeats `n` times in that call, releasing Ctrl after each tap.
 `key_scale` (`HERDREMOTE_KEY_SCALE`/`--key-scale`, integer 1–8, default 1)
-multiplies `left`/`right` only, capped at 32 after scaling. `bs`/`enter`
-use the original count unchanged.
+multiplies `left`/`right` only, capped at 32 after scaling.
+`bs`/`enter`/`wleft`/`wright` use the original count unchanged.
+Older daemons reject word keys as `err Unsupported key`; the player
+shows this real failure rather than suppressing it.
 
 The player keeps one `k` in flight and coalesces pending steps into ordered
 same-key runs. There is no fixed 30-tap/second cooldown or scheduling expiry.
@@ -337,7 +343,9 @@ A tool call already in flight can finish its batch, with each tap a complete
 down/up pair. Its timeout is `0.5 + 0.01 * effective_count` seconds.
 On a tool failure, release-only cleanup has a 0.5-second limit; the backend
 never retries the batch via another tool because that could type or delete
-twice. Tool errors are
+twice. For word keys, cleanup releases the arrow and Ctrl together:
+ydotool `105:0 29:0` (`106` for right), or wtype `-p Left -m ctrl`
+(`Right` for right). Tool errors are
 `Key tool unavailable` or `Key tool failed`. A successful subprocess exit
 confirms the tap request, not the contents of the focused input field.
 

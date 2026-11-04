@@ -17,7 +17,7 @@ computer onto the iPod, in **System > Agents**. From the player you can:
 - press LEFT (the wheel's left, rewind) on the workspace list to see each AI
   service's 5-hour and weekly limits, its tokens this week and their API
   price; in Usage, LEFT is the computer's Backspace, the wheel moves its
-  cursor left/right, and SELECT is Enter; RIGHT or MENU leaves Usage.
+  cursor left/right (fast turns jump words), and SELECT is Enter; RIGHT or MENU leaves Usage.
 
 LEFT goes back from agent and question views. Only MENU leaves Agents for System.
 
@@ -172,9 +172,11 @@ edit dictated text at the same cursor used by F23/hold-to-talk.
 | LEFT press/repeat | `k <req> bs` | Backspace: delete the character before the cursor |
 | Wheel counter-clockwise | `k <req> left` | Left arrow |
 | Wheel clockwise | `k <req> right` | Right arrow |
+| Fast wheel counter-clockwise | `k <req> wleft` | Ctrl+Left: jump one word left |
+| Fast wheel clockwise | `k <req> wright` | Ctrl+Right: jump one word right |
 | SELECT press (no repeat) | `k <req> enter` | Enter |
 
-Only these four keys are accepted. `k <req> <key> [<n>]` accepts 1–32 taps;
+Only these six keys are accepted. `k <req> <key> [<n>]` accepts 1–32 taps;
 omitting `n` means one. A noninteger or out-of-range count returns
 **Invalid key count**. Success is `R <req> ok` without a message band.
 The iPod keeps one request in flight and coalesces pending steps into
@@ -197,7 +199,8 @@ environment. No new Python package is required.
 | `key_scale` | `--key-scale 1..8` | `HERDREMOTE_KEY_SCALE` | `1` |
 
 `key_scale` multiplies only `left` and `right` counts. The effective count
-is capped at 32 after multiplication; `bs` and `enter` are never scaled.
+is capped at 32 after multiplication; `bs`, `enter`, `wleft` and `wright`
+are never scaled.
 For example, scale 3 and `k 7 right 4` produce 12 Right taps, whereas
 `k 8 bs 4` produces four Backspace taps. CLI options override environment.
 For a service override, use:
@@ -214,7 +217,12 @@ test against the user's desktop.
 
 One batch runs in one tool call: ydotool gets all down/up pairs with
 `--key-delay=2` (2 ms between events); wtype gets repeated `-k <symbol>`
-arguments. The old 30-tap/second timer and 100 ms scheduling expiry are
+arguments. Word keys wrap each arrow tap in its own Ctrl press/release:
+ydotool sends `29:1 105:1 105:0 29:0` for `wleft` (106 for `wright`);
+wtype sends `-M ctrl -k Left -m ctrl` (Right for `wright`). Ctrl is released
+after every tap, including between taps in the same batch. Older daemons
+return **Unsupported key** for word keys, which the player shows as a failure.
+The old 30-tap/second timer and 100 ms scheduling expiry are
 removed. A completed batch can be followed immediately by the next one.
 There is still at most one outstanding batch, with no computer-side queue.
 An overlapping request from old firmware returns **Key busy**.
@@ -224,7 +232,9 @@ replies. An already running tool can finish its bounded batch. The timeout
 is `0.5 + 0.01 * effective_count` seconds (0.51–0.82 s). Failed tools get
 one release-only cleanup with a 0.5-second timeout, with no repeated batch
 or runtime fallback to another tool. An unreachable tool can also prevent
-cleanup. Every tap remains a complete press/release pair.
+cleanup. Word-key cleanup releases both the arrow and Ctrl: ydotool gets
+`105:0 29:0` (106 for right), and wtype gets `-p Left -m ctrl` (Right for
+right). Every tap remains a complete press/release sequence.
 
 Errors include **Unsupported key**, **Invalid key count**, **Key busy**,
 **Key tool unavailable**, **Key tool failed**, and **Session not ready**.

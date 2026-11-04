@@ -17,7 +17,8 @@
  *   usage     each AI service's limits, tokens and cost, drawn by this file
  *             over an empty list; RIGHT goes back to spaces. The other keys
  *             type on the computer: LEFT Backspace (once per press and per
- *             repeat), the wheel the Left and Right arrows, SELECT Enter.
+ *             repeat), the wheel the Left and Right arrows (Ctrl with
+ *             them, a word at a time, when it turns fast), SELECT Enter.
  *             Taps made while one is on its way go together, with a count
  *
  * A pending question puts an alert row at the top of the agents and spaces
@@ -140,6 +141,9 @@ static bool talk_shown;         /* the band is on screen */
 static char key_req[8];         /* the k in flight */
 static long key_sent;           /* when it went */
 static struct hr_keys key_runs; /* the taps waiting */
+/* Wheel steps this close together are fast and jump words */
+#define WHEEL_FAST  (HZ / 20)
+static struct hr_wheel wheel;
 
 /* A free outbox slot, or NULL while the link is wedged (the user can press
  * again) */
@@ -1235,6 +1239,7 @@ static void forget_keys(void)
 {
     key_req[0] = '\0';
     key_runs.nruns = 0;
+    wheel.dir = 0;
 }
 
 /* Send the oldest waiting run when no k is in flight. A run waits on while
@@ -1662,11 +1667,16 @@ int agents_screen(void)
         {
             /* No list to scroll: the wheel is the arrow keys */
             action = get_action(CONTEXT_AGENTS, ANIM_TICKS);
+            int dir = 0;
             if (action == ACTION_STD_PREV || action == ACTION_STD_PREVREPEAT)
-                send_key("left");
+                dir = -1;
             else if (action == ACTION_STD_NEXT ||
                      action == ACTION_STD_NEXTREPEAT)
-                send_key("right");
+                dir = 1;
+            const char *key = dir ? hr_wheel_step(&wheel, current_tick, dir,
+                                                  WHEEL_FAST) : NULL;
+            if (key)
+                send_key(key);
         }
         else if (list_do_action(CONTEXT_AGENTS, ANIM_TICKS, &list, &action))
         {

@@ -13,7 +13,9 @@ import threading
 
 TOOLS = ("auto", "ydotool", "wtype")
 KEYS = {"bs": (14, "BackSpace"), "left": (105, "Left"),
-        "right": (106, "Right"), "enter": (28, "Return")}
+        "right": (106, "Right"), "enter": (28, "Return"),
+        "wleft": (105, "Left"), "wright": (106, "Right")}
+WORD_KEYS = frozenset(("wleft", "wright"))
 MAX_COUNT = 32
 KEY_DELAY_MS = 2
 TOOL_TIMEOUT = 0.5
@@ -56,7 +58,7 @@ def parse_key_scale(value):
 
 
 def tool_timeout(count):
-    # More than the 2 ms delay for each of the batch's two events per tap.
+    # More than the 2 ms delay for up to four events per tap (word keys).
     return TOOL_TIMEOUT + count * 0.01
 
 
@@ -95,15 +97,24 @@ class KeyTool:
         path = shutil.which("ydotool") if self.tool in ("auto", "ydotool") else None
         if path and socket_exists(socket_path()):
             env["YDOTOOL_SOCKET"] = socket_path()
+            tap = ["%d:1" % code, "%d:0" % code]
+            release_events = ["%d:0" % code]
+            if key in WORD_KEYS:
+                tap = ["29:1"] + tap + ["29:0"]
+                release_events.append("29:0")
             command = [path, "key", "--key-delay=%d" % KEY_DELAY_MS]
-            command += ["%d:1" % code, "%d:0" % code] * count
-            release = [path, "key", "%d:0" % code]
+            command += tap * count
+            release = [path, "key"] + release_events
         else:
             path = shutil.which("wtype") if self.tool in ("auto", "wtype") else None
             if not path:
                 raise KeyInputError("Key tool unavailable")
-            command = [path] + ["-k", symbol] * count
+            tap = ["-k", symbol]
             release = [path, "-p", symbol]
+            if key in WORD_KEYS:
+                tap = ["-M", "ctrl"] + tap + ["-m", "ctrl"]
+                release += ["-m", "ctrl"]
+            command = [path] + tap * count
         try:
             self._run(command, env, tool_timeout(count))
         except (OSError, subprocess.SubprocessError) as error:

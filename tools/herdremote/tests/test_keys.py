@@ -63,15 +63,69 @@ class ToolTests(unittest.TestCase):
                     with self.subTest(tool=tool, count=count, key=key):
                         self.run.reset_mock()
                         hrkeys.KeyTool(tool).tap(key, count)
+                        ydo_tap = [str(code) + ":1", str(code) + ":0"]
+                        wtype_tap = ["-k", symbol]
+                        if key in ("wleft", "wright"):
+                            ydo_tap = ["29:1"] + ydo_tap + ["29:0"]
+                            wtype_tap = ["-M", "ctrl"] + wtype_tap + ["-m", "ctrl"]
                         expected = (["/mock/ydotool", "key", "--key-delay=2"] +
-                                    [str(code) + ":1", str(code) + ":0"] * count
+                                    ydo_tap * count
                                     if tool == "ydotool" else
-                                    ["/mock/wtype"] + ["-k", symbol] * count)
+                                    ["/mock/wtype"] + wtype_tap * count)
                         self.run.assert_called_once()
                         self.assertEqual(self.run.call_args.args[0], expected)
                         self.assertEqual(self.run.call_args.kwargs["timeout"],
                                          hrkeys.tool_timeout(count))
         self.assertGreater(hrkeys.tool_timeout(32), hrkeys.tool_timeout(1))
+
+    def test_word_keys_have_exact_ctrl_arrow_sequence_per_tap(self):
+        for key, code, symbol in (("wleft", "105", "Left"), ("wright", "106", "Right")):
+            for count in (1, 32):
+                with self.subTest(key=key, count=count):
+                    self.run.reset_mock()
+                    hrkeys.KeyTool("ydotool").tap(key, count)
+                    self.run.assert_called_once()
+                    self.assertEqual(self.run.call_args.args[0],
+                                     ["/mock/ydotool", "key", "--key-delay=2"] +
+                                     ["29:1", code + ":1", code + ":0", "29:0"] * count)
+                    self.run.reset_mock()
+                    hrkeys.KeyTool("wtype").tap(key, count)
+                    self.run.assert_called_once()
+                    self.assertEqual(self.run.call_args.args[0], ["/mock/wtype"] +
+                                     ["-M", "ctrl", "-k", symbol, "-m", "ctrl"] * count)
+        # The scaled timeout still covers four 2 ms events per word tap.
+        self.assertGreater(hrkeys.tool_timeout(32), 32 * 4 * .002)
+
+    def test_failed_word_batch_releases_arrow_and_ctrl_only(self):
+        for key, code, symbol in (("wleft", "105", "Left"), ("wright", "106", "Right")):
+            for tool in ("ydotool", "wtype"):
+                for error in (OSError("missing"), subprocess.CalledProcessError(1, tool),
+                              subprocess.TimeoutExpired(tool, .82)):
+                    with self.subTest(key=key, tool=tool, error=type(error).__name__):
+                        self.run.reset_mock()
+                        self.which.reset_mock()
+                        self.run.side_effect = [error, None]
+                        with self.assertRaisesRegex(hrkeys.KeyInputError, "Key tool failed"):
+                            hrkeys.KeyTool(tool).tap(key, 32)
+                        self.assertEqual(self.run.call_count, 2)
+                        expected = (["/mock/ydotool", "key", code + ":0", "29:0"]
+                                    if tool == "ydotool" else
+                                    ["/mock/wtype", "-p", symbol, "-m", "ctrl"])
+                        self.assertEqual(self.run.call_args.args[0], expected)
+                        self.assertEqual(self.run.call_args.kwargs["timeout"], .5)
+                        self.assertNotIn(mock.call("wtype" if tool == "ydotool" else "ydotool"),
+                                         self.which.call_args_list)
+
+    def test_word_release_failure_is_bounded_and_never_retries_batch(self):
+        for tool, release in (("ydotool", ["/mock/ydotool", "key", "106:0", "29:0"]),
+                              ("wtype", ["/mock/wtype", "-p", "Right", "-m", "ctrl"])):
+            with self.subTest(tool=tool):
+                self.run.reset_mock()
+                self.run.side_effect = subprocess.TimeoutExpired(tool, .82)
+                with self.assertRaisesRegex(hrkeys.KeyInputError, "Key tool failed"):
+                    hrkeys.KeyTool(tool).tap("wright", 32)
+                self.assertEqual(self.run.call_count, 2)
+                self.assertEqual(self.run.call_args.args[0], release)
 
     def test_tool_rejects_bad_count_before_discovery(self):
         for count in (0, 33, -1, "", "x", "1.0", "1e1", "+2", " 2", "１２", True, 2.0):
@@ -119,7 +173,7 @@ class ToolTests(unittest.TestCase):
         self.assertEqual(self.run.call_args.args[0], ["/mock/ydotool", "key", "14:0"])
 
     def test_tool_whitelist_rejects_every_other_key(self):
-        for key in ("BS", "delete", "ctrl+a", "a", "", "bs; exit", "Return"):
+        for key in ("BS", "delete", "ctrl+a", "ctrl+left", "a", "", "bs; exit", "Return"):
             with self.subTest(key=key), self.assertRaisesRegex(hrkeys.KeyInputError, "Unsupported key"):
                 hrkeys.KeyTool("auto").tap(key)
         self.run.assert_not_called()
@@ -164,19 +218,20 @@ class TapFixture:
 
 class TapTests(TapFixture, unittest.TestCase):
     def test_exact_whitelist_and_silent_results(self):
-        for index, key in enumerate(("bs", "left", "right", "enter")):
+        keys = ("bs", "left", "right", "enter", "wleft", "wright")
+        for index, key in enumerate(keys):
             self.assertIsNone(self.taps.request(str(index), key))
             DeferredWorker.jobs[-1].finish()
             self.assertEqual(self.taps.replies(), [(str(index), True, None)])
-        self.assertEqual(self.tool.tap.call_args_list, [mock.call(k, 1) for k in ("bs", "left", "right", "enter")])
+        self.assertEqual(self.tool.tap.call_args_list, [mock.call(k, 1) for k in keys])
         for key in ("delete", "a", "BackSpace", "BS", ""):
             self.assertEqual(self.taps.request("9", key), (False, "Unsupported key"))
-        self.assertEqual(len(DeferredWorker.jobs), 4)
+        self.assertEqual(len(DeferredWorker.jobs), 6)
 
     def test_busy_is_shared_and_no_batch_is_queued(self):
         self.assertIsNone(self.taps.request("1", "bs"))
         for index in range(100):
-            self.assertEqual(self.taps.request("2", ("left", "right", "enter")[index % 3]),
+            self.assertEqual(self.taps.request("2", ("left", "right", "enter", "wleft", "wright")[index % 5]),
                              (False, "Key busy"))
         self.assertEqual(len(DeferredWorker.jobs), 1)
         DeferredWorker.jobs[0].finish()
@@ -204,6 +259,16 @@ class TapTests(TapFixture, unittest.TestCase):
         for count in (0, 33, -1, "", "bad", "2.0", True):
             self.assertEqual(self.taps.request("1", "left", count), (False, "Invalid key count"))
         self.assertEqual(len(DeferredWorker.jobs), jobs)
+
+    def test_word_keys_are_never_scaled(self):
+        for scale in (1, 3, 8):
+            self.taps.key_scale = scale
+            for key in ("wleft", "wright"):
+                for count in (1, 7, 32):
+                    with self.subTest(scale=scale, key=key, count=count):
+                        self.assertIsNone(self.taps.request("1", key, count))
+                        DeferredWorker.jobs[-1].finish()
+                        self.tool.tap.assert_called_with(key, count)
 
     def test_reset_cancels_unstarted_tap_and_stale_replies(self):
         self.taps.request("1", "bs")
@@ -253,7 +318,7 @@ class TapTests(TapFixture, unittest.TestCase):
 
 class ProtocolTests(unittest.TestCase):
     def test_command_and_exact_three_field_success(self):
-        for key in ("bs", "left", "right", "enter", "unsupported"):
+        for key in ("bs", "left", "right", "enter", "wleft", "wright", "unsupported"):
             self.assertEqual(hrproto.parse_command(("k\t1\t" + key).encode()), ("k", ["1", key]))
             self.assertEqual(hrproto.parse_command(("k\t1\t" + key + "\t32").encode()),
                              ("k", ["1", key, "32"]))
@@ -310,7 +375,7 @@ class DaemonTests(TapFixture, unittest.TestCase):
         self.daemon.command(b"hr\t1")
 
     def test_daemon_key_dispatch_and_silent_reply_without_herdr_focus(self):
-        for index, key in enumerate(("bs", "left", "right", "enter")):
+        for index, key in enumerate(("bs", "left", "right", "enter", "wleft", "wright")):
             self.daemon.command(("k\t%d\t%s" % (index, key)).encode())
             DeferredWorker.jobs[-1].finish()
             self.daemon.push()
@@ -394,10 +459,11 @@ class KeyLinkTests(unittest.TestCase):
             self.ipod.close()
 
     def test_all_taps_over_wire_are_silent_and_do_not_target_herdr(self):
-        for index, key in enumerate(("bs", "left", "right", "enter")):
+        keys = ("bs", "left", "right", "enter", "wleft", "wright")
+        for index, key in enumerate(keys):
             self.ipod.send("k\t%d\t%s" % (index, key))
             self.assertEqual(self.ipod.wait_for("R"), [["R", str(index), "ok"]])
-        self.assertEqual(self.tool.tap.call_args_list, [mock.call(k, 1) for k in ("bs", "left", "right", "enter")])
+        self.assertEqual(self.tool.tap.call_args_list, [mock.call(k, 1) for k in keys])
         self.assertFalse(any(method.endswith(".focus") or method == "pane.send_keys"
                              for method, _ in self.herdr.calls))
 
@@ -409,12 +475,13 @@ class KeyLinkTests(unittest.TestCase):
     def test_counts_over_wire_and_old_command_remains_compatible(self):
         self.daemon.keys.key_scale = 3
         for index, (key, count, expected) in enumerate((("right", 4, 12), ("left", 32, 32),
-                                                       ("bs", 8, 8), ("enter", 2, 2))):
+                                                       ("bs", 8, 8), ("enter", 2, 2),
+                                                       ("wleft", 4, 4), ("wright", 32, 32))):
             self.ipod.send("k\t%d\t%s\t%d" % (index, key, count))
             self.assertEqual(self.ipod.wait_for("R"), [["R", str(index), "ok"]])
             self.tool.tap.assert_called_with(key, expected)
-        self.ipod.send("k\t4\tright")
-        self.assertEqual(self.ipod.wait_for("R"), [["R", "4", "ok"]])
+        self.ipod.send("k\t6\tright")
+        self.assertEqual(self.ipod.wait_for("R"), [["R", "6", "ok"]])
         self.tool.tap.assert_called_with("right", 3)
 
     def test_invalid_count_over_wire(self):
