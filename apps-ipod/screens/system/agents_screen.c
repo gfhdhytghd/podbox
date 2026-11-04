@@ -22,10 +22,11 @@
  * question, and sends nothing to the computer. LEFT and MENU go back one
  * view; only MENU leaves, from the spaces view.
  *
- * Play held talks to the computer: its press sends vd with the selected
- * workspace or pane, its release vu, and the computer's voice input types
- * what is said into that pane. A band at the foot of the list shows the
- * recording and then its result. Held Play does not power off here.
+ * Play held talks to the computer, in every view: its press sends vd with
+ * the selected workspace or pane ("-" in usage), its release vu, and the
+ * computer's voice input types what is said. A band at the foot of the list
+ * shows the recording and then its result. Held Play does not power off
+ * here.
  *
  * The theme draws the rows. The screen is %cs 40, and each row's %Lv is a
  * style letter, an icon letter and the text for the row's right-hand side:
@@ -1180,7 +1181,7 @@ static void talk_result(const char *text, bool failed)
 static void start_talk(struct gui_synclist *list)
 {
     char target[24];
-    if (talk_held || view == VIEW_USAGE)
+    if (talk_held)
         return;
     if (podlink_state() != PODLINK_CONNECTED || !model.hello)
     {
