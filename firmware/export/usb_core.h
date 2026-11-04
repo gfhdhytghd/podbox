@@ -55,6 +55,10 @@ struct usb_class_driver;
 
 void usb_core_init(void);
 void usb_core_exit(void);
+/* Read-only device-stack diagnostics; state is DEFAULT/ADDRESS/CONFIGURED
+ * as 0/1/2, independent of usb.c's cable and exclusive-storage states. */
+bool usb_core_is_enabled(void);
+int usb_core_get_state(void);
 /* True if the host wrote to mass storage during the connect that just ended.
  * False means the disk is byte-for-byte as we left it, so the post-USB
  * database and dircache rebuild can be skipped entirely. */
@@ -79,6 +83,17 @@ int usb_charging_get_mode(void);
 /* Active host grant only; 0 if unconfigured, suspended, reset or unplugged.
  * Unlike maxcurrent, this excludes force/no-host and DAC allowances. */
 int usb_charging_current_grant(void);
+#ifdef IPOD_6G
+struct usb_charge_guard_status {
+    unsigned int dropouts; /* completed short pulses in the observation window */
+    unsigned int triggers;
+    unsigned int backoff_seconds;
+    unsigned int next_backoff_seconds;
+    long last_trigger_tick; /* meaningful when triggers > 0 */
+};
+void usb_charging_guard_reset(void);
+void usb_charging_guard_get_status(struct usb_charge_guard_status *status);
+#endif
 #endif
 void usb_core_enable_driver(int driver,bool enabled);
 bool usb_core_driver_enabled(int driver);

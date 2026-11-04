@@ -535,6 +535,16 @@ void usb_core_init(void)
     logf("usb_core_init() finished");
 }
 
+bool usb_core_is_enabled(void)
+{
+    return initialized;
+}
+
+int usb_core_get_state(void)
+{
+    return usb_state;
+}
+
 /* Exposed here because usb_storage.h is private to the stack; the app layer
  * uses this to skip the post-USB database and dircache rebuild when the host
  * only ever read from us. */
@@ -1754,6 +1764,9 @@ void usb_core_bus_suspend(bool suspended)
 void usb_charging_enable(int state)
 {
     usb_charging_mode = state;
+#ifdef IPOD_6G
+    usb_charging_guard_reset();
+#endif
     usb_charging_maxcurrent_change(usb_charging_maxcurrent());
 }
 

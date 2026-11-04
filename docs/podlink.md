@@ -133,15 +133,16 @@ PodLink and normal storage use the same saved **Charge During USB Connection**
 setting (**Settings > Battery & Power**). With `on` or `force`, both request 500 mA
 (`bMaxPower` byte 250, in 2 mA units). With `off`, both request 100 mA
 (`bMaxPower` byte 50) and do not enable USB battery charging, including the
-unconfigured wall-charger probe. The default is `on`; an absent `usb charging`
+unconfigured state. The default is `on`; an absent `usb charging`
 line in config.cfg uses that default. Select the setting before reconnecting:
 a host's existing 100 mA
 grant is not raised merely because the setting changed.
 
 Before configuration, the device restores USB input to 100 mA on every attach,
-including after boot settings or unplug set SUSP. With `on`, a host that never
-configures us stays at that safe limit; the target's existing no-host charger
-probe may enable battery charging within the same 100 mA total budget. `force`
+including after boot settings or unplug set SUSP. With `on`, charging is enabled
+at that safe limit even before a computer configures us, with the backlight
+lit or dark. Charge Only keeps the USB device stack running in the normal UI
+so the computer can configure a 500 mA grant. `force`
 retains the explicit 500 mA no-host override after ten seconds. This override
 is not a negotiated host grant. A configured
 500 mA source enables the iPod6g charger and reports a charging source to the
@@ -149,7 +150,31 @@ battery status bar, without waiting for a storage-mode handover. Suspend
 disables USB input and battery charging; resume restores the existing grant.
 Unplug clears the grant. A bus reset requires configuration again. The
 LTC4066 still controls battery charge termination and the battery's charge
-current (the 500 mA limit includes device consumption).
+current (the 100/500 mA limit includes device consumption).
+
+On iPod6g, an automatic weak-source guard monitors `!CHRG` every 10 ms whenever
+USB battery charging is enabled, including the normal UI, PodLink, wall
+chargers and the powered USB host-DAC path. A qualified dropout is 20-490 ms
+high following at least one second low. Eight completed dropouts in a rolling
+90-second window inhibit battery charging for 1, 2, 4, 8, 16, then at most
+30 minutes on successive detections. SUSP and HPWR retain the applicable USB
+budget during this back-off; the battery icon reports USB power without a
+charging source. Each pause ends in an automatic retry. Unplugging or applying
+the charging setting resets the guard; ten continuous minutes of low `!CHRG`
+reset the next delay to one minute. Suspend stops sampling and clears partial
+pulse evidence; resume observes a new trace and respects any remaining pause.
+
+A steady high pin, including full-battery indication or a long thermal pause,
+does not trigger the guard. Repeated load/source/temperature transitions that
+match the same short-pulse signature can cause a temporary false trigger;
+`!CHRG` does not identify a DAC or measure battery current. A configured MFi DAC
+can receive a 500 mA grant just like a PC, so enumeration never bypasses the
+guard. The separate USB host-audio path is known via `usb_host_probe_active()`;
+its external-VBUS 500 mA allowance is not a computer's negotiated grant.
+**System > Debug > Battery** shows C1/C2, SUSP, HPWR, host grant, USB device
+state (0=Default, 1=Address, 2=Configured), host presence, stack enabled,
+dropout/trigger counts, remaining back-off, next delay and last trigger time
+in seconds since boot. No physical charging result follows from these fields.
 
 Run the production USB core and iPod6g power code against RAM-backed hardware:
 

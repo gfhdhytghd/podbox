@@ -25,7 +25,6 @@
 #include "panic.h"
 #include "pmu-target.h"
 #include "usb_core.h"   /* for usb_charging_maxcurrent_change */
-#include "backlight.h"
 #include "timeout.h"
 #if defined(HAVE_COMPOSITE_VIDEO_OUT) && !defined(BOOTLOADER)
 #include "videoout.h"
@@ -108,188 +107,198 @@ bool ide_powered()
 
 #if CONFIG_CHARGING
 
-/* The current the USB side has committed to: 500 from a computer that
- * configured the player, from USB Charging = Force with no computer, or from
- * a charger feeding a USB DAC. A 500 mA commitment enables C1 and reports
- * a charging source immediately, independently of the wall-charger probe. */
-static int usb_committed_ma;
+/* Eight completed short !CHRG-high pulses in 90 s match the old eight-
+ * dropout threshold and its reported 5-10 s repetition. Steady high means
+ * full/paused, not oscillation. Qualify each pulse with 1 s of preceding
+ * charge, reject 10 ms glitches and >=500 ms pauses. These are policy
+ * thresholds, not a source-identity or battery-current measurement. */
+#define CHRG_DROPOUTS          8
+#define CHRG_WINDOW            (90*HZ)
+#define CHRG_PULSE_MIN         2
+#define CHRG_PULSE_MAX         (HZ/2)
+#define CHRG_LOW_MIN           HZ
+#define CHRG_BACKOFF_FIRST     (60*HZ)
+#define CHRG_BACKOFF_MAX       (30*60*HZ)
+#define CHRG_STABLE_RESET      (10*60*HZ)
 
-/* A charger proven by power_input_status() while it probes. It keeps
- * C1 low whatever the USB side commits to: the stack's no-host timeout drops
- * the commitment to 100 mA, and blocking charging then would leave a wall
- * charger unused until the screen next comes on. */
-static bool usb_charger_detected;
+static struct timeout chrg_monitor_tmo;
+/* ISR owns sampling; thread accesses/reset take the IRQ lock. */
+static volatile bool chrg_monitoring, chrg_backoff, chrg_pulse_armed;
+static volatile unsigned int chrg_low_ticks, chrg_high_ticks;
+static volatile unsigned int chrg_stable_ticks;
+static volatile unsigned int chrg_count, chrg_head, chrg_triggers;
+static volatile long chrg_pulses[CHRG_DROPOUTS];
+static volatile long chrg_retry_at, chrg_last_trigger;
+static volatile int chrg_next_backoff = CHRG_BACKOFF_FIRST;
+
+static void chrg_clear_trace(void)
+{
+    chrg_low_ticks = chrg_high_ticks = chrg_stable_ticks = 0;
+    chrg_pulse_armed = false;
+    chrg_count = chrg_head = 0;
+}
+
+static void chrg_stop_monitor(void)
+{
+    if (chrg_monitoring)
+        timeout_cancel(&chrg_monitor_tmo);
+    chrg_monitoring = false;
+}
+
+void usb_charging_guard_reset(void)
+{
+    int oldlevel = disable_irq_save();
+    chrg_stop_monitor();
+    chrg_clear_trace();
+    chrg_backoff = false;
+    chrg_triggers = 0;
+    chrg_last_trigger = chrg_retry_at = 0;
+    chrg_next_backoff = CHRG_BACKOFF_FIRST;
+    restore_irq(oldlevel);
+}
+
+/* Tick ISR: one !CHRG GPIO read while enabled. Never count the guard's own
+ * inhibit pulse. Stop sampling during back-off, off, unplug and suspend. */
+static int chrg_monitor_cb(struct timeout *tmo)
+{
+    (void)tmo;
+    if (usb_detect() != USB_INSERTED ||
+        usb_charging_get_mode() == USB_CHARGING_DISABLE)
+    {
+        usb_charging_guard_reset();
+        return 0;
+    }
+    if (usb_charging_maxcurrent() < 100)
+    {
+        chrg_monitoring = false;
+        chrg_clear_trace();
+        return 0;
+    }
+
+    long now = current_tick;
+    while (chrg_count &&
+           TIME_BEFORE(chrg_pulses[chrg_head] + CHRG_WINDOW, now))
+    {
+        chrg_head = (chrg_head + 1) % CHRG_DROPOUTS;
+        --chrg_count;
+    }
+    if (PDAT(11) & 0x10)
+    {
+        if (!chrg_high_ticks)
+            chrg_pulse_armed = chrg_low_ticks >= CHRG_LOW_MIN;
+        chrg_low_ticks = chrg_stable_ticks = 0;
+        if (chrg_high_ticks < CHRG_PULSE_MAX)
+            ++chrg_high_ticks;
+        if (chrg_high_ticks == CHRG_PULSE_MAX)
+        {
+            /* Full battery/thermal pause: discard even partial evidence. */
+            chrg_count = chrg_head = 0;
+            chrg_pulse_armed = false;
+        }
+    }
+    else
+    {
+        if (chrg_pulse_armed && chrg_high_ticks >= CHRG_PULSE_MIN &&
+            chrg_high_ticks < CHRG_PULSE_MAX)
+        {
+            unsigned int tail = (chrg_head + chrg_count) % CHRG_DROPOUTS;
+            chrg_pulses[tail] = now;
+            if (++chrg_count == CHRG_DROPOUTS)
+            {
+                chrg_backoff = true;
+                chrg_last_trigger = now;
+                ++chrg_triggers;
+                chrg_retry_at = now + chrg_next_backoff;
+                chrg_next_backoff = MIN(chrg_next_backoff * 2,
+                                        CHRG_BACKOFF_MAX);
+                chrg_monitoring = false;
+                GPIOCMD = 0xc010f; /* C1 only; USB still powers the load. */
+                return 0;
+            }
+        }
+        chrg_high_ticks = 0;
+        chrg_pulse_armed = false;
+        if (chrg_low_ticks < CHRG_LOW_MIN)
+            ++chrg_low_ticks;
+        if (chrg_stable_ticks < CHRG_STABLE_RESET &&
+            ++chrg_stable_ticks == CHRG_STABLE_RESET)
+        {
+            chrg_next_backoff = CHRG_BACKOFF_FIRST;
+            chrg_count = chrg_head = 0;
+        }
+    }
+    return 1;
+}
+
+/* Apply only C1 here: the USB core's budget remains authoritative for
+ * SUSP/HPWR. Both thread callers use this same policy. */
+static bool usb_charge_apply(int maxcurrent)
+{
+    int oldlevel = disable_irq_save();
+    bool enabled = usb_detect() == USB_INSERTED && maxcurrent >= 100 &&
+                   usb_charging_get_mode() != USB_CHARGING_DISABLE;
+    if (usb_detect() != USB_INSERTED ||
+        usb_charging_get_mode() == USB_CHARGING_DISABLE)
+        usb_charging_guard_reset();
+    else if (!enabled)
+    {
+        chrg_stop_monitor();
+        chrg_clear_trace();
+    }
+    else
+    {
+        if (chrg_backoff && !TIME_BEFORE(current_tick, chrg_retry_at))
+        {
+            chrg_backoff = false;
+            chrg_clear_trace();
+        }
+        enabled = !chrg_backoff;
+        if (enabled && !chrg_monitoring)
+        {
+            chrg_monitoring = true;
+            timeout_register(&chrg_monitor_tmo, chrg_monitor_cb, 1, 0);
+        }
+    }
+    GPIOCMD = 0xc010e | (enabled ? 0 : 1);
+    restore_irq(oldlevel);
+    return enabled;
+}
+
+void usb_charging_guard_get_status(struct usb_charge_guard_status *status)
+{
+    int oldlevel = disable_irq_save();
+    status->dropouts = chrg_count;
+    status->triggers = chrg_triggers;
+    status->last_trigger_tick = chrg_last_trigger;
+    status->backoff_seconds = chrg_backoff &&
+        TIME_BEFORE(current_tick, chrg_retry_at) ?
+        (chrg_retry_at - current_tick + HZ - 1) / HZ : 0;
+    status->next_backoff_seconds = chrg_next_backoff / HZ;
+    restore_irq(oldlevel);
+}
 
 #ifdef HAVE_USB_CHARGING_ENABLE
 void usb_charging_maxcurrent_change(int maxcurrent)
 {
-    bool suspend_charging = (maxcurrent < 100);
-    bool fast_charging = (maxcurrent >= 500);
-
-    usb_committed_ma = maxcurrent;
-    if (usb_charging_get_mode() == USB_CHARGING_DISABLE
-#ifndef BOOTLOADER
-        || usb_host_is_present()
-#endif
-       )
-        usb_charger_detected = false;
-
-    /* This GPIO is connected to the LTC4066's SUSP pin */
-    /* Setting it high prevents any power being drawn over USB */
-    /* which supports USB suspend */
-    GPIOCMD = 0xb070e | (suspend_charging ? 1 : 0);
-
-    /* This GPIO is connected to the LTC4066's HPWR pin */
-    /* Setting it low limits current to 100mA, setting it high allows 500mA */
-    GPIOCMD = 0xb060e | (fast_charging ? 1 : 0);
-
-    /* GPIO C1: disable battery charging when USB current commitment
-     * is insufficient (< 500mA).  This prevents charge oscillation
-     * when connected to MFi DACs without power bank, where the
-     * source can't deliver enough for device + charge current.
-     * Device still draws operating power from USB; battery only
-     * supplements if USB is insufficient. */
-    GPIOCMD = 0xc010e | ((!suspend_charging &&
-                        (fast_charging || usb_charger_detected)) ? 0 : 1);
+    /* LTC4066 SUSP: high blocks USB input. HPWR: 100/500 mA total input.
+     * Normally C1 is low at either limit: the chip prioritizes system load
+     * and reduces battery current. Only observed oscillation pauses charge. */
+    GPIOCMD = 0xb070e | (maxcurrent < 100 ? 1 : 0);
+    GPIOCMD = 0xb060e | (maxcurrent >= 500 ? 1 : 0);
+    usb_charge_apply(maxcurrent);
 }
 #endif
-
-static struct timeout chrg_monitor_tmo;
-static volatile bool chrg_saw_discharge;
-
-/* Runs from tick ISR every 10ms.  Catches brief !CHRG HIGH
- * pulses that the 500ms power thread polling misses.  At high
- * battery (>80%), the LTC4066 sustains low charge current from
- * weak USB sources but briefly drops out every 5-10s for <500ms. */
-static int chrg_monitor_cb(struct timeout *tmo)
-{
-    (void)tmo;
-    if (PDAT(11) & 0x10)   /* !CHRG HIGH = not charging */
-        chrg_saw_discharge = true;
-    return 1;  /* re-run next tick (10ms) */
-}
-
-/* How long a cable just plugged in is probed for with the screen dark. A wall
- * charger is only reported as one once proven, and only a reported charger
- * turns the backlight on, so without this a player plugged in dark is never
- * charged. Eight samples plus room for the charger's own start-up. */
-#define CHRG_PROBE_ON_INSERT (10*HZ)
 
 unsigned int power_input_status(void)
 {
-    static bool was_probing;
-    static bool monitoring;
-    static bool inserted;
-    static long probe_until;
-    static int debounce;
     unsigned int status = POWER_INPUT_NONE;
+    bool enabled = usb_charge_apply(usb_charging_maxcurrent());
     if (usb_detect() == USB_INSERTED)
     {
         status |= POWER_INPUT_USB;
-        /* A host's negotiated grant is authoritative, including PodLink:
-         * no storage handover or !CHRG debounce is needed to report it.
-         * Never let the wall-charger probe override a host's current limit
-         * or USB suspend. This also respects Charge During USB = off. */
-        int maxcurrent = usb_charging_maxcurrent();
-        if (maxcurrent >= 500 || maxcurrent < 100 ||
-            usb_charging_get_mode() == USB_CHARGING_DISABLE
-#ifndef BOOTLOADER
-            || usb_host_is_present()
-#endif
-           )
-        {
-            if (monitoring)
-            {
-                timeout_cancel(&chrg_monitor_tmo);
-                monitoring = false;
-            }
-            usb_charger_detected = false;
-            was_probing = false;
-            inserted = true;
-            debounce = 0;
-            GPIOCMD = 0xc010e | (maxcurrent >= 500 ? 0 : 1);
-            if (maxcurrent >= 500)
-                status |= POWER_INPUT_USB_CHARGER;
-            goto usb_done;
-        }
-        if (!inserted)
-        {
-            inserted = true;
-            probe_until = current_tick + CHRG_PROBE_ON_INSERT;
-        }
-        /* Probe while the screen is on, or a cable has just gone in */
-        bool probing = is_backlight_on(true) ||
-                       TIME_BEFORE(current_tick, probe_until);
-        if (probing && !was_probing)
-        {
-            /* Probing starts: C1 low, start monitor */
-            GPIOCMD = 0xc010e | 0;  /* C1 LOW */
-            chrg_saw_discharge = false;
-            debounce = 0;
-            if (!monitoring)
-            {
-                timeout_register(&chrg_monitor_tmo, chrg_monitor_cb,
-                                 1, 0);
-                monitoring = true;
-            }
-        }
-        else if (probing)
-        {
-            /* Proven by eight polls in a row with no dropout */
-            if (!usb_charger_detected)
-            {
-                if (chrg_saw_discharge)
-                    debounce = 0;
-                else if (++debounce >= 8)
-                {
-                    usb_charger_detected = true;
-                    debounce = 0;
-                }
-            }
-            /* Dropped once the supply has cut out and come back eight
-             * times, as a power bank switched off behind a DAC does. Not
-             * reset between them, so a ~50/50 oscillation still adds up.
-             * !CHRG held high is a full battery, not a dropout. */
-            else if (chrg_saw_discharge && charging_state())
-            {
-                if (++debounce >= 8)
-                {
-                    usb_charger_detected = false;
-                    debounce = 0;
-                }
-            }
-            chrg_saw_discharge = false;
-        }
-        else
-        {
-            /* Not probing: stop monitor, control C1 */
-            if (monitoring)
-            {
-                timeout_cancel(&chrg_monitor_tmo);
-                monitoring = false;
-            }
-            if (!usb_charger_detected && usb_committed_ma < 500)
-                GPIOCMD = 0xc010e | 1;  /* C1 HIGH: block */
-        }
-        /* Not probing + charger detected: C1 stays LOW, charging
-         * continues from the real charger source. */
-        if (usb_charger_detected)
+        if (enabled)
             status |= POWER_INPUT_USB_CHARGER;
-        was_probing = probing;
     }
-    else
-    {
-        if (monitoring)
-        {
-            timeout_cancel(&chrg_monitor_tmo);
-            monitoring = false;
-        }
-        usb_charger_detected = false;
-        was_probing = false;
-        inserted = false;
-        debounce = 0;
-    }
-usb_done:
     if (pmu_firewire_present())
         status |= POWER_INPUT_MAIN_CHARGER;
     return status;

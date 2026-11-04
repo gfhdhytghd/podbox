@@ -699,8 +699,8 @@ static bool view_battery(void)
                           !!(input & POWER_INPUT_MAIN_CHARGER));
                 lcd_putsf(0, 6, "Host grant: %d mA",
                           usb_charging_current_grant());
-                lcd_putsf(0, 7, "Charge enabled: %d (C1/2)",
-                          !(gpio_c & 6));
+                lcd_putsf(0, 7, "Charge enabled: %d C1:%d C2:%d",
+                          !(gpio_c & 6), !!(gpio_c & 2), !!(gpio_c & 4));
                 lcd_putsf(0, 8, "USB setting: %s",
                           usb_charging_get_mode() == USB_CHARGING_DISABLE ?
                           "off" : usb_charging_get_mode() == USB_CHARGING_FORCE ?
@@ -708,6 +708,18 @@ static bool view_battery(void)
                 lcd_putsf(0, 9, "SUSP: %d HPWR: %d",
                           !!(gpio_b & 0x80), !!(gpio_b & 0x40));
                 lcd_putsf(0, 10, "Battery: %d mV", y);
+                lcd_putsf(0, 11, "USB state: %d (0=D 1=A 2=C)",
+                          usb_core_get_state());
+                lcd_putsf(0, 12, "Host: %d Stack: %d",
+                          usb_host_is_present(), usb_core_is_enabled());
+                struct usb_charge_guard_status guard;
+                usb_charging_guard_get_status(&guard);
+                lcd_putsf(0, 13, "Dropouts: %u/8 Triggers: %u",
+                          guard.dropouts, guard.triggers);
+                lcd_putsf(0, 14, "Backoff: %us Next: %us",
+                          guard.backoff_seconds, guard.next_backoff_seconds);
+                lcd_putsf(0, 15, "Last trigger: %lds (boot)",
+                          guard.last_trigger_tick / HZ);
 #endif
 #endif /* target type */
                 break;

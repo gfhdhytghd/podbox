@@ -1,6 +1,7 @@
 #ifndef CHARGING_TEST_CONFIG_H
 #define CHARGING_TEST_CONFIG_H
 #define __CONFIG_H__
+#define IPOD_6G
 #define HAVE_USB_CHARGING_ENABLE
 #define HAVE_USB_POWER
 #define HAVE_USBSTACK
