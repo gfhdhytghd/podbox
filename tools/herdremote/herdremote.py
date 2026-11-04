@@ -124,7 +124,8 @@ class Daemon:
         self.port = self.link = None
         self.stopping = threading.Event()
         self.usage = hrusage.UsageCache()
-        self.keys = hrkeys.KeyTaps(hrkeys.KeyTool(getattr(args, "key_tool", None)))
+        self.keys = hrkeys.KeyTaps(hrkeys.KeyTool(getattr(args, "key_tool", None)),
+                                  key_scale=getattr(args, "key_scale", None))
         self.voice = hrvoice.HoldToTalk(
             self.voice_focus_target,
             voice_focus=getattr(args, "voice_focus", False),
@@ -266,9 +267,9 @@ class Daemon:
             else:
                 self.answerer.jobs.put((req, q, int(number)))
 
-    def key_command(self, req, key):
+    def key_command(self, req, key, count=1):
         result = ((False, "Session not ready") if self.sent_ws is None else
-                  self.keys.request(req, key))
+                  self.keys.request(req, key, count))
         if result is not None:
             self.send(hrproto.result(req, *result))
 

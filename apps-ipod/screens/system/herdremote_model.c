@@ -403,3 +403,43 @@ const struct hr_question *hr_model_question_for(const struct hr_model *m,
             return &m->questions[i];
     return NULL;
 }
+
+static bool hr_keys_opposite(const char *a, const char *b)
+{
+    return (!strcmp(a, "left") && !strcmp(b, "right")) ||
+           (!strcmp(a, "right") && !strcmp(b, "left"));
+}
+
+bool hr_keys_add(struct hr_keys *k, const char *key)
+{
+    struct hr_key_run *last = k->nruns ? &k->runs[k->nruns - 1] : NULL;
+    if (last && !strcmp(last->key, key))
+    {
+        if (last->count >= HR_KEY_COUNT)
+            return false;
+        last->count++;
+        return true;
+    }
+    if (last && hr_keys_opposite(last->key, key))
+    {
+        if (--last->count == 0)
+            k->nruns--;
+        return true;
+    }
+    if (k->nruns == HR_KEY_RUNS)
+        return false;
+    last = &k->runs[k->nruns++];
+    hr_copy(last->key, key, sizeof last->key);
+    last->count = 1;
+    return true;
+}
+
+bool hr_keys_take(struct hr_keys *k, struct hr_key_run *out)
+{
+    if (!k->nruns)
+        return false;
+    *out = k->runs[0];
+    k->nruns--;
+    memmove(&k->runs[0], &k->runs[1], k->nruns * sizeof k->runs[0]);
+    return true;
+}

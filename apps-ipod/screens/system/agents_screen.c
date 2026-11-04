@@ -17,7 +17,8 @@
  *   usage     each AI service's limits, tokens and cost, drawn by this file
  *             over an empty list; RIGHT goes back to spaces. The other keys
  *             type on the computer: LEFT Backspace (once per press and per
- *             repeat), the wheel the Left and Right arrows, SELECT Enter
+ *             repeat), the wheel the Left and Right arrows, SELECT Enter.
+ *             Taps made while one is on its way go together, with a count
  *
  * A pending question puts an alert row at the top of the agents and spaces
  * views. RIGHT opens a workspace, the alert's question or an agent's
@@ -133,12 +134,12 @@ static long talk_until;         /* when the request or the note expires */
 static char talk_note[64];      /* the last result */
 static bool talk_failed;        /* the note is an error */
 static bool talk_shown;         /* the band is on screen */
-/* k frames sent and not yet answered, at most: a fast spin of the wheel
- * drops its steps rather than queue them */
-#define KEY_WINDOW  4
+/* One k is in flight at a time; the taps that come meanwhile wait as runs
+ * with a count, and the next run goes when its R comes */
 #define KEY_LOST    (2 * HZ)    /* a k unanswered this long is forgotten */
-static char key_reqs[KEY_WINDOW][8];
-static long key_sent;           /* when the last k went */
+static char key_req[8];         /* the k in flight */
+static long key_sent;           /* when it went */
+static struct hr_keys key_runs; /* the taps waiting */
 
 /* A free outbox slot, or NULL while the link is wedged (the user can press
  * again) */
@@ -1232,13 +1233,33 @@ static void stop_talk(void)
 
 static void forget_keys(void)
 {
-    for (int i = 0; i < KEY_WINDOW; i++)
-        key_reqs[i][0] = '\0';
+    key_req[0] = '\0';
+    key_runs.nruns = 0;
+}
+
+/* Send the oldest waiting run when no k is in flight. A run waits on while
+ * the outbox is full. */
+static void pump_keys(void)
+{
+    if (key_req[0] && TIME_AFTER(current_tick, key_sent + KEY_LOST))
+        key_req[0] = '\0';
+    if (key_req[0] || !key_runs.nruns)
+        return;
+    char *slot = outbox_slot();
+    struct hr_key_run run;
+    if (!slot || !hr_keys_take(&key_runs, &run))
+        return;
+    take_req(key_req, sizeof key_req);
+    if (run.count == 1)
+        snprintf(slot, sizeof outbox[0], "k\t%s\t%s", key_req, run.key);
+    else
+        snprintf(slot, sizeof outbox[0], "k\t%s\t%s\t%d",
+                 key_req, run.key, run.count);
+    key_sent = current_tick;
 }
 
 /* One key tap on the computer, from the usage view: bs, left, right or
- * enter. Dropped while KEY_WINDOW taps are unanswered or the outbox is
- * full, so a held LEFT or a spun wheel cannot queue a burst. */
+ * enter. A tap past the runs' caps is dropped. */
 static void send_key(const char *key)
 {
     if (podlink_state() != PODLINK_CONNECTED || !model.hello)
@@ -1246,35 +1267,23 @@ static void send_key(const char *key)
         talk_result("No link to the computer", true);
         return;
     }
-    if (TIME_AFTER(current_tick, key_sent + KEY_LOST))
-        forget_keys();
-    int i = 0;
-    while (i < KEY_WINDOW && key_reqs[i][0])
-        i++;
-    if (i == KEY_WINDOW)
-        return;
-    char *slot = outbox_slot();
-    if (!slot)
-        return;
-    take_req(key_reqs[i], sizeof key_reqs[i]);
-    snprintf(slot, sizeof outbox[0], "k\t%s\t%s", key_reqs[i], key);
-    key_sent = current_tick;
+    hr_keys_add(&key_runs, key);
+    pump_keys();
 }
 
-/* An R for k: silent when it worked, its reason in the band when not.
+/* An R for k: silent when it worked, its reason in the band when not. The
+ * computer's busy and rate refusals are not failures and stay silent.
  * Returns false for any other request's R. */
 static bool take_key_result(void)
 {
-    int i = 0;
-    while (i < KEY_WINDOW && (!key_reqs[i][0] ||
-                              strcmp(model.result_req, key_reqs[i])))
-        i++;
-    if (i == KEY_WINDOW)
+    if (!key_req[0] || strcmp(model.result_req, key_req))
         return false;
     model.result_new = false;
-    key_reqs[i][0] = '\0';
-    if (!model.result_ok)
+    key_req[0] = '\0';
+    if (!model.result_ok && strcmp(model.result_text, "Key busy") &&
+        strcmp(model.result_text, "Key rate limit"))
         talk_result(model.result_text, true);
+    pump_keys();
     return true;
 }
 
@@ -1370,6 +1379,7 @@ static void open_usage(struct gui_synclist *list)
 static void close_usage(struct gui_synclist *list)
 {
     view = VIEW_SPACES;
+    key_runs.nruns = 0;
     build_rows(list);
     int i = 0;
     while (i < nrows && (rows[i].kind != usage_from.kind ||
@@ -1581,6 +1591,7 @@ int agents_screen(void)
     while (!done)
     {
         bool changed = poll_link();
+        pump_keys();
         take_result(&list);
         if (view == VIEW_QUESTION && !current_question())
         {

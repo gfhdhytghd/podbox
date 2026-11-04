@@ -114,4 +114,25 @@ const struct hr_question *hr_model_question_for(const struct hr_model *m,
 /* Copy src into dst of size n, cut on a UTF-8 character boundary */
 void hr_copy(char *dst, const char *src, unsigned int n);
 
+/* Key taps waiting to be sent while one k is in flight, as runs of one key
+ * and a count, oldest first. A tap of the newest run's key adds to its
+ * count; an arrow against the newest run's opposite arrow takes one off. */
+#define HR_KEY_RUNS  4
+#define HR_KEY_COUNT 32     /* taps in one run, the most one k carries */
+struct hr_key_run {
+    char key[8];
+    int count;
+};
+struct hr_keys {
+    struct hr_key_run runs[HR_KEY_RUNS];
+    int nruns;
+};
+
+/* Add one tap of key. Returns false when it was dropped: the runs are full,
+ * or the newest run of that key is at HR_KEY_COUNT. */
+bool hr_keys_add(struct hr_keys *k, const char *key);
+
+/* Take the oldest run into out. Returns false when there is none. */
+bool hr_keys_take(struct hr_keys *k, struct hr_key_run *out);
+
 #endif

@@ -18,6 +18,8 @@ Environment=PYTHONUNBUFFERED=1
 # Environment=HERDREMOTE_VOICE_METHOD=HoldStart
 # Usage keyboard tool: auto (ydotool then wtype), ydotool, or wtype.
 # Environment=HERDREMOTE_KEY_TOOL=auto
+# Wheel arrows only, integer 1..8; effective count capped at 32.
+# Environment=HERDREMOTE_KEY_SCALE=1
 # The list order's times: ~/.local/state/herdremote/order.json
 StateDirectory=herdremote
 Restart=on-failure

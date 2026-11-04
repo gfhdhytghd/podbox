@@ -73,6 +73,7 @@ the times in a small state file; a restart keeps the order.
 | `--once` | Print the workspaces and questions the player would get, then exit. Checks herdr without a player |
 | `--port TTY` | Use this tty instead of finding the player: for testing, or for the simulator, which prints its tty as `PodLink: /dev/pts/N` when Agents opens |
 | `--key-tool TOOL` | Usage keyboard taps: `auto` (default), `ydotool` or `wtype`; overrides `$HERDREMOTE_KEY_TOOL` |
+| `--key-scale 1..8` | Wheel arrow multiplier (default 1); overrides `$HERDREMOTE_KEY_SCALE` |
 
 ## As a user service
 
@@ -173,9 +174,13 @@ edit dictated text at the same cursor used by F23/hold-to-talk.
 | Wheel clockwise | `k <req> right` | Right arrow |
 | SELECT press (no repeat) | `k <req> enter` | Enter |
 
-Only these four keys are accepted. Success is `R <req> ok` without a
-message band; errors display the returned reason. RIGHT/MENU retain
-navigation out of Usage. Other views retain their existing keys.
+Only these four keys are accepted. `k <req> <key> [<n>]` accepts 1–32 taps;
+omitting `n` means one. A noninteger or out-of-range count returns
+**Invalid key count**. Success is `R <req> ok` without a message band.
+The iPod keeps one request in flight and coalesces pending steps into
+ordered runs with counts. It hides **Key busy** and older **Key rate limit**
+responses; real failures display their reason. RIGHT/MENU retain navigation
+out of Usage. Other views retain their existing keys.
 
 `HERDREMOTE_KEY_TOOL` or `--key-tool` selects `auto`, `ydotool`, or `wtype`.
 In `auto`, HerdRemote prefers the installed ydotool plus its socket;
@@ -186,20 +191,42 @@ is `$YDOTOOL_SOCKET`, or `$XDG_RUNTIME_DIR/.ydotool_socket` (with
 resolved path to ydotool. wtype requires the graphical session's Wayland
 environment. No new Python package is required.
 
-For a service override, use `Environment=HERDREMOTE_KEY_TOOL=auto`.
+| Config key | CLI option | Service environment | Default |
+|---|---|---|---|
+| `key_tool` | `--key-tool auto\|ydotool\|wtype` | `HERDREMOTE_KEY_TOOL` | `auto` |
+| `key_scale` | `--key-scale 1..8` | `HERDREMOTE_KEY_SCALE` | `1` |
+
+`key_scale` multiplies only `left` and `right` counts. The effective count
+is capped at 32 after multiplication; `bs` and `enter` are never scaled.
+For example, scale 3 and `k 7 right 4` produce 12 Right taps, whereas
+`k 8 bs 4` produces four Backspace taps. CLI options override environment.
+For a service override, use:
+
+```ini
+[Service]
+Environment=HERDREMOTE_KEY_TOOL=auto
+Environment=HERDREMOTE_KEY_SCALE=1
+```
+
 When copying this daemon for deployment, include the new `hrkeys.py`.
 Read-only socket inspection is safe; never run a real key command as a
 test against the user's desktop.
 
-The four keys share a limit of 30 taps per second and at most one
-outstanding tap. Excess repeats are rejected, not queued. Unstarted work
-expires after 100 ms; session reset, link loss and shutdown invalidate it
-and discard old replies. An already running tool can finish its single
-press/release pair. Tool subprocesses time out after 0.5 seconds. Failed
-tools get a bounded release-only cleanup, with no repeated tap or runtime
-fallback to another tool. An unreachable tool can also prevent cleanup.
+One batch runs in one tool call: ydotool gets all down/up pairs with
+`--key-delay=2` (2 ms between events); wtype gets repeated `-k <symbol>`
+arguments. The old 30-tap/second timer and 100 ms scheduling expiry are
+removed. A completed batch can be followed immediately by the next one.
+There is still at most one outstanding batch, with no computer-side queue.
+An overlapping request from old firmware returns **Key busy**.
 
-Errors include **Unsupported key**, **Key rate limit**, **Key request expired**,
+Session reset, link loss and shutdown invalidate unstarted work and old
+replies. An already running tool can finish its bounded batch. The timeout
+is `0.5 + 0.01 * effective_count` seconds (0.51–0.82 s). Failed tools get
+one release-only cleanup with a 0.5-second timeout, with no repeated batch
+or runtime fallback to another tool. An unreachable tool can also prevent
+cleanup. Every tap remains a complete press/release pair.
+
+Errors include **Unsupported key**, **Invalid key count**, **Key busy**,
 **Key tool unavailable**, **Key tool failed**, and **Session not ready**.
 Success confirms the tool's exit status; it does not inspect the input
 field. The keyboard tests mock every input tool:

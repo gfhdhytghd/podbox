@@ -182,6 +182,6 @@ def parse_command(payload):
                          len(args[1].encode("utf-8")) > 17 or
                          args[1] == "w:"):
         return None
-    if shapes.get(name) != len(args):
+    if shapes.get(name) != len(args) and not (name == "k" and len(args) == 3):
         return None
     return name, args

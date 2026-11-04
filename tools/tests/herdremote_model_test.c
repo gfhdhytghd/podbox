@@ -209,6 +209,31 @@ int main(int argc, char **argv)
     assert(!m.result_ok && !strcmp(m.result_req, "12") &&
            !strcmp(m.result_text, "Voice input not running"));
 
+    /* Key runs: same key counts up, an opposite arrow takes one off, a
+     * different key starts a run, and both caps drop the tap */
+    struct hr_keys keys = { .nruns = 0 };
+    struct hr_key_run run;
+    assert(!hr_keys_take(&keys, &run));
+    assert(hr_keys_add(&keys, "right") && hr_keys_add(&keys, "right") &&
+           hr_keys_add(&keys, "right") && hr_keys_add(&keys, "left"));
+    assert(keys.nruns == 1 && keys.runs[0].count == 2);
+    assert(hr_keys_add(&keys, "left") && hr_keys_add(&keys, "left"));
+    assert(keys.nruns == 0);
+    assert(hr_keys_add(&keys, "left") && hr_keys_add(&keys, "bs") &&
+           hr_keys_add(&keys, "enter") && hr_keys_add(&keys, "left"));
+    assert(keys.nruns == 4 && !hr_keys_add(&keys, "bs"));
+    assert(hr_keys_add(&keys, "right") && keys.nruns == 3);
+    assert(hr_keys_take(&keys, &run) && !strcmp(run.key, "left") &&
+           run.count == 1);
+    assert(hr_keys_take(&keys, &run) && !strcmp(run.key, "bs"));
+    assert(hr_keys_take(&keys, &run) && !strcmp(run.key, "enter"));
+    assert(!hr_keys_take(&keys, &run));
+    for (int i = 0; i < HR_KEY_COUNT; i++)
+        assert(hr_keys_add(&keys, "bs"));
+    assert(!hr_keys_add(&keys, "bs") && keys.runs[0].count == HR_KEY_COUNT);
+    /* bs and enter never cancel each other */
+    assert(hr_keys_add(&keys, "enter") && keys.nruns == 2);
+
     /* Cut on a character boundary: 汉 is three bytes */
     char small[5];
     hr_copy(small, "汉字", sizeof small);

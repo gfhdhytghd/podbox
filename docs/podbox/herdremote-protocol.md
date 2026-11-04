@@ -246,7 +246,7 @@ down or `ok=0`: retain last data and mark it stale. See
 | `fp <req> <pane>` | Show this pane on the computer |
 | `vd <req> <target>` | Start hold-to-talk; target is a pane id, `w:<ws>`, or `-` |
 | `vu <req>` | Release hold-to-talk |
-| `k <req> <key>` | Tap `bs`, `left`, `right` or `enter` at the computer's current keyboard focus |
+| `k <req> <key> [<n>]` | Tap `bs`, `left`, `right` or `enter` 1–32 times (default 1) at the computer's current keyboard focus |
 | `a <req> <qid> <number>` | Choose option `number` of question `qid` |
 | `us` | Send the cached `U/P/N` usage frame now; request a refresh when due |
 
@@ -305,28 +305,39 @@ plus a 15-byte workspace id). Control characters are rejected.
 
 In Usage, LEFT press/repeat sends `k <req> bs`, wheel counter-clockwise
 sends `k <req> left`, clockwise sends `k <req> right`, and SELECT sends
-`k <req> enter` once per press. Each message is one complete key tap.
+`k <req> enter` once per press. Optional `n` batches consecutive taps of
+the same key: `k <req> <key> [<n>]`. Missing `n` means 1; otherwise it must
+be an unsigned decimal integer from 1 to 32. Noninteger or out-of-range
+values return `R <req> err Invalid key count` without running a tool.
 The whitelist is exactly `bs`, `left`, `right`, `enter`; any other key
 returns `R <req> err Unsupported key`. Each command occupies one record
-with exactly three fields, a nonempty request id of at most 7 bytes, and
+with three or four fields, a nonempty request id of at most 7 bytes, and
 no control characters. Malformed frames are ignored as above. A command
 before `hr` returns `err Session not ready` without running a tool.
 
 These taps never focus herdr and never use `pane.send_keys`: they reach
 the computer's current keyboard focus, like physical keys. The backend
-prefers `ydotool key <code>:1 <code>:0` (14, 105, 106, 28 respectively),
-falling back to `wtype -k <symbol>` (`BackSpace`, `Left`, `Right`, `Return`)
+prefers `ydotool key --key-delay=2` followed by all `n` down/up pairs
+(codes 14, 105, 106, 28 respectively), falling back to wtype with `n`
+`-k <symbol>` arguments (`BackSpace`, `Left`, `Right`, `Return`)
 when ydotool or its socket is absent. `HERDREMOTE_KEY_TOOL`/`--key-tool`
-select `auto` (default), `ydotool`, or `wtype`.
+select `auto` (default), `ydotool`, or `wtype`. Each batch is one tool call.
+`key_scale` (`HERDREMOTE_KEY_SCALE`/`--key-scale`, integer 1–8, default 1)
+multiplies `left`/`right` only, capped at 32 after scaling. `bs`/`enter`
+use the original count unchanged.
 
-All four keys share a maximum rate of 30 taps per second. At most one tap
-is outstanding; excess messages return `err Key rate limit` and are not
-queued. Work that has not started within 100 ms returns `Key request expired`
-without injecting. Reset, link loss and shutdown invalidate unstarted taps
-and old replies. A tool call already in flight can finish its single pair.
-Each tool call has a 0.5-second limit. On a tool failure, a bounded
-release-only cleanup is attempted; the backend never retries the tap via
-another tool because that could type or delete twice. Errors are
+The player keeps one `k` in flight and coalesces pending steps into ordered
+same-key runs. There is no fixed 30-tap/second cooldown or scheduling expiry.
+The next batch can start immediately after the previous reply. At most one
+batch runs on the computer; an overlapping old-firmware request returns
+`R <req> err Key busy` without queuing it. The player suppresses `Key busy`
+and legacy `Key rate limit` band messages, while showing real failures.
+Reset, link loss and shutdown invalidate unstarted batches and old replies.
+A tool call already in flight can finish its batch, with each tap a complete
+down/up pair. Its timeout is `0.5 + 0.01 * effective_count` seconds.
+On a tool failure, release-only cleanup has a 0.5-second limit; the backend
+never retries the batch via another tool because that could type or delete
+twice. Tool errors are
 `Key tool unavailable` or `Key tool failed`. A successful subprocess exit
 confirms the tap request, not the contents of the focused input field.
 
