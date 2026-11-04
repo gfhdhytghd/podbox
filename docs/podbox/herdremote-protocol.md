@@ -166,7 +166,9 @@ R <req> <ok|err> <text>
 ```
 
 `text` (120 bytes) is what the player shows: `Focused <label>`,
-`Answered`, `Updated` (a multi-select box changed), or why it failed.
+`Answered`, `Updated` (a multi-select box changed), `Talking` (voice hold
+started), `Sent` (voice hold released), or why it failed. `Sent` confirms
+`HoldStop`, not completion of transcription or text commit.
 For a local focus with no moved clients, the computer sends
 `R <req> err No local herdr window`. The existing screen shows the reason
 as a focus failure; no new message type is needed.
@@ -200,6 +202,8 @@ N <tokens> <usd_milli>
   herdr status.
 - `state`: `ok` for limits and tokens, `tok` for tokens without limits,
   `none` for no service data, `err` for collector failure.
+  Failed quota probes retain unexpired last-good windows as `ok`, with their
+  original sample time and a `limits Xm old` note. Expired windows are omitted.
 - `h5_pct`, `wk_pct`: used percent, integer 0–100; `-` for unavailable.
 - `h5_reset`, `wk_reset`: integer seconds from **now** until reset, at
   least zero; `-` for unavailable. The iPod clock is not trusted.
@@ -211,15 +215,18 @@ N <tokens> <usd_milli>
   token class, in 1/1000 USD. This is not subscription spend. Unknown-model
   tokens count with cost zero and a note.
 - `note`: at most 40 UTF-8 bytes, sanitized like other text fields; can be
-  empty. An error note explains failure. Initial collection and incomplete
-  cold indexing return `err`, rather than advertising complete totals.
+  empty. An error note explains failure. Incomplete cold indexing uses
+  `ok`/`tok` with `indexing N%`; only real failures use `err`.
 - `N`: sums of all four `P` rows, including any retained counters on error.
 
 The whole message fits `MAX_MESSAGE` (4096 bytes). The computer answers
 from cache immediately, then schedules a refresh when at least 20 seconds
 old. Collectors never block the link thread. The first reply can be the
-initial `err/collecting usage` cache. The next `us` receives the refreshed
-cache. The player sends `us` on Usage open and every 20 seconds while open;
+initial `tok/indexing 0%` cache, or the persisted snapshot after restart.
+Claude quota requests have a separate shared 900s interval and 429 backoff;
+20s Usage updates continue to refresh local token totals from the index.
+Background indexing starts with the daemon, including while Usage is closed.
+The next `us` receives the refreshed cache. The player sends `us` on Usage open and every 20 seconds while open;
 it counts reset seconds down locally and stops requests on close. Link
 down or `ok=0`: retain last data and mark it stale. See
 [usage sources and caveats](herdremote-usage.md).
@@ -232,6 +239,8 @@ down or `ok=0`: retain last data and mark it stale. See
 | `sub <ws>` | Send `A` for this workspace from now on; `sub -` stops it |
 | `fw <req> <ws>` | Show this workspace, at its first tab, on the computer |
 | `fp <req> <pane>` | Show this pane on the computer |
+| `vd <req> <target>` | Start hold-to-talk; target is a pane id, `w:<ws>`, or `-` |
+| `vu <req>` | Release hold-to-talk |
 | `a <req> <qid> <number>` | Choose option `number` of question `qid` |
 | `us` | Send the cached `U/P/N` usage frame now; request a refresh when due |
 
@@ -245,6 +254,46 @@ viewing that tab. `moved: []` is a focus failure (see `R`). Without the
 capability, `fw` uses `workspace.focus` then `tab.focus` when present, and
 `fp` uses `pane.focus`; these legacy calls move all clients. Probe and focus
 errors return `R <req> err` without retrying through legacy focus calls.
+
+`vd` focuses the target first when `voice_focus` is on (default), then calls
+the fcitx voice addon's `HoldStart` on the computer's session bus. `w:<ws>`
+selects that workspace's first tab; `-` keeps the current focused input.
+Voice focus uses only `client.focus` with `clients: "local"`. A missing
+capability, missing local window or failed focus returns `R <req> err`
+without starting voice; voice never uses the legacy all-client fallback.
+`voice_focus=off` skips focus. `voice_method=HoldStartRaw` selects raw text
+without cleanup; the default `HoldStart` matches unmodified F23.
+
+`vd` success is `R <req> ok Talking`. Missing addon, bridge or session bus,
+and D-Bus failures, return `R <req> err Voice input not running`. A busy
+voice session returns `Voice input busy` without claiming or stopping it.
+The backend checks `Status` after starting; a silent refusal does not
+report `Talking`. `vu` calls `HoldStop` for this session's hold and returns
+`R <req> ok Sent`, or `err Voice input not running` on a D-Bus failure.
+The microphone and committed text both belong to the computer.
+
+Repeated `vd` while held neither refocuses nor extends the deadline.
+Repeated/unmatched `vu` succeeds without touching an unrelated recording.
+Link loss, `hr` session reset and daemon shutdown release an outstanding
+hold. An independent watchdog also stops it after `voice_max_hold`
+(default 120 seconds); a duplicate `vd` after timeout returns
+`err Voice hold timed out` until `vu` or a session reset. Failed stops
+retain ownership and retry once per second. A new hold cannot start
+while a stop is pending. Each D-Bus call is bounded (2-second bus timeout,
+3-second subprocess limit). The startup call and its confirming `Status`
+hold the controller lock for at most two such calls; a very short configured
+limit can expire during these calls. The watchdog then stops immediately
+after that bounded sequence, with a separately bounded stop call. Stops
+require a reachable bus/addon.
+
+`vd` and `vu` each occupy exactly one record. Request ids are nonempty and
+at most 7 bytes; targets are nonempty and at most 17 bytes (the `w:` prefix
+plus a 15-byte workspace id). Control characters are rejected.
+
+The optional computer-to-player message `V <talk|idle>` is reserved for
+recording signals. This backend does not emit `V`; it returns `R` after
+checking the start state. An older player ignores voice commands/results
+it does not recognise. No protocol version change is required.
 
 `a` with `number` `0` presses a multi-select's **Submit**. An answer to a
 `qid` that is no longer on screen fails with `R <req> err`, and no key

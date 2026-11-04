@@ -29,6 +29,7 @@ import hrherdr  # noqa: E402
 import hrorder  # noqa: E402
 import hrproto  # noqa: E402
 import hrusage  # noqa: E402
+import hrvoice  # noqa: E402
 
 VERSION = "herdremote-1"
 DEVICE = dict(vid=0x05AC, pid=0x1261, manufacturer="PodBox",
@@ -122,9 +123,15 @@ class Daemon:
         self.port = self.link = None
         self.stopping = threading.Event()
         self.usage = hrusage.UsageCache()
+        self.voice = hrvoice.HoldToTalk(
+            self.voice_focus_target,
+            voice_focus=getattr(args, "voice_focus", True),
+            voice_max_hold=getattr(args, "voice_max_hold", 120),
+            voice_method=getattr(args, "voice_method", "HoldStart"))
         self.reset_session()
 
     def reset_session(self):
+        self.voice.stop()
         self.sent_ws = None
         self.sent_status = None
         self.sent_agents = None
@@ -173,6 +180,7 @@ class Daemon:
         return True
 
     def close_link(self):
+        self.voice.stop()
         if self.link and self.link.opened:
             try:
                 self.link.close(1001, "herdremote stopping")
@@ -240,6 +248,8 @@ class Daemon:
             self.usage.request()
         elif name in ("fw", "fp"):
             self.focus(name, *args)
+        elif name in ("vd", "vu"):
+            self.voice_command(name, *args)
         elif name == "a":
             req, qid, number = args
             q = self.model["questions"].get(qid)
@@ -247,6 +257,29 @@ class Daemon:
                 self.send(hrproto.result(req, False, "The question has gone"))
             else:
                 self.answerer.jobs.put((req, q, int(number)))
+
+    def voice_focus_target(self, target):
+        params = dict(pane_id=target)
+        if target.startswith("w:"):
+            wid = target[2:]
+            ws = next((w for w in self.model["workspaces"]
+                       if w["id"] == wid), None)
+            if not ws:
+                raise hrvoice.VoiceError("no workspace %s" % wid)
+            params = dict(workspace_id=wid)
+            if ws.get("tab"):
+                params["tab_id"] = ws["tab"]
+        try:
+            # Voice must never use the legacy all-client focus fallback.
+            if not self.herdr._focus_local(**params):
+                raise hrvoice.VoiceError("Local herdr focus unavailable")
+        except hrherdr.HerdrError as error:
+            raise hrvoice.VoiceError(str(error)) from error
+        self.changed.set()
+
+    def voice_command(self, name, req, target=None):
+        result = self.voice.press(target) if name == "vd" else self.voice.release()
+        self.send(hrproto.result(req, *result))
 
     def focus(self, name, req, target):
         try:
@@ -268,6 +301,7 @@ class Daemon:
         self.changed.set()
 
     def run(self):
+        self.usage.start()
         hrherdr.Watcher(self.herdr, self.changed).start()
         self.answerer.start()
         next_refresh = next_probe = 0.0
@@ -301,8 +335,10 @@ class Daemon:
                 self.close_link()
                 continue
             time.sleep(0.02)
+        self.voice.stop()
         if self.link:
             self.close_link()
+        self.usage.close()
 
 
 def main():
@@ -322,18 +358,21 @@ def main():
                         help="print one read-only usage frame; no herdr/serial access")
     parser.add_argument("--usage-wait", type=float, default=6,
                         help="usage-dump indexing budget in seconds (default: 6)")
+    hrvoice.add_arguments(parser)
     args = parser.parse_args()
     logging.basicConfig(stream=sys.stdout, level=logging.INFO,
                         format="%(asctime)s %(levelname)s %(message)s")
     if args.usage_dump:
         cache = hrusage.UsageCache()
         try:
+            dump_started = time.time()
             cache.request()
             deadline = time.monotonic() + max(0, args.usage_wait)
             while time.monotonic() < deadline:
                 rows = cache.snapshot()
-                if all(r["note"] != "collecting usage" and
-                       not r["note"].startswith("indexing local logs") for r in rows):
+                if all(r.get("updated_at",dump_started) >= dump_started and
+                       not r.get("indexing") and
+                       not r["note"].startswith("indexing ") for r in rows):
                     break
                 cache.request()
                 time.sleep(0.02)
@@ -360,8 +399,8 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
-        daemon.usage.close()
         daemon.close_link()
+        daemon.usage.close()
 
 
 if __name__ == "__main__":

@@ -96,11 +96,13 @@ struct hr_model {
     char result_req[8];
     char result_text[124];
     struct hr_usage usage;
+    /* The voice input's state from V: 't' recording, 'i' not, 0 unknown */
+    char voice;
 };
 
 /* Apply one message. Returns its type letter ('W', 'S', 'A', 'Q', 'X', 'R',
- * 'T', 'U', 'H' for the hello), or 0 if it was not a HerdRemote v1 message,
- * in which case the model is unchanged. */
+ * 'T', 'U', 'V', 'H' for the hello), or 0 if it was not a HerdRemote v1
+ * message, in which case the model is unchanged. */
 int hr_model_apply(struct hr_model *m, const char *data, unsigned int length);
 
 void hr_model_reset(struct hr_model *m);

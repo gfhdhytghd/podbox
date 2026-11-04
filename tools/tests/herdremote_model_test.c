@@ -58,6 +58,8 @@ static void dump(void)
         }
         printf("N %lld %lld\n", u->tokens, u->usd_milli);
     }
+    if (m.voice)
+        printf("V %c\n", m.voice);
 }
 
 static int replay(const char *path)
@@ -189,6 +191,17 @@ int main(int argc, char **argv)
     assert(u->age == 99999999 && u->svc[0].h5_reset == 99999999);
     assert(u->svc[0].tokens == 999999999999999999LL);
 
+    /* V: the voice input's state; anything else leaves it */
+    assert(m.voice == 0);
+    assert(apply("V\ttalk") == 'V' && m.voice == 't');
+    assert(apply("V\tidle") == 'V' && m.voice == 'i');
+    assert(apply("V\tbusy") == 0 && m.voice == 'i');
+    assert(apply("V") == 0 && apply("V\ttalk\tx") == 0 && m.voice == 'i');
+    /* A voice request's result is an R like any other */
+    assert(apply("R\t12\terr\tVoice input not running") == 'R');
+    assert(!m.result_ok && !strcmp(m.result_req, "12") &&
+           !strcmp(m.result_text, "Voice input not running"));
+
     /* Cut on a character boundary: 汉 is three bytes */
     char small[5];
     hr_copy(small, "汉字", sizeof small);
@@ -208,7 +221,7 @@ int main(int argc, char **argv)
     {
         char junk[256];
         int n = 1 + rand() % sizeof junk;
-        static const char alphabet[] = "WSAQXRTUPNHo?\t\n1fbw-汉 ";
+        static const char alphabet[] = "WSAQXRTUPNVHo?\t\n1fbw-汉 ";
         for (int j = 0; j < n; j++)
             junk[j] = alphabet[rand() % (sizeof alphabet - 1)];
         hr_model_apply(&m, junk, n);

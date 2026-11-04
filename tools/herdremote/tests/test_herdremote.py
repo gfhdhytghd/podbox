@@ -25,6 +25,7 @@ import hrherdr  # noqa: E402
 import hrorder  # noqa: E402
 import hrproto  # noqa: E402
 import herdremote  # noqa: E402
+import hrusage  # noqa: E402
 import podlink  # noqa: E402
 
 
@@ -719,6 +720,7 @@ class EndToEnd(unittest.TestCase):
                                      state=os.path.join(self.tmp.name,
                                                         "order.json"))
         self.daemon = herdremote.Daemon(args)
+        self.daemon.usage = hrusage.UsageCache(self.tmp.name, network=False)
         herdremote.CONFIRM_SECONDS = 2
         self.thread = threading.Thread(target=self.daemon.run, daemon=True)
         self.thread.start()

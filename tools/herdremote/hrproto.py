@@ -168,8 +168,17 @@ def parse_command(payload):
         return None
     fields = records[0]
     name, args = fields[0], fields[1:]
-    shapes = {"hr": 1, "sub": 1, "fw": 2, "fp": 2, "a": 3, "us": 0}
-    if name == "us" and len(records) != 1:
+    shapes = {"hr": 1, "sub": 1, "fw": 2, "fp": 2, "a": 3, "us": 0,
+              "vd": 2, "vu": 1}
+    if name in ("us", "vd", "vu") and len(records) != 1:
+        return None
+    if name in ("vd", "vu") and (
+            not args or not args[0] or len(args[0].encode("utf-8")) > 7 or
+            any(ord(c) < 32 or ord(c) == 127 for a in args for c in a)):
+        return None
+    if name == "vd" and (len(args) != 2 or not args[1] or
+                         len(args[1].encode("utf-8")) > 17 or
+                         args[1] == "w:"):
         return None
     if shapes.get(name) != len(args):
         return None

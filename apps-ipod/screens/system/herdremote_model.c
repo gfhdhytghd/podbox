@@ -374,6 +374,12 @@ int hr_model_apply(struct hr_model *m, const char *data, unsigned int length)
     }
     if (!strcmp(type, "U"))
         return apply_usage(m, f, n, &cursor);
+    if (!strcmp(type, "V") && n == 2 &&
+        (!strcmp(f[1], "talk") || !strcmp(f[1], "idle")))
+    {
+        m->voice = f[1][0];
+        return 'V';
+    }
     if (!strcmp(type, "T") && n == 3)
     {
         m->herdr_age = number(f[1]);

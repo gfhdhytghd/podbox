@@ -22,6 +22,11 @@
  * question, and sends nothing to the computer. LEFT and MENU go back one
  * view; only MENU leaves, from the spaces view.
  *
+ * Play held talks to the computer: its press sends vd with the selected
+ * workspace or pane, its release vu, and the computer's voice input types
+ * what is said into that pane. A band at the foot of the list shows the
+ * recording and then its result. Held Play does not power off here.
+ *
  * The theme draws the rows. The screen is %cs 40, and each row's %Lv is a
  * style letter, an icon letter and the text for the row's right-hand side:
  *   style  r  a row with an icon     q  the same, greyed: it cannot be
@@ -42,6 +47,7 @@
 #include "config.h"
 #include "kernel.h"
 #include "backlight.h"
+#include "button.h"
 #include "font.h"
 #include "podlink.h"
 #include "input/action.h"
@@ -113,11 +119,29 @@ static long usage_at;           /* when the shown figures came */
 static unsigned int usage_serial;
 static struct row usage_from;   /* the spaces row to go back to */
 
+/* Hold to talk: the band at the foot of the list, while it is wanted */
+#define TALK_REPLY  (8 * HZ)    /* how long vd and vu wait for their R */
+#define TALK_BAND   30          /* the band's height in pixels */
+static bool talk_held;          /* vd sent and vu not yet */
+static long talk_since;         /* when the recording began, for its count */
+static char talk_req[8];        /* the vd or vu awaiting its result */
+static bool talk_req_up;        /* that request is the vu */
+static long talk_until;         /* when the request or the note expires */
+static char talk_note[64];      /* the last result */
+static bool talk_failed;        /* the note is an error */
+static bool talk_shown;         /* the band is on screen */
+
 /* A free outbox slot, or NULL while the link is wedged (the user can press
  * again) */
 static char *outbox_slot(void)
 {
     return nout < OUTBOX ? outbox[nout++] : NULL;
+}
+
+static void take_req(char *req, size_t size)
+{
+    snprintf(req, size, "%u", next_req);
+    next_req = next_req % 9999 + 1;
 }
 
 /* Queue a command that the daemon answers with R: "<name>\t<req>\t<args>" */
@@ -126,8 +150,7 @@ static void queue_request(const char *name, const char *args)
     char *slot = outbox_slot();
     if (!slot)
         return;
-    snprintf(pending_req, sizeof pending_req, "%u", next_req);
-    next_req = next_req % 9999 + 1;
+    take_req(pending_req, sizeof pending_req);
     /* An answer waits up to five seconds for the pane to change */
     pending_until = current_tick + 8 * HZ;
     snprintf(slot, sizeof outbox[0], "%s\t%s\t%s", name, pending_req, args);
@@ -1051,6 +1074,166 @@ static void draw_usage(struct gui_synclist *list)
     d->set_viewport(NULL);
 }
 
+/* A microphone 11 pixels wide and 17 tall, its top left at x, y */
+static void draw_mic(struct screen *d, int x, int y, unsigned colour)
+{
+    d->set_foreground(colour);
+    d->hline(x + 4, x + 6, y);
+    d->fillrect(x + 3, y + 1, 5, 9);
+    d->hline(x + 4, x + 6, y + 10);
+    d->vline(x, y + 5, y + 9);
+    d->vline(x + 10, y + 5, y + 9);
+    d->drawpixel(x + 1, y + 10);
+    d->drawpixel(x + 9, y + 10);
+    d->drawpixel(x + 2, y + 11);
+    d->drawpixel(x + 8, y + 11);
+    d->hline(x + 3, x + 7, y + 12);
+    d->vline(x + 5, y + 13, y + 15);
+    d->hline(x + 2, x + 8, y + 16);
+}
+
+/* Whether the band has anything to say: a hold, a recording the computer
+ * reports, a request awaiting its result, or a result still shown */
+static bool talk_wanted(void)
+{
+    return talk_held || model.voice == 't' || talk_req[0] ||
+           (talk_note[0] && TIME_BEFORE(current_tick, talk_until));
+}
+
+/* The band over the foot of the list: the microphone, what the voice input
+ * is doing and, while it records, for how long */
+static void draw_talk(struct gui_synclist *list)
+{
+    struct screen *d = &screens[SCREEN_MAIN];
+    struct viewport *vp = list->parent[SCREEN_MAIN];
+    char secs[12] = "";
+    const char *text = talk_note;
+    unsigned colour = USE_TEXT, mic = USE_DIM;
+    /* Not held, a recording is shown only while V says one runs */
+    bool recording = talk_held ? !talk_failed && model.voice != 'i' :
+                     !talk_req[0] && (!talk_note[0] ||
+                                      TIME_AFTER(current_tick, talk_until));
+    if (recording)
+    {
+        text = "Talking…";
+        mic = USE_FULL;
+        snprintf(secs, sizeof secs, "%lds", (current_tick - talk_since) / HZ);
+    }
+    else if (talk_held && !talk_failed)
+        text = "Stopped on the computer";
+    else if (!talk_held && talk_req[0])
+    {
+        text = "Sending…";
+        colour = USE_DIM;
+    }
+    else if (talk_failed)
+        colour = USE_FULL;
+    d->set_viewport(vp);
+    unsigned fg = vp->fg_pattern;
+    int y = vp->height - TALK_BAND;
+    int h = font_get(vp->font)->height;
+    d->set_foreground(LCD_RGBPACK(28, 28, 28));
+    d->fillrect(0, y, vp->width, TALK_BAND);
+    d->set_drawmode(DRMODE_FG);
+    d->set_foreground(mic);
+    d->hline(0, vp->width - 1, y);
+    draw_mic(d, 8, y + (TALK_BAND - 17) / 2, mic);
+    int sw = secs[0] ? text_w(d, secs) : 0;
+    char fitted[64];
+    text_at(d, 28, y + (TALK_BAND - h) / 2, colour,
+            fit(fitted, sizeof fitted, text, vp->width - 28 - sw - 16));
+    if (secs[0])
+        text_at(d, vp->width - 8 - sw, y + (TALK_BAND - h) / 2, USE_SOFT,
+                secs);
+    d->set_drawmode(DRMODE_SOLID);
+    d->set_foreground(fg);
+    d->update_viewport_rect(0, y, vp->width, TALK_BAND);
+    d->set_viewport(NULL);
+    talk_shown = true;
+}
+
+/* What vd is about: the selected workspace or agent, or the question's
+ * pane; "-" for none */
+static void talk_target(struct gui_synclist *list, char *buf, size_t size)
+{
+    int sel = gui_synclist_get_sel_pos(list);
+    const struct row *r = sel >= 0 && sel < nrows ? &rows[sel] : NULL;
+    if (view == VIEW_QUESTION)
+        snprintf(buf, size, "%s", question_pane);
+    else if (r && r->kind == ROW_SPACE)
+        snprintf(buf, size, "w:%s", r->id);
+    else if (r && r->kind == ROW_AGENT)
+        snprintf(buf, size, "%s", r->id);
+    else if (r && r->kind == ROW_ALERT && model.nquestions)
+        snprintf(buf, size, "%s", model.questions[0].pane);
+    else
+        snprintf(buf, size, "-");
+}
+
+static void talk_result(const char *text, bool failed)
+{
+    snprintf(talk_note, sizeof talk_note, "%s", text);
+    talk_failed = failed;
+    talk_until = current_tick + (failed ? 3 * HZ : 2 * HZ);
+}
+
+/* Play pressed: start recording on the computer */
+static void start_talk(struct gui_synclist *list)
+{
+    char target[24];
+    if (talk_held || view == VIEW_USAGE)
+        return;
+    if (podlink_state() != PODLINK_CONNECTED || !model.hello)
+    {
+        talk_result("No link to the computer", true);
+        return;
+    }
+    char *slot = outbox_slot();
+    if (!slot)
+        return;
+    talk_target(list, target, sizeof target);
+    take_req(talk_req, sizeof talk_req);
+    snprintf(slot, sizeof outbox[0], "vd\t%s\t%s", talk_req, target);
+    talk_req_up = false;
+    talk_held = true;
+    talk_since = current_tick;
+    talk_until = current_tick + TALK_REPLY;
+    talk_note[0] = '\0';
+    talk_failed = false;
+    model.voice = 0;
+}
+
+/* Play released, or the hold has to end: stop recording, which sends what
+ * was said */
+static void stop_talk(void)
+{
+    if (!talk_held)
+        return;
+    talk_held = false;
+    char *slot = podlink_state() == PODLINK_CONNECTED ? outbox_slot() : NULL;
+    if (!slot)
+    {
+        talk_req[0] = '\0';
+        return;
+    }
+    take_req(talk_req, sizeof talk_req);
+    snprintf(slot, sizeof outbox[0], "vu\t%s", talk_req);
+    talk_req_up = true;
+    talk_until = current_tick + TALK_REPLY;
+}
+
+/* An R for vd or vu. Returns false for any other request's R. */
+static bool take_talk_result(void)
+{
+    if (!talk_req[0] || strcmp(model.result_req, talk_req))
+        return false;
+    model.result_new = false;
+    talk_req[0] = '\0';
+    if (!model.result_ok || talk_req_up)
+        talk_result(model.result_text, !model.result_ok);
+    return true;
+}
+
 /* Rebuild and draw, selecting the first row that can be chosen from select
  * on. The rows above it stay in view as far as they fit, so a question is
  * read from its start; top, when not -1, is the row to keep at the top
@@ -1225,8 +1408,14 @@ static bool poll_link(void)
     {
         was_connected = connected;
         model.hello = false;
+        model.voice = 0;
         nout = 0;
         pending_req[0] = '\0';
+        /* The computer stops recording when the link goes */
+        if (talk_held || talk_req[0])
+            talk_result("Link lost", true);
+        talk_held = false;
+        talk_req[0] = '\0';
         if (connected)
         {
             char *slot = outbox_slot();
@@ -1260,6 +1449,11 @@ static bool poll_link(void)
             usage_serial = model.usage.serial;
             usage_at = current_tick;
         }
+        if (type == 'V' && model.voice == 't' && !talk_held)
+            talk_since = current_tick;
+        /* One result at a time: take_result reads it before the next */
+        if (type == 'R' && !take_talk_result())
+            break;
     }
     flush_outbox();
     return changed;
@@ -1304,6 +1498,8 @@ int agents_screen(void)
     view = VIEW_SPACES;
     space_id[0] = question_pane[0] = pending_req[0] = '\0';
     pending_answer = was_connected = false;
+    talk_held = talk_shown = false;
+    talk_req[0] = talk_note[0] = '\0';
     nout = 0;
     last_message = current_tick;
     usage_serial = model.usage.serial;
@@ -1311,6 +1507,8 @@ int agents_screen(void)
     FOR_NB_SCREENS(i)
         viewportmanager_theme_enable(i, true, NULL);
     push_current_activity(ACTIVITY_AGENTS);
+    /* Play is held to talk here, and held long enough it would power off */
+    button_set_sw_poweroff_state(false);
     gui_synclist_init(&list, row_name, &list, false, 1, NULL);
     gui_synclist_set_row_callbacks(&list, NULL, row_value, NULL);
     gui_synclist_set_description_callback(&list, row_description);
@@ -1364,9 +1562,34 @@ int agents_screen(void)
                 skinlist_redraw_status(&screens[SCREEN_MAIN], &list);
         }
 
+        /* A release the keymap did not see still ends the hold. A failure
+         * stays in view while Play is held, and for a moment after. */
+        bool play_down = button_status() & BUTTON_PLAY;
+        if (talk_held && !play_down)
+            stop_talk();
+        if (talk_failed && play_down && TIME_BEFORE(current_tick, talk_until))
+            talk_until = current_tick + 3 * HZ;
+        if (talk_req[0] && TIME_AFTER(current_tick, talk_until))
+        {
+            talk_req[0] = '\0';
+            talk_result("No reply from the computer", true);
+        }
+        /* The band is drawn over whatever the list drew last; once it has
+         * gone the list is drawn again beneath */
+        if (talk_wanted())
+            draw_talk(&list);
+        else if (talk_shown)
+        {
+            talk_shown = false;
+            if (view == VIEW_USAGE)
+                draw_usage(&list);
+            else
+                show_same(&list);
+        }
+
         int before = gui_synclist_get_sel_pos(&list);
         int before_top = list.start_item[SCREEN_MAIN];
-        if (list_do_action(CONTEXT_LIST, ANIM_TICKS, &list, &action))
+        if (list_do_action(CONTEXT_AGENTS, ANIM_TICKS, &list, &action))
         {
             if (view == VIEW_USAGE)
             {
@@ -1474,6 +1697,12 @@ int agents_screen(void)
                 show(&list, 0);
                 break;
             }
+            case ACTION_AGENTS_TALK:
+                start_talk(&list);
+                break;
+            case ACTION_AGENTS_TALK_END:
+                stop_talk();
+                break;
             case ACTION_NONE:
                 break;
             default:
@@ -1486,6 +1715,9 @@ int agents_screen(void)
         }
     }
 
+    /* A hold ends with the screen */
+    stop_talk();
+    flush_outbox();
     /* Close cleanly: the transport finishes its CLOSE only while polled */
     podlink_close();
     long deadline = current_tick + 2 * HZ;
@@ -1496,6 +1728,10 @@ int agents_screen(void)
         podlink_poll(&m);
         sleep(1);
     }
+    /* Play still held would power off at once: wait for its release */
+    while (button_status() & BUTTON_PLAY)
+        sleep(HZ / 20);
+    button_set_sw_poweroff_state(true);
     pop_current_activity();
     FOR_NB_SCREENS(i)
         viewportmanager_theme_undo(i, false);

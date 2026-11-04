@@ -1,0 +1,59 @@
+{
+  "groups": [
+    {
+      "buckets": [
+        {
+          "bucketId": "gemini-weekly",
+          "displayName": "Weekly Limit Remaining",
+          "window": "weekly",
+          "resetTime": "2026-11-11T08:05:42Z",
+          "remainingFraction": 1
+        },
+        {
+          "bucketId": "gemini-5h",
+          "displayName": "Five Hour Limit Remaining",
+          "window": "5h",
+          "resetTime": "2026-11-04T13:05:42Z",
+          "remainingFraction": 1
+        }
+      ],
+      "displayName": "Gemini Models",
+      "description": "Models within this group: Gemini Flash, Gemini Pro"
+    },
+    {
+      "buckets": [
+        {
+          "bucketId": "3p-weekly",
+          "displayName": "Weekly Limit Remaining",
+          "window": "weekly",
+          "resetTime": "2026-11-11T08:05:42Z",
+          "remainingFraction": 1
+        },
+        {
+          "bucketId": "3p-5h",
+          "displayName": "Five Hour Limit Remaining",
+          "window": "5h",
+          "resetTime": "2026-11-04T13:05:42Z",
+          "remainingFraction": 1
+        }
+      ],
+      "displayName": "Claude and GPT models",
+      "description": "Models within this group: Claude Opus, Claude Sonnet, GPT-OSS"
+    },
+    {
+      "buckets": [
+        {
+          "bucketId": "gemini-argon-wtu-weekly",
+          "displayName": "Gemini 4 Argon Weekly Limit",
+          "window": "weekly",
+          "resetTime": "2026-11-05T02:56:36Z",
+          "description": "You have hit your weekly limit, it refreshes in 18 hours, 50 minutes. If on a supported paid plan, you can use AI credits in the interim or upgrade to a higher tier.",
+          "remainingFraction": 0
+        }
+      ],
+      "displayName": "Gemini 4 Argon",
+      "description": "For paid Pro plans, Argon quota is separate. Higher Argon quota (included as part of the larger Gemini quota bucket) is available on Ultra plans."
+    }
+  ],
+  "description": "Within each group, models share a weekly limit and a 5-hour limit. Quota is consumed proportionally to the cost of the tokens. Thus, limits will last longer with shorter tasks or using more cost-effective models. The 5-hour limit smooths out aggregate demand to fairly distribute global capacity across all users, while your weekly limit is tied directly to your individual tier."
+}

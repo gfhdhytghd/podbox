@@ -10,6 +10,8 @@ computer onto the iPod, in **System > Agents**. From the player you can:
   first tab's agents with each one's last activity; this changes nothing in
   herdr;
 - select an agent, which shows its pane in herdr;
+- hold Play/Pause in Agents to dictate with the computer's microphone;
+  release it to finish. The text goes into the focused input on the computer;
 - answer a choice question an agent is asking: Claude Code's questions and
   permission prompts, and Codex's approvals and questions;
 - press LEFT (the wheel's left, rewind) on the workspace list to see each AI
@@ -77,6 +79,80 @@ systemctl --user enable --now herdremote
 journalctl --user -u herdremote -f
 ```
 
+## Hold to talk
+
+The computer must have the LAIS fcitx5 voice addon and its `lais-voice`
+bridge running, plus `busctl` (no extra Python package is required).
+HerdRemote calls `HoldStart`/`HoldStop` on the session bus at
+`org.fcitx.Fcitx5`, `/org/lais/Voice`, `org.lais.FcitxVoice1`; it does not
+synthesise F23. Ordinary F23 uses `HoldStart`. Alt+F23 uses `HoldStartRaw`,
+which disables text cleanup; it does not select another microphone.
+
+The player sends `vd <req> <target>` on press and `vu <req>` on release.
+By default the selected pane or workspace's first tab is focused before
+recording with `client.focus clients=local`. If local focus is unsupported
+or fails, recording does not start. This voice path has no legacy fallback.
+Target `-` leaves focus as it is. Disable focus only when the current
+computer input field is the intended destination.
+
+| Config key | CLI option | Service environment | Default |
+|---|---|---|---|
+| `voice_focus` | `--voice-focus on\|off` | `HERDREMOTE_VOICE_FOCUS` | `on` |
+| `voice_max_hold` | `--voice-max-hold SECONDS` | `HERDREMOTE_VOICE_MAX_HOLD` | `120` |
+| `voice_method` | `--voice-method METHOD` | `HERDREMOTE_VOICE_METHOD` | `HoldStart` |
+
+CLI options override environment values. `voice_max_hold` must be finite
+and positive. `voice_method` accepts only `HoldStart` or `HoldStartRaw`.
+There is no separate config file. For a user-service override:
+
+```ini
+[Service]
+Environment=HERDREMOTE_VOICE_FOCUS=on
+Environment=HERDREMOTE_VOICE_MAX_HOLD=120
+Environment=HERDREMOTE_VOICE_METHOD=HoldStart
+```
+
+The systemd user manager and service must inherit `DBUS_SESSION_BUS_ADDRESS`
+for the same graphical login as fcitx. Check without opening a microphone:
+
+```sh
+systemctl --user show-environment | rg '^DBUS_SESSION_BUS_ADDRESS='
+busctl --user introspect org.fcitx.Fcitx5 /org/lais/Voice org.lais.FcitxVoice1
+busctl --user call org.fcitx.Fcitx5 /org/lais/Voice org.lais.FcitxVoice1 Status
+```
+
+If the manager lacks the variable, import it from the graphical session
+with `systemctl --user import-environment DBUS_SESSION_BUS_ADDRESS` before
+the next deployment. This checkout's implementation requires `hrvoice.py`
+alongside the other `hr*.py` modules when copying the daemon for deployment.
+
+A successful press says **Talking** after `Status` confirms recording. A
+successful release says **Sent** after the stop request, before transcription
+or text commit necessarily finishes. Missing bridge/addon/bus or D-Bus
+errors say **Voice input not running**. If `Status` reports an existing
+recording, the backend returns **Voice input busy** without starting or
+stopping that recording through D-Bus.
+
+Link loss, session reset and daemon shutdown release the daemon's own hold.
+An independent timer releases it after `voice_max_hold` even if herdr stalls.
+Duplicate presses do not restart recording or extend this limit. After a
+timeout, another press is refused until release/reset. Failed stops retry
+once per second and block a new hold. Bus calls have a 2-second timeout and
+a 3-second subprocess limit. Starting and checking `Status` can delay a
+very short timeout by at most two such calls, followed by the stop call.
+An unreachable addon/bus prevents a successful stop. Idle cleanup and
+unmatched releases do not stop a recording started elsewhere.
+
+Tests use mocked D-Bus only:
+
+```sh
+python3 -m unittest discover -s tools/herdremote/tests -p test_voice.py -v
+```
+
+Do not use real `HoldStart`/`HoldStartRaw` as a smoke test: they open the
+computer's microphone and can commit text to the user's current input.
+Optional `V talk`/`V idle` signals are not emitted by this backend.
+
 ## What the player shows
 
 On the Scrim theme, a dot left of each workspace and agent shows its state.
@@ -124,4 +200,5 @@ the screen.
 | `hrherdr.py` | herdr socket client, and the model the player is sent |
 | `hrdetect.py` | Finds a choice question in a pane's text, and the keys that answer it |
 | `hrproto.py` | The messages; `docs/podbox/herdremote-protocol.md` describes them |
+| `hrvoice.py` | Session-bus voice calls, hold ownership and independent stop watchdog |
 | `tests/` | `python3 -m unittest discover -s tools/herdremote/tests` |
