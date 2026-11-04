@@ -302,6 +302,16 @@
         "output": 2.5,
         "cache_write_1h": 1
       }
+    },
+    "gemini-4-argon": {
+      "input": 2.0,
+      "cached_input": 0.1,
+      "cache_write": 0.0,
+      "output": 10.0,
+      "source": "https://aistudio.google.com/docs/pricing#gemini-4-argon",
+      "date": "2026-11-04",
+      "confirmed": true,
+      "notes": "Standard introductory rate through 2026-11-30. Input/output/cached input rise to 4/20/0.20 on 2026-12-01; update this price snapshot then. Implicit caching only, no explicit cache write/storage fee. Missing-model agy records use this model by user request; this is an API-equivalent estimate, not proof of the model used."
     }
   }
 }

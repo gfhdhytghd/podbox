@@ -1,6 +1,6 @@
 # HerdRemote subscription usage (computer side)
 
-Updated for Amendments 1–5 on 2026-11-04. The implementation is
+Updated for Amendments 1–5 and corrected Amendment 8 on 2026-11-04. The implementation is
 `tools/herdremote/hrusage.py`; the wire shape remains `us` → `U/P/N` in
 [herdremote-protocol.md](herdremote-protocol.md). No model/prompt request is made.
 
@@ -149,13 +149,17 @@ separate deployment owner installs them.
 | Codex | `~/.codex/sessions/**/*.jsonl` and `.jsonl.zst` archives | `turn_context.payload.model`; `token_usage_record.payload.usage` per response, deduplicated by response ID. Modern records take precedence for their session. Older `token_count.info.total_token_usage` uses class deltas, repeated checkpoints ignored. Log limits are only an offline-parser fallback, never the normal live quota source. |
 | Claude | `~/.claude/projects/**/*.jsonl`, including `subagents/` | Assistant `message.model/usage`; merge component maxima for message ID/request ID across streamed chunks and copied partial logs. `cache_creation` splits 5m and 1h writes. |
 | Grok | `~/.grok/sessions/<project>/<session>/usage.json` | Completed `turns[].endedAt/turnNumber/modelUsage[model]`. Do not add duplicate `session` totals or `updates.jsonl`; do not use `costUsdTicks` as API list price. |
-| agy | `~/.gemini/antigravity-cli/brain/<conversation>/.system_generated/logs/transcript.jsonl` | Canonical `PLANNER_RESPONSE`, `created_at/step_index/input_tokens/cache_read_tokens/output_tokens`. Skip duplicate full/chunk transcripts. Missing model IDs stay unknown and unpriced; thinking text is not a numeric counter. |
+| agy | `~/.gemini/antigravity-cli/brain/<conversation>/.system_generated/logs/transcript.jsonl` | Canonical `PLANNER_RESPONSE`, `created_at/step_index/input_tokens/cache_read_tokens/output_tokens`. Skip duplicate full/chunk transcripts. Missing model IDs use the user-requested `gemini-4-argon` price; explicit IDs remain authoritative. Thinking text is not a numeric counter. |
 | Standard Gemini CLI | `~/.gemini/tmp/**/session-*.json` | `messages[].id/timestamp/model/tokens`, changed snapshots only; `input` includes `cached`, while `output` and `thoughts` are disjoint. |
 
 A future weekly reset selects `[reset - 7 days, reset)`, excluding future
 records. Without a current reset, use trailing seven days. An expired weekly
 sample falls back to trailing seven days without inventing the next reset.
-The index can therefore be reused when a quota window changes.
+The index can therefore be reused when a quota window changes. A freshly reset
+quota whose weekly window starts on first use can correctly have zero local
+tokens. Even at 0% used with a reset near seven days ahead, keep the quota
+window; do not substitute a trailing-seven-day total. Amendment 8 item 1 was
+withdrawn by the user.
 
 Codex and native Grok input includes cached input, and output includes reasoning.
 Those subsets are split for pricing and counted once. Codex cache write is
@@ -187,7 +191,11 @@ The checked standard global list prices come from:
 
 The table explicitly marks `grok-4.6`, `grok-4.6-build`, and `grok-build-0.1`
 unconfirmed; those installed model IDs could not be confirmed from the current
-public official list. agy missing IDs are also unpriced. The table uses standard
+public official list. Unknown IDs in standard Gemini CLI logs remain unpriced.
+For **canonical agy records without a model id only**, Amendment 8 explicitly
+sets `gemini-4-argon` as the API-equivalent pricing model. This assumption does
+not identify the model that actually ran. Explicit `model` / `model_id` values
+retain their own pricing. The table uses standard
 API prices, not subscription credits, service-tier premiums, regional premiums,
 tool fees, or cache storage rent. Gemini 3.1 Pro's published >200k input tier is
 handled, as are OpenAI's >272k tier and Haiku 5.5's >100k tier. OpenAI's
@@ -196,6 +204,29 @@ both context tiers in the table. Codex cache-write TTL is absent from the
 inspected counter: the short cache-write rate is the estimate. OpenAI's optional
 extended rate is stored as `cache_write_12h`; Claude uses the explicit
 1h split. Integer milli-USD is rounded once per service with Decimal half-up.
+
+### agy Argon pricing (corrected Amendment 8)
+
+Google's [official Standard price](https://aistudio.google.com/docs/pricing#gemini-4-argon),
+checked 2026-11-04, lists `gemini-4-argon`: **$2 input, $0.10 cached input,
+$10 output per million tokens** through 2026-11-30. Output includes thinking.
+Only implicit caching is supported, so no explicit cache-write/storage rate
+is added. The entry is confirmed; no Pro estimate is needed. Google lists
+$4 / $0.20 / $20 from 2026-12-01; the dated snapshot must be updated for that
+change. These are API-equivalent costs, not subscription charges.
+
+Missing-model agy records no longer get an `unpriced` note. An existing v3
+canonical agy index with the old `unknown` placeholder is normalized in memory
+to `gemini-4-argon` when loaded. Its timestamp, tokens, offsets and deduplication
+keys stay unchanged. No global cache-version bump or full log reindex is needed.
+Unknown explicit IDs and missing-model standard Gemini CLI records retain their
+normal unpriced behavior.
+
+The canonical path remains
+`~/.gemini/antigravity-cli/brain/*/.system_generated/logs/transcript.jsonl`.
+Read-only counts and the real usage dump are in
+`ipod/evidence/agents-ui/usage/backend-amendments/amendment8/`.
+Full and chunk copies are counted for inspection, never added to usage totals.
 
 ## Persistent index and background scheduling (Amendment 2)
 

@@ -41,6 +41,7 @@ SERVICES = ('codex', 'claude', 'grok', 'gemini')
 INTERVAL = 20.0
 TIMEOUT = 5.0
 WEEK = 7 * 86400
+AGY_DEFAULT_MODEL = 'gemini-4-argon'
 INDEX_VERSION = 3
 SLICE = 0.35
 SCAN_CPU_BUDGET = 0.15
@@ -742,7 +743,8 @@ class Collector:
             key = (file.session, data.get('step_index', line_number))
             usage = {'input': data.get('input_tokens'), 'cached': data.get('cache_read_tokens'),
                      'output': data.get('output_tokens'), 'thoughts': data.get('thinking_tokens')}
-            file.events[key] = (at, data.get('model') or data.get('model_id') or 'unknown', counts(usage, 'gemini'))
+            file.events[key] = (at, data.get('model') or data.get('model_id') or AGY_DEFAULT_MODEL,
+                                counts(usage, 'gemini'))
 
     def read_json(self, file, stat):
         sig = (stat.st_ino, stat.st_size, stat.st_mtime_ns)
@@ -848,6 +850,11 @@ class Collector:
                 for at,model,tokens in events.values():
                     if not isinstance(at,(int,float)) or not math.isfinite(at) or not isinstance(model,str) or len(tokens)!=5 or not all(isinstance(n,int) and n>=0 for n in tokens):
                         raise ValueError()
+            if self.service=='gemini' and path.name=='transcript.jsonl':
+                # v3 canonical agy indices used 'unknown' for missing model ids.
+                # Reprice those counters without invalidating multi-GB indices.
+                file.events={k:(at,AGY_DEFAULT_MODEL if model=='unknown' else model,tokens)
+                             for k,(at,model,tokens) in file.events.items()}
             return file
         except (KeyError, TypeError, ValueError):
             return LogFile(path)

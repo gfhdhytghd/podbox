@@ -129,8 +129,8 @@ class Parsers(unittest.TestCase):
             self.put(base+name, sample('agy.jsonl'))
         out = self.collector('gemini').collect(NOW)
         self.assertEqual(out['tokens'], 1200)
-        self.assertEqual(out['usd_milli'], 0)
-        self.assertIn('unpriced', out['note'])
+        self.assertEqual(out['usd_milli'], 3)  # Argon: .8 + .06 + 2 = 2.86 milli
+        self.assertNotIn('unpriced', out['note'])
 
     def test_gemini_cli_thinking_and_cached_subsets(self):
         self.put('.gemini/tmp/project/chats/session-1.json', sample('gemini.json'))
@@ -766,6 +766,87 @@ class ReviewFixes(unittest.TestCase):
         limits,note=hrusage.quota_groups(data)
         self.assertEqual((limits['wk_pct'],limits['h5_pct']),(0,0))
         self.assertEqual(note,'C/G 0/0 A 100/-')
+
+
+class ArgonPricing(unittest.TestCase):
+    setUp = Parsers.setUp
+    put = Parsers.put
+    collector = Parsers.collector
+    def test_argon_official_standard_rate_and_token_classes(self):
+        prices=hrusage.Prices()
+        entry=prices.models['gemini-4-argon']
+        self.assertTrue(entry['confirmed'])
+        self.assertEqual(entry['date'],'2026-11-04')
+        self.assertEqual(entry['source'],'https://aistudio.google.com/docs/pricing#gemini-4-argon')
+        self.assertEqual(prices.cost('gemini-4-argon',(1000000,1000000,0,1000000,0)),
+                         (hrusage.Decimal('12.1'),True))
+        record=json.loads(sample('agy.jsonl').splitlines()[-1])
+        record['thinking_tokens']=100
+        self.put('.gemini/antigravity-cli/brain/s/.system_generated/logs/transcript.jsonl',json.dumps(record)+'\n')
+        result=self.collector('gemini').collect(NOW)
+        self.assertEqual((result['tokens'],result['usd_milli']),(1300,4))
+        self.assertNotIn('unpriced',result['note'])
+
+    def test_agy_model_and_model_id_take_precedence_over_default(self):
+        for field in ('model','model_id'):
+            with self.subTest(field=field):
+                record=json.loads(sample('agy.jsonl').splitlines()[-1])
+                record[field]='gemini-3.1-pro-preview'
+                path=self.put('.gemini/antigravity-cli/brain/'+field+'/.system_generated/logs/transcript.jsonl',json.dumps(record)+'\n')
+                collector=self.collector('gemini')
+                file=hrusage.LogFile(path)
+                collector.consume(file,record,0)
+                self.assertEqual(list(file.events.values())[0][1],'gemini-3.1-pro-preview')
+        record['model']='future-unpriced-model'
+        collector.consume(file,record,0)
+        self.assertEqual(list(file.events.values())[0][1],'future-unpriced-model')
+
+    def test_standard_gemini_cli_without_model_stays_unpriced(self):
+        data=json.loads(sample('gemini.json'))
+        for message in data['messages']:
+            message.pop('model',None)
+        self.put('.gemini/tmp/p/session-test.json',json.dumps(data))
+        result=self.collector('gemini').collect(NOW)
+        self.assertEqual((result['tokens'],result['usd_milli']),(1200,0))
+        self.assertIn('unpriced',result['note'])
+
+    def test_old_agy_index_repriced_without_rereading_or_version_bump(self):
+        path=self.put('.gemini/antigravity-cli/brain/s/.system_generated/logs/transcript.jsonl',sample('agy.jsonl'))
+        collector=self.collector('gemini')
+        collector.collect(NOW)
+        index=collector.index_path(path)
+        data=hrusage.cache_read(index,True)
+        for key,event in data['events']:
+            event[1]='unknown'  # Pre-Amendment-8 cache, no model id in source.
+        hrusage.atomic_json(index,data,True)
+        before=index.read_bytes()
+        warm=self.collector('gemini')
+        result=warm.collect(NOW)
+        self.assertEqual((result['tokens'],result['usd_milli']),(1200,3))
+        self.assertNotIn('unpriced',result['note'])
+        self.assertEqual(warm.bytes_read,0)
+        self.assertEqual(index.read_bytes(),before)
+        self.assertEqual(hrusage.INDEX_VERSION,3)
+
+    def test_just_reset_empty_window_keeps_zero_for_every_service(self):
+        fixtures={
+            'codex':('.codex/sessions/log.jsonl','codex.jsonl'),
+            'claude':('.claude/projects/p/log.jsonl','claude.jsonl'),
+            'grok':('.grok/sessions/p/s/usage.json','grok.json'),
+            'gemini':('.gemini/antigravity-cli/brain/s/.system_generated/logs/transcript.jsonl','agy.jsonl')}
+        for service,(path,name) in fixtures.items():
+            with self.subTest(service=service):
+                self.put(path,sample(name))
+                collector=hrusage.Collector(service,self.home,network=True)
+                with patch.object(hrusage,service+'_limits',side_effect=[
+                    ({'wk_pct':0,'wk_reset':NOW+hrusage.WEEK},'fixture'),
+                    ({'wk_pct':0,'wk_reset':NOW+20+hrusage.WEEK},'fixture')]):
+                    first=collector.collect(NOW)
+                    second=collector.collect(NOW+20)
+                self.assertEqual((first['tokens'],first['usd_milli']),(0,0))
+                self.assertEqual((second['tokens'],second['usd_milli']),(0,0))
+                self.assertEqual(second['wk_reset'],NOW+20+hrusage.WEEK if service!='claude' else NOW+hrusage.WEEK)
+                self.assertEqual(second['state'],'ok')
 
 
 if __name__ == "__main__":
