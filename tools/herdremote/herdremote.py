@@ -30,6 +30,7 @@ import hrorder  # noqa: E402
 import hrproto  # noqa: E402
 import hrusage  # noqa: E402
 import hrvoice  # noqa: E402
+import hrkeys  # noqa: E402
 
 VERSION = "herdremote-1"
 DEVICE = dict(vid=0x05AC, pid=0x1261, manufacturer="PodBox",
@@ -123,6 +124,7 @@ class Daemon:
         self.port = self.link = None
         self.stopping = threading.Event()
         self.usage = hrusage.UsageCache()
+        self.keys = hrkeys.KeyTaps(hrkeys.KeyTool(getattr(args, "key_tool", None)))
         self.voice = hrvoice.HoldToTalk(
             self.voice_focus_target,
             voice_focus=getattr(args, "voice_focus", False),
@@ -131,6 +133,7 @@ class Daemon:
         self.reset_session()
 
     def reset_session(self):
+        self.keys.reset()
         self.voice.stop()
         self.sent_ws = None
         self.sent_status = None
@@ -180,6 +183,7 @@ class Daemon:
         return True
 
     def close_link(self):
+        self.keys.reset()
         self.voice.stop()
         if self.link and self.link.opened:
             try:
@@ -226,6 +230,8 @@ class Daemon:
                 self.sent_questions[qid] = True
         while not self.results.empty():
             self.send(hrproto.result(*self.results.get()))
+        for result in self.keys.replies():
+            self.send(hrproto.result(*result))
         now = time.monotonic()
         if now >= self.next_tick:
             self.send(hrproto.tick(now - self.model_time, self.herdr_ok))
@@ -250,6 +256,8 @@ class Daemon:
             self.focus(name, *args)
         elif name in ("vd", "vu"):
             self.voice_command(name, *args)
+        elif name == "k":
+            self.key_command(*args)
         elif name == "a":
             req, qid, number = args
             q = self.model["questions"].get(qid)
@@ -257,6 +265,12 @@ class Daemon:
                 self.send(hrproto.result(req, False, "The question has gone"))
             else:
                 self.answerer.jobs.put((req, q, int(number)))
+
+    def key_command(self, req, key):
+        result = ((False, "Session not ready") if self.sent_ws is None else
+                  self.keys.request(req, key))
+        if result is not None:
+            self.send(hrproto.result(req, *result))
 
     def voice_focus_target(self, target):
         params = dict(pane_id=target)
@@ -335,6 +349,7 @@ class Daemon:
                 self.close_link()
                 continue
             time.sleep(0.02)
+        self.keys.reset()
         self.voice.stop()
         if self.link:
             self.close_link()
@@ -359,6 +374,7 @@ def main():
     parser.add_argument("--usage-wait", type=float, default=6,
                         help="usage-dump indexing budget in seconds (default: 6)")
     hrvoice.add_arguments(parser)
+    hrkeys.add_arguments(parser)
     args = parser.parse_args()
     logging.basicConfig(stream=sys.stdout, level=logging.INFO,
                         format="%(asctime)s %(levelname)s %(message)s")

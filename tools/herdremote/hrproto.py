@@ -117,9 +117,11 @@ def question_gone(qid):
     return encode([["X", qid]])
 
 
-def result(req, ok, text):
-    return encode([["R", clean(req, 7), "ok" if ok else "err",
-                    clean(text, 120)]])
+def result(req, ok, text=None):
+    fields = ["R", clean(req, 7), "ok" if ok else "err"]
+    if text is not None:
+        fields.append(clean(text, 120))
+    return encode([fields])
 
 
 def tick(age_seconds, herdr_ok):
@@ -169,10 +171,10 @@ def parse_command(payload):
     fields = records[0]
     name, args = fields[0], fields[1:]
     shapes = {"hr": 1, "sub": 1, "fw": 2, "fp": 2, "a": 3, "us": 0,
-              "vd": 2, "vu": 1}
-    if name in ("us", "vd", "vu") and len(records) != 1:
+              "vd": 2, "vu": 1, "k": 2}
+    if name in ("us", "vd", "vu", "k") and len(records) != 1:
         return None
-    if name in ("vd", "vu") and (
+    if name in ("vd", "vu", "k") and (
             not args or not args[0] or len(args[0].encode("utf-8")) > 7 or
             any(ord(c) < 32 or ord(c) == 127 for a in args for c in a)):
         return None

@@ -197,6 +197,13 @@ int main(int argc, char **argv)
     assert(apply("V\tidle") == 'V' && m.voice == 'i');
     assert(apply("V\tbusy") == 0 && m.voice == 'i');
     assert(apply("V") == 0 && apply("V\ttalk\tx") == 0 && m.voice == 'i');
+    /* k's result: a bare ok, or err with its reason; a bare err is no R */
+    assert(apply("R\t7\tok") == 'R' && m.result_ok &&
+           !strcmp(m.result_req, "7") && !m.result_text[0]);
+    assert(apply("R\t8\tok\t") == 'R' && m.result_ok && !m.result_text[0]);
+    assert(apply("R\t9\terr") == 0 && !strcmp(m.result_req, "8"));
+    assert(apply("R\t9\terr\tNo key tool") == 'R' && !m.result_ok &&
+           !strcmp(m.result_text, "No key tool"));
     /* A voice request's result is an R like any other */
     assert(apply("R\t12\terr\tVoice input not running") == 'R');
     assert(!m.result_ok && !strcmp(m.result_req, "12") &&

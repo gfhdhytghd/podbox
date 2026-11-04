@@ -162,13 +162,16 @@ The question was answered, here or on the computer, or the agent moved on.
 ### `R` — result of a request
 
 ```
-R <req> <ok|err> <text>
+R <req> <ok|err> [<text>]
 ```
 
 `text` (120 bytes) is what the player shows: `Focused <label>`,
 `Answered`, `Updated` (a multi-select box changed), `Talking` (voice hold
 started), `Sent` (voice hold released), or why it failed. `Sent` confirms
 `HoldStop`, not completion of transcription or text commit.
+Keyboard-tap success is exactly `R <req> ok` (three fields, no text).
+The player handles that success silently. Keyboard errors retain a fourth
+field containing the reason, which the player shows briefly.
 For a local focus with no moved clients, the computer checks `client.list`.
 A connected client with `origin: "local"` means an already-focused view and
 returns success. Without a local client, the computer sends
@@ -243,6 +246,7 @@ down or `ok=0`: retain last data and mark it stale. See
 | `fp <req> <pane>` | Show this pane on the computer |
 | `vd <req> <target>` | Start hold-to-talk; target is a pane id, `w:<ws>`, or `-` |
 | `vu <req>` | Release hold-to-talk |
+| `k <req> <key>` | Tap `bs`, `left`, `right` or `enter` at the computer's current keyboard focus |
 | `a <req> <qid> <number>` | Choose option `number` of question `qid` |
 | `us` | Send the cached `U/P/N` usage frame now; request a refresh when due |
 
@@ -296,6 +300,35 @@ require a reachable bus/addon.
 `vd` and `vu` each occupy exactly one record. Request ids are nonempty and
 at most 7 bytes; targets are nonempty and at most 17 bytes (the `w:` prefix
 plus a 15-byte workspace id). Control characters are rejected.
+
+### Keyboard taps from Usage
+
+In Usage, LEFT press/repeat sends `k <req> bs`, wheel counter-clockwise
+sends `k <req> left`, clockwise sends `k <req> right`, and SELECT sends
+`k <req> enter` once per press. Each message is one complete key tap.
+The whitelist is exactly `bs`, `left`, `right`, `enter`; any other key
+returns `R <req> err Unsupported key`. Each command occupies one record
+with exactly three fields, a nonempty request id of at most 7 bytes, and
+no control characters. Malformed frames are ignored as above. A command
+before `hr` returns `err Session not ready` without running a tool.
+
+These taps never focus herdr and never use `pane.send_keys`: they reach
+the computer's current keyboard focus, like physical keys. The backend
+prefers `ydotool key <code>:1 <code>:0` (14, 105, 106, 28 respectively),
+falling back to `wtype -k <symbol>` (`BackSpace`, `Left`, `Right`, `Return`)
+when ydotool or its socket is absent. `HERDREMOTE_KEY_TOOL`/`--key-tool`
+select `auto` (default), `ydotool`, or `wtype`.
+
+All four keys share a maximum rate of 30 taps per second. At most one tap
+is outstanding; excess messages return `err Key rate limit` and are not
+queued. Work that has not started within 100 ms returns `Key request expired`
+without injecting. Reset, link loss and shutdown invalidate unstarted taps
+and old replies. A tool call already in flight can finish its single pair.
+Each tool call has a 0.5-second limit. On a tool failure, a bounded
+release-only cleanup is attempted; the backend never retries the tap via
+another tool because that could type or delete twice. Errors are
+`Key tool unavailable` or `Key tool failed`. A successful subprocess exit
+confirms the tap request, not the contents of the focused input field.
 
 The optional computer-to-player message `V <talk|idle>` is reserved for
 recording signals. This backend does not emit `V`; it returns `R` after

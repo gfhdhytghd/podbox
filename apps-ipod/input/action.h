@@ -334,6 +334,7 @@ enum {
     /* System > Agents: Play down and up, hold to talk */
     ACTION_AGENTS_TALK,
     ACTION_AGENTS_TALK_END,
+    ACTION_AGENTS_LEFT_REPEAT,
 
     LAST_ACTION_PLACEHOLDER, /* custom actions should be this + something */
 };

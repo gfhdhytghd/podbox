@@ -15,7 +15,9 @@
  *             SELECT focuses that pane, or opens its question
  *   question  the question and its options; SELECT answers
  *   usage     each AI service's limits, tokens and cost, drawn by this file
- *             over an empty list; RIGHT goes back to spaces
+ *             over an empty list; RIGHT goes back to spaces. The other keys
+ *             type on the computer: LEFT Backspace (once per press and per
+ *             repeat), the wheel the Left and Right arrows, SELECT Enter
  *
  * A pending question puts an alert row at the top of the agents and spaces
  * views. RIGHT opens a workspace, the alert's question or an agent's
@@ -131,6 +133,12 @@ static long talk_until;         /* when the request or the note expires */
 static char talk_note[64];      /* the last result */
 static bool talk_failed;        /* the note is an error */
 static bool talk_shown;         /* the band is on screen */
+/* k frames sent and not yet answered, at most: a fast spin of the wheel
+ * drops its steps rather than queue them */
+#define KEY_WINDOW  4
+#define KEY_LOST    (2 * HZ)    /* a k unanswered this long is forgotten */
+static char key_reqs[KEY_WINDOW][8];
+static long key_sent;           /* when the last k went */
 
 /* A free outbox slot, or NULL while the link is wedged (the user can press
  * again) */
@@ -1222,6 +1230,54 @@ static void stop_talk(void)
     talk_until = current_tick + TALK_REPLY;
 }
 
+static void forget_keys(void)
+{
+    for (int i = 0; i < KEY_WINDOW; i++)
+        key_reqs[i][0] = '\0';
+}
+
+/* One key tap on the computer, from the usage view: bs, left, right or
+ * enter. Dropped while KEY_WINDOW taps are unanswered or the outbox is
+ * full, so a held LEFT or a spun wheel cannot queue a burst. */
+static void send_key(const char *key)
+{
+    if (podlink_state() != PODLINK_CONNECTED || !model.hello)
+    {
+        talk_result("No link to the computer", true);
+        return;
+    }
+    if (TIME_AFTER(current_tick, key_sent + KEY_LOST))
+        forget_keys();
+    int i = 0;
+    while (i < KEY_WINDOW && key_reqs[i][0])
+        i++;
+    if (i == KEY_WINDOW)
+        return;
+    char *slot = outbox_slot();
+    if (!slot)
+        return;
+    take_req(key_reqs[i], sizeof key_reqs[i]);
+    snprintf(slot, sizeof outbox[0], "k\t%s\t%s", key_reqs[i], key);
+    key_sent = current_tick;
+}
+
+/* An R for k: silent when it worked, its reason in the band when not.
+ * Returns false for any other request's R. */
+static bool take_key_result(void)
+{
+    int i = 0;
+    while (i < KEY_WINDOW && (!key_reqs[i][0] ||
+                              strcmp(model.result_req, key_reqs[i])))
+        i++;
+    if (i == KEY_WINDOW)
+        return false;
+    model.result_new = false;
+    key_reqs[i][0] = '\0';
+    if (!model.result_ok)
+        talk_result(model.result_text, true);
+    return true;
+}
+
 /* An R for vd or vu. Returns false for any other request's R. */
 static bool take_talk_result(void)
 {
@@ -1416,6 +1472,7 @@ static bool poll_link(void)
             talk_result("Link lost", true);
         talk_held = false;
         talk_req[0] = '\0';
+        forget_keys();
         if (connected)
         {
             char *slot = outbox_slot();
@@ -1452,7 +1509,7 @@ static bool poll_link(void)
         if (type == 'V' && model.voice == 't' && !talk_held)
             talk_since = current_tick;
         /* One result at a time: take_result reads it before the next */
-        if (type == 'R' && !take_talk_result())
+        if (type == 'R' && !take_talk_result() && !take_key_result())
             break;
     }
     flush_outbox();
@@ -1500,6 +1557,7 @@ int agents_screen(void)
     pending_answer = was_connected = false;
     talk_held = talk_shown = false;
     talk_req[0] = talk_note[0] = '\0';
+    forget_keys();
     nout = 0;
     last_message = current_tick;
     usage_serial = model.usage.serial;
@@ -1589,14 +1647,18 @@ int agents_screen(void)
 
         int before = gui_synclist_get_sel_pos(&list);
         int before_top = list.start_item[SCREEN_MAIN];
-        if (list_do_action(CONTEXT_AGENTS, ANIM_TICKS, &list, &action))
+        if (view == VIEW_USAGE)
         {
-            if (view == VIEW_USAGE)
-            {
-                /* The wheel has nothing to move, but the list redraws */
-                draw_usage(&list);
-                continue;
-            }
+            /* No list to scroll: the wheel is the arrow keys */
+            action = get_action(CONTEXT_AGENTS, ANIM_TICKS);
+            if (action == ACTION_STD_PREV || action == ACTION_STD_PREVREPEAT)
+                send_key("left");
+            else if (action == ACTION_STD_NEXT ||
+                     action == ACTION_STD_NEXTREPEAT)
+                send_key("right");
+        }
+        else if (list_do_action(CONTEXT_AGENTS, ANIM_TICKS, &list, &action))
+        {
             int sel = gui_synclist_get_sel_pos(&list);
             int lines = gui_synclist_get_nb_lines(&list, SCREEN_MAIN);
             if (sel > before && before >= before_top + lines)
@@ -1649,6 +1711,8 @@ int agents_screen(void)
                 {
                     if (button & BUTTON_RIGHT)
                         close_usage(&list);
+                    else
+                        send_key("enter");
                     break;
                 }
                 bool opened = (button & BUTTON_RIGHT) ? enter(&list)
@@ -1663,20 +1727,22 @@ int agents_screen(void)
             case ACTION_STD_MENU:
             {
                 /* LEFT and MENU both go back a view, but only MENU leaves
-                 * Agents: LEFT on the spaces view opens usage. LEFT acts on
-                 * the press alone. */
+                 * Agents: LEFT on the spaces view opens usage, and in usage
+                 * is Backspace. LEFT goes back on the press alone. */
                 int button;
                 int status = get_action_statuscode(&button);
                 bool left = action == ACTION_STD_CANCEL &&
                             (button & BUTTON_LEFT);
-                if (left && (status & ACTION_REPEAT))
-                    break;
                 if (view == VIEW_USAGE)
                 {
-                    if (!left)
+                    if (left)
+                        send_key("bs");
+                    else
                         close_usage(&list);
                     break;
                 }
+                if (left && (status & ACTION_REPEAT))
+                    break;
                 if (view == VIEW_SPACES)
                 {
                     if (left)
@@ -1702,6 +1768,17 @@ int agents_screen(void)
                 break;
             case ACTION_AGENTS_TALK_END:
                 stop_talk();
+                break;
+            case ACTION_STD_CONTEXT:
+                /* SELECT held is still one Enter in usage: the first
+                 * repeat sends it, the rest and the release nothing */
+                if (view == VIEW_USAGE &&
+                    !(get_action_statuscode(NULL) & ACTION_REPEAT))
+                    send_key("enter");
+                break;
+            case ACTION_AGENTS_LEFT_REPEAT:
+                if (view == VIEW_USAGE)
+                    send_key("bs");
                 break;
             case ACTION_NONE:
                 break;

@@ -364,11 +364,12 @@ int hr_model_apply(struct hr_model *m, const char *data, unsigned int length)
             remove_question(m, i);
         return 'X';
     }
-    if (!strcmp(type, "R") && n == 4)
+    /* A result with no text is a success that says nothing */
+    if (!strcmp(type, "R") && (n == 4 || (n == 3 && !strcmp(f[2], "ok"))))
     {
         hr_copy(m->result_req, f[1], sizeof m->result_req);
         m->result_ok = !strcmp(f[2], "ok");
-        hr_copy(m->result_text, f[3], sizeof m->result_text);
+        hr_copy(m->result_text, n == 4 ? f[3] : "", sizeof m->result_text);
         m->result_new = true;
         return 'R';
     }

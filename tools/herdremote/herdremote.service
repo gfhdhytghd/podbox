@@ -16,6 +16,8 @@ Environment=PYTHONUNBUFFERED=1
 # Environment=HERDREMOTE_VOICE_FOCUS=off
 # Environment=HERDREMOTE_VOICE_MAX_HOLD=120
 # Environment=HERDREMOTE_VOICE_METHOD=HoldStart
+# Usage keyboard tool: auto (ydotool then wtype), ydotool, or wtype.
+# Environment=HERDREMOTE_KEY_TOOL=auto
 # The list order's times: ~/.local/state/herdremote/order.json
 StateDirectory=herdremote
 Restart=on-failure
