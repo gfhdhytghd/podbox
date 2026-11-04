@@ -39,8 +39,8 @@ def hold_seconds(value):
 
 def add_arguments(parser):
     parser.add_argument("--voice-focus", type=boolean,
-                        default=os.environ.get("HERDREMOTE_VOICE_FOCUS", "on"),
-                        metavar="on|off", help="focus a local target before voice (default: on)")
+                        default=os.environ.get("HERDREMOTE_VOICE_FOCUS", "off"),
+                        metavar="on|off", help="focus a local target before voice (default: off)")
     parser.add_argument("--voice-max-hold", type=hold_seconds,
                         default=os.environ.get("HERDREMOTE_VOICE_MAX_HOLD", "120"),
                         metavar="SECONDS", help="maximum voice hold (default: 120 seconds)")
@@ -85,7 +85,7 @@ class SessionBus:
 
 
 class HoldToTalk:
-    def __init__(self, focus, *, voice_focus=True, voice_max_hold=120,
+    def __init__(self, focus, *, voice_focus=False, voice_max_hold=120,
                  voice_method="HoldStart", bus=None, timer=None):
         self.focus = focus
         self.voice_focus = boolean(voice_focus)

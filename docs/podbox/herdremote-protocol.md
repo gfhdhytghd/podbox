@@ -169,7 +169,9 @@ R <req> <ok|err> <text>
 `Answered`, `Updated` (a multi-select box changed), `Talking` (voice hold
 started), `Sent` (voice hold released), or why it failed. `Sent` confirms
 `HoldStop`, not completion of transcription or text commit.
-For a local focus with no moved clients, the computer sends
+For a local focus with no moved clients, the computer checks `client.list`.
+A connected client with `origin: "local"` means an already-focused view and
+returns success. Without a local client, the computer sends
 `R <req> err No local herdr window`. The existing screen shows the reason
 as a focus failure; no new message type is needed.
 
@@ -250,14 +252,19 @@ focus. With the capability set to `true`, `fw` calls `client.focus` with
 `workspace_id`, the first `tab_id` when present, and `clients: "local"`;
 `fp` uses `pane_id` and `clients: "local"`. Remote clients keep their
 workspace/tab views, but pane focus remains shared with clients already
-viewing that tab. `moved: []` is a focus failure (see `R`). Without the
+viewing that tab. For `moved: []`, `client.list` distinguishes an
+already-focused local client (success) from no local client (failure; see
+`R`). Remote-only connections do not qualify. A failed `client.list`
+returns an error without legacy fallback. Without the
 capability, `fw` uses `workspace.focus` then `tab.focus` when present, and
 `fp` uses `pane.focus`; these legacy calls move all clients. Probe and focus
 errors return `R <req> err` without retrying through legacy focus calls.
 
-`vd` focuses the target first when `voice_focus` is on (default), then calls
-the fcitx voice addon's `HoldStart` on the computer's session bus. `w:<ws>`
-selects that workspace's first tab; `-` keeps the current focused input.
+`vd` defaults to `voice_focus=off`: like F23, it calls the fcitx voice
+addon's `HoldStart` on the computer's session bus at the current cursor,
+without moving herdr, regardless of the target. With `voice_focus=on`, it
+focuses the target first; `w:<ws>` selects that workspace's first tab and
+`-` keeps the current focused input.
 Voice focus uses only `client.focus` with `clients: "local"`. A missing
 capability, missing local window or failed focus returns `R <req> err`
 without starting voice; voice never uses the legacy all-client fallback.

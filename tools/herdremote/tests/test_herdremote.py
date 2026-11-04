@@ -449,6 +449,7 @@ class FakeHerdr(threading.Thread):
         self.calls = []
         self.pong = dict(type="pong", version="test", protocol=1)
         self.moved = [1]
+        self.clients = []
         self.errors = {}
 
     def stop(self):
@@ -502,6 +503,8 @@ class FakeHerdr(threading.Thread):
                     result = self.pong
                 elif method == "client.focus":
                     result = dict(type="client_focus", moved=self.moved)
+                elif method == "client.list":
+                    result = dict(type="client_list", clients=self.clients)
                 elif method == "session.snapshot":
                     result = dict(snapshot=self.snapshot())
                 elif method == "pane.read":
@@ -594,7 +597,43 @@ class Focus(unittest.TestCase):
                 self.assertEqual(self.command(payload),
                                  ["R", "7", "err", "No local herdr window"])
                 self.assertEqual([m for m, _ in self.server.calls],
-                                 ["ping", "client.focus"])
+                                 ["ping", "client.focus", "client.list"])
+
+    def test_already_focused_local_client_succeeds(self):
+        self.server.pong["capabilities"] = dict(client_targeted_focus=True)
+        self.server.moved = []
+        self.server.clients = [dict(client_id=1, origin="local",
+                                    focused_workspace_id="w1",
+                                    focused_tab_id="w1:t1", surface_active=False)]
+        self.daemon.refresh()
+        for payload, text in ((b"fw\t7\tw1", "Focused 项目"),
+                              (b"fp\t7\tw1:p1", "Focused pane")):
+            with self.subTest(payload=payload):
+                self.assertEqual(self.command(payload), ["R", "7", "ok", text])
+                self.assertEqual([m for m, _ in self.server.calls],
+                                 ["ping", "client.focus", "client.list"])
+
+    def test_remote_only_client_is_not_a_local_window(self):
+        self.server.pong["capabilities"] = dict(client_targeted_focus=True)
+        self.server.moved = []
+        self.server.clients = [dict(client_id=2, origin="remote")]
+        self.daemon.refresh()
+        for payload in (b"fw\t7\tw1", b"fp\t7\tw1:p1"):
+            with self.subTest(payload=payload):
+                self.assertEqual(self.command(payload),
+                                 ["R", "7", "err", "No local herdr window"])
+                self.assertEqual([m for m, _ in self.server.calls],
+                                 ["ping", "client.focus", "client.list"])
+
+    def test_client_list_error_does_not_fall_back(self):
+        self.server.pong["capabilities"] = dict(client_targeted_focus=True)
+        self.server.moved = []
+        self.server.errors["client.list"] = "unavailable"
+        self.daemon.refresh()
+        self.assertEqual(self.command(b"fp\t7\tw1:p1"),
+                         ["R", "7", "err", "client.list: unavailable"])
+        self.assertEqual([m for m, _ in self.server.calls],
+                         ["ping", "client.focus", "client.list"])
 
     def test_focus_error_does_not_fall_back(self):
         self.server.pong["capabilities"] = dict(client_targeted_focus=True)

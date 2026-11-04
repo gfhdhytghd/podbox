@@ -45,7 +45,8 @@ class VoiceFixture:
         self.events = mock.Mock()
         self.events.attach_mock(self.focus, "focus")
         self.events.attach_mock(self.bus, "bus")
-        self.voice = hrvoice.HoldToTalk(self.focus, bus=self.bus, timer=FakeTimer)
+        self.voice = hrvoice.HoldToTalk(self.focus, voice_focus=True,
+                                       bus=self.bus, timer=FakeTimer)
         self.addCleanup(self.voice.stop)
 
     def methods(self):
@@ -53,6 +54,17 @@ class VoiceFixture:
 
 
 class VoiceTests(VoiceFixture, unittest.TestCase):
+    def test_default_keeps_current_cursor_for_any_target(self):
+        voice = hrvoice.HoldToTalk(self.focus, bus=self.bus, timer=FakeTimer)
+        self.addCleanup(voice.stop)
+        self.assertFalse(voice.voice_focus)
+        for target in ("w1:p2", "w:w1", "-"):
+            with self.subTest(target=target):
+                self.bus.status.side_effect = [(0, "idle"), (23, "recording")]
+                self.assertEqual(voice.press(target), (True, "Talking"))
+                self.assertEqual(voice.release(), (True, "Sent"))
+                self.focus.assert_not_called()
+
     def test_press_release_and_focus_order(self):
         self.assertEqual(self.voice.press("w1:p2"), (True, "Talking"))
         self.assertEqual(self.events.mock_calls, [
@@ -207,7 +219,7 @@ class ConfigTests(unittest.TestCase):
             parser = argparse.ArgumentParser()
             hrvoice.add_arguments(parser)
             args = parser.parse_args([])
-            self.assertEqual(vars(args), dict(voice_focus=True, voice_max_hold=120,
+            self.assertEqual(vars(args), dict(voice_focus=False, voice_max_hold=120,
                                              voice_method="HoldStart"))
         with mock.patch.dict(os.environ, HERDREMOTE_VOICE_FOCUS="off",
                              HERDREMOTE_VOICE_MAX_HOLD="3.5",
@@ -218,6 +230,11 @@ class ConfigTests(unittest.TestCase):
             self.assertEqual(vars(args), dict(voice_focus=False, voice_max_hold=3.5,
                                              voice_method="HoldStartRaw"))
             self.assertTrue(parser.parse_args(["--voice-focus", "on"]).voice_focus)
+        with mock.patch.dict(os.environ, HERDREMOTE_VOICE_FOCUS="on"):
+            parser = argparse.ArgumentParser()
+            hrvoice.add_arguments(parser)
+            self.assertTrue(parser.parse_args([]).voice_focus)
+            self.assertFalse(parser.parse_args(["--voice-focus", "off"]).voice_focus)
         for value in ("0", "-1", "nan", "inf"):
             with self.assertRaises(ValueError):
                 hrvoice.hold_seconds(value)
@@ -248,6 +265,21 @@ class DaemonTests(VoiceFixture, unittest.TestCase):
         self.assertEqual(self.result(b"vu\t8"), ["R", "8", "ok", "Sent"])
         self.bus.ready.side_effect = hrvoice.VoiceError(hrvoice.NOT_RUNNING)
         self.assertEqual(self.result(b"vd\t9\t-"), ["R", "9", "err", hrvoice.NOT_RUNNING])
+
+    def test_daemon_default_voice_does_not_focus(self):
+        with mock.patch.object(herdremote.hrusage, "UsageCache"):
+            daemon = herdremote.Daemon(types.SimpleNamespace(socket="/nonexistent", state=None))
+        self.addCleanup(daemon.voice.stop)
+        daemon.herdr = mock.Mock(spec=hrherdr.Herdr)
+        daemon.voice.bus = self.bus
+        daemon.voice.timer_factory = FakeTimer
+        daemon.send = self.messages.append
+        self.assertFalse(daemon.voice.voice_focus)
+        daemon.command(b"vd\t1\tw:w1")
+        self.assertEqual(hrproto.decode(self.messages[-1])[0], ["R", "1", "ok", "Talking"])
+        daemon.herdr.assert_not_called()
+        self.assertEqual(daemon.herdr.mock_calls, [])
+        daemon.command(b"vu\t2")
 
     def test_daemon_local_pane_and_workspace_focus(self):
         self.voice.focus = self.daemon.voice_focus_target
@@ -314,10 +346,15 @@ class VoiceLinkTests(unittest.TestCase):
         self.bus = mock.Mock(spec=hrvoice.SessionBus)
         self.bus.status.side_effect = [(0, "idle"), (23, "recording")]
         self.stopped = threading.Event()
+        self.focus_on = False
         def call(method):
             if method == "HoldStart":
-                self.assertIn(("client.focus", {"pane_id": "w1:p1", "clients": "local"}),
-                              self.herdr.calls)
+                if self.focus_on:
+                    self.assertIn(("client.focus", {"pane_id": "w1:p1", "clients": "local"}),
+                                  self.herdr.calls)
+                else:
+                    self.assertFalse(any(method.endswith(".focus")
+                                         for method, _ in self.herdr.calls))
             if method == "HoldStop":
                 self.stopped.set()
         self.bus.call.side_effect = call
@@ -343,11 +380,20 @@ class VoiceLinkTests(unittest.TestCase):
         self.assertEqual(self.ipod.wait_for("R")[0], ["R", "1", "ok", "Talking"])
 
     def test_press_release_over_wire_focus_then_start(self):
+        self.daemon.voice.voice_focus = True
+        self.focus_on = True
         self.press()
         self.ipod.send("vu\t2")
         self.assertEqual(self.ipod.wait_for("R")[0], ["R", "2", "ok", "Sent"])
         self.assertTrue(self.stopped.is_set())
         self.assertEqual(self.bus.call.call_args_list, [mock.call("HoldStart"), mock.call("HoldStop")])
+
+    def test_press_release_over_wire_default_keeps_cursor(self):
+        self.assertFalse(self.daemon.voice.voice_focus)
+        self.press()
+        self.ipod.send("vu\t2")
+        self.assertEqual(self.ipod.wait_for("R")[0], ["R", "2", "ok", "Sent"])
+        self.assertTrue(self.stopped.is_set())
 
     def test_unplug_over_wire_stops(self):
         self.press()

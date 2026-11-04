@@ -13,7 +13,7 @@ ExecStart=/usr/bin/python3 %h/podbox/tools/herdremote/herdremote.py
 Environment=PYTHONUNBUFFERED=1
 # Inherit DBUS_SESSION_BUS_ADDRESS from the graphical session's user manager.
 # Optional voice config (CLI options override these):
-# Environment=HERDREMOTE_VOICE_FOCUS=on
+# Environment=HERDREMOTE_VOICE_FOCUS=off
 # Environment=HERDREMOTE_VOICE_MAX_HOLD=120
 # Environment=HERDREMOTE_VOICE_METHOD=HoldStart
 # The list order's times: ~/.local/state/herdremote/order.json

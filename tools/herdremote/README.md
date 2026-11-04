@@ -29,7 +29,11 @@ is `true`, workspace/first-tab and pane selections use `client.focus` with
 `clients: "local"`: remote clients keep their workspace/tab views. Pane
 focus is shared within a tab, so other clients already viewing that tab
 also see its focused pane change. If `client.focus` returns `moved: []`,
-the player shows **No local herdr window** as a focus failure.
+HerdRemote checks `client.list`: a connected client with `origin: "local"`
+means the view was already focused, so the request succeeds. If no local
+client is connected (including remote-only clients), the player shows
+**No local herdr window**. A failed list request reports a focus failure;
+it never retries through legacy focus calls.
 
 Without the capability, HerdRemote uses the older `workspace.focus` plus
 `tab.focus`, or `pane.focus`; these move all herdr clients. A failed probe
@@ -89,15 +93,16 @@ synthesise F23. Ordinary F23 uses `HoldStart`. Alt+F23 uses `HoldStartRaw`,
 which disables text cleanup; it does not select another microphone.
 
 The player sends `vd <req> <target>` on press and `vu <req>` on release.
-By default the selected pane or workspace's first tab is focused before
-recording with `client.focus clients=local`. If local focus is unsupported
-or fails, recording does not start. This voice path has no legacy fallback.
-Target `-` leaves focus as it is. Disable focus only when the current
-computer input field is the intended destination.
+By default Play/Pause behaves like F23: recording starts at the computer's
+current cursor without moving herdr, regardless of the selected player row.
+Set `voice_focus=on` explicitly to focus the selected pane or workspace's
+first tab before recording with `client.focus clients=local`. In this mode,
+if local focus is unsupported or fails, recording does not start. This
+voice path has no legacy fallback. Target `-` always leaves focus as it is.
 
 | Config key | CLI option | Service environment | Default |
 |---|---|---|---|
-| `voice_focus` | `--voice-focus on\|off` | `HERDREMOTE_VOICE_FOCUS` | `on` |
+| `voice_focus` | `--voice-focus on\|off` | `HERDREMOTE_VOICE_FOCUS` | `off` |
 | `voice_max_hold` | `--voice-max-hold SECONDS` | `HERDREMOTE_VOICE_MAX_HOLD` | `120` |
 | `voice_method` | `--voice-method METHOD` | `HERDREMOTE_VOICE_METHOD` | `HoldStart` |
 
@@ -107,7 +112,7 @@ There is no separate config file. For a user-service override:
 
 ```ini
 [Service]
-Environment=HERDREMOTE_VOICE_FOCUS=on
+Environment=HERDREMOTE_VOICE_FOCUS=off
 Environment=HERDREMOTE_VOICE_MAX_HOLD=120
 Environment=HERDREMOTE_VOICE_METHOD=HoldStart
 ```

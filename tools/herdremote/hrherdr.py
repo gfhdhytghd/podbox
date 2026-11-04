@@ -93,7 +93,10 @@ class Herdr:
             return False
         result = self.call("client.focus", clients="local", **target)
         if not result["moved"]:
-            raise HerdrError("No local herdr window")
+            # moved lists changed views, not every selected connection.
+            clients = self.call("client.list")["clients"]
+            if not any(client.get("origin") == "local" for client in clients):
+                raise HerdrError("No local herdr window")
         return True
 
 

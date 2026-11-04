@@ -125,7 +125,7 @@ class Daemon:
         self.usage = hrusage.UsageCache()
         self.voice = hrvoice.HoldToTalk(
             self.voice_focus_target,
-            voice_focus=getattr(args, "voice_focus", True),
+            voice_focus=getattr(args, "voice_focus", False),
             voice_max_hold=getattr(args, "voice_max_hold", 120),
             voice_method=getattr(args, "voice_method", "HoldStart"))
         self.reset_session()
