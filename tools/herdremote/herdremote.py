@@ -3,8 +3,8 @@
 
 Finds the iPod's PodLink tty, keeps a PodLink session open whenever the
 player is attached with the Agents screen running, and keeps the screen's
-picture of herdr current: workspaces, the agents in each workspace's first
-tab, and any choice question an agent is asking. Commands from the player
+picture of herdr current: workspaces, tabs, the selected tab's agents,
+live pane detail, and choice questions. Commands from the player
 focus local herdr clients (all clients on older servers) or answer the question.
 
     python3 tools/herdremote/herdremote.py            # run until stopped
@@ -38,6 +38,7 @@ DEVICE = dict(vid=0x05AC, pid=0x1261, manufacturer="PodBox",
 REFRESH_SECONDS = 1.0
 TICK_SECONDS = 2.0
 CONFIRM_SECONDS = 5.0
+DETAIL_SECONDS = 1.0
 
 log = logging.getLogger("herdremote")
 
@@ -118,7 +119,8 @@ class Daemon:
         self.changed = threading.Event()
         self.results = queue.Queue()
         self.answerer = Answerer(self.herdr, self.results, self.changed)
-        self.model = dict(workspaces=[], agents={}, others={}, questions={})
+        self.model = dict(workspaces=[], agents={}, others={}, questions={},
+                          tabs={}, tab_agents={}, panes=set())
         self.model_time = 0.0
         self.herdr_ok = False
         self.port = self.link = None
@@ -139,8 +141,13 @@ class Daemon:
         self.sent_ws = None
         self.sent_status = None
         self.sent_agents = None
+        self.sent_tabs = None
         self.sent_questions = {}
         self.subscribed = None
+        self.subscribed_tab = None
+        self.detail_pane = None
+        self.sent_detail = None
+        self.next_detail = 0.0
         self.next_tick = 0.0
 
     # --- herdr ---------------------------------------------------------
@@ -150,7 +157,8 @@ class Daemon:
                 self.herdr.detect_capabilities()
             snapshot = self.herdr.snapshot()
             self.model = self.order.apply(
-                hrherdr.build_model(snapshot, self.herdr.read))
+                hrherdr.build_model(snapshot, self.herdr.read,
+                                    self.subscribed, self.subscribed_tab))
             self.model_time = time.monotonic()
             if not self.herdr_ok:
                 log.info("herdr reachable at %s", self.herdr.path)
@@ -184,8 +192,7 @@ class Daemon:
         return True
 
     def close_link(self):
-        self.keys.reset()
-        self.voice.stop()
+        self.reset_session()
         if self.link and self.link.opened:
             try:
                 self.link.close(1001, "herdremote stopping")
@@ -215,7 +222,14 @@ class Daemon:
             self.send(st)
             self.sent_status = st
         if self.subscribed:
-            rows = self.model["agents"].get(self.subscribed, [])
+            tabs = self.model["tabs"].get(self.subscribed, [])
+            payload = hrproto.tabs(self.subscribed, tabs)
+            if payload != self.sent_tabs:
+                self.send(payload)
+                self.sent_tabs = payload
+            tid = self.subscribed_tab or (tabs[0]["id"] if tabs else None)
+            rows = self.model["tab_agents"].get(tid, []) if any(
+                t["id"] == tid for t in tabs) else []
             payload = hrproto.agents(self.subscribed, rows)
             if payload != self.sent_agents:
                 self.send(payload)
@@ -234,6 +248,23 @@ class Daemon:
         for result in self.keys.replies():
             self.send(hrproto.result(*result))
         now = time.monotonic()
+        if self.detail_pane and now >= self.next_detail:
+            # Share one deadline across switches: repeated det cannot bypass
+            # the read/send limit. Never read a pane absent from the snapshot.
+            lines = []
+            if self.herdr_ok and self.detail_pane in self.model["panes"]:
+                try:
+                    lines = hrherdr.detail_lines(self.herdr.read(self.detail_pane))
+                except hrherdr.HerdrError:
+                    pass
+            payload = hrproto.detail(self.detail_pane, lines)
+            if payload != self.sent_detail:
+                self.send(payload)
+                self.sent_detail = payload
+            # Measure from completion: a slow read/send must not permit two
+            # detail frames less than one second apart.
+            now = time.monotonic()
+            self.next_detail = now + DETAIL_SECONDS
         if now >= self.next_tick:
             self.send(hrproto.tick(now - self.model_time, self.herdr_ok))
             self.next_tick = now + TICK_SECONDS
@@ -249,11 +280,19 @@ class Daemon:
             self.sent_ws = b""
         elif name == "sub":
             self.subscribed = None if args[0] == "-" else args[0]
+            self.subscribed_tab = args[1] if len(args) == 2 else None
             self.sent_agents = None
+            self.sent_tabs = None
+            self.changed.set()
+        elif name == "det":
+            pane = None if args[0] == "-" else args[0]
+            if pane != self.detail_pane:
+                self.sent_detail = None
+            self.detail_pane = pane
         elif name == "us":
             self.send(hrproto.usage(self.usage.snapshot(), time.time()))
             self.usage.request()
-        elif name in ("fw", "fp"):
+        elif name in ("fw", "fp", "ft"):
             self.focus(name, *args)
         elif name in ("vd", "vu"):
             self.voice_command(name, *args)
@@ -296,15 +335,24 @@ class Daemon:
         result = self.voice.press(target) if name == "vd" else self.voice.release()
         self.send(hrproto.result(req, *result))
 
-    def focus(self, name, req, target):
+    def focus(self, name, req, target, tab_id=None):
         try:
-            if name == "fw":
+            if name in ("fw", "ft"):
                 ws = next((w for w in self.model["workspaces"]
                            if w["id"] == target), None)
                 if not ws:
                     raise hrherdr.HerdrError("no workspace %s" % target)
-                self.herdr.focus_workspace(target, ws["tab"])
-                text = "Focused " + ws["label"]
+                if name == "ft":
+                    tab = next((t for t in self.model["tabs"].get(target, [])
+                                if t["id"] == tab_id), None)
+                    if not tab:
+                        raise hrherdr.HerdrError("no tab %s in workspace %s" %
+                                                (tab_id, target))
+                    self.herdr.focus_tab(target, tab_id)
+                    text = "Focused " + tab["label"]
+                else:
+                    self.herdr.focus_workspace(target, ws["tab"])
+                    text = "Focused " + ws["label"]
             else:
                 self.herdr.focus_pane(target)
                 text = "Focused pane"

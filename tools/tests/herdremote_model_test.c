@@ -43,6 +43,13 @@ static void dump(void)
         for (int j = 0; j < q->noptions; j++)
             printf("o %d %s\n", q->options[j].number, q->options[j].label);
     }
+    if (m.tabs_valid)
+        for (int i = 0; i < m.ntabs; i++)
+            printf("B %s %d %s %s %c\n", m.tabs_ws, i, m.tabs[i].id,
+                   m.tabs[i].label, m.tabs[i].status);
+    if (m.detail_valid)
+        for (int i = 0; i < m.ndetail; i++)
+            printf("D %s %s\n", m.detail_pane, m.detail[i]);
     if (m.result_new)
         printf("R %s %d %s\n", m.result_req, m.result_ok, m.result_text);
     if (m.usage.have)
@@ -258,6 +265,84 @@ int main(int argc, char **argv)
     assert(hr_keys_add(&wk, "wleft") && wk.nruns == 1);
     assert(hr_keys_add(&wk, "left") && wk.nruns == 0);
 
+    /* The seven-field T lists the subscribed workspace's tabs in herdr's
+     * order; the three-field T is still the tick */
+    assert(!m.tabs_valid);
+    assert(apply("T\tw1\t3\t0\tw1:t1\tbuild\tw\n"
+                 "T\tw1\t3\t1\tw1:t2\t测试\tb\n"
+                 "T\tw1\t3\t2\tw1:t3\t\t-") == 'B');
+    assert(m.tabs_valid && m.ntabs == 3 && !strcmp(m.tabs_ws, "w1"));
+    assert(!strcmp(m.tabs[1].id, "w1:t2") && !strcmp(m.tabs[1].label, "测试"));
+    assert(m.tabs[0].status == 'w' && m.tabs[1].status == 'b' &&
+           m.tabs[2].status == '-' && !m.tabs[2].label[0]);
+    assert(hr_model_tab_index(&m, "w1", "") == 0);
+    assert(hr_model_tab_index(&m, "w1", "w1:t3") == 2);
+    assert(hr_model_tab_index(&m, "w1", "w1:t9") == -1);
+    assert(hr_model_tab_index(&m, "w2", "") == -1);
+    assert(apply("T\t5\t1") == 'T' && m.herdr_age == 5 && m.ntabs == 3);
+    /* Bad lists leave the tabs as they were: a count that does not match,
+     * an index out of step, a record for another workspace, a letter that
+     * is not a state */
+    assert(apply("T\tw1\t2\t0\tw1:t1\ta\tw") == 0);
+    assert(apply("T\tw1\t2\t0\tw1:t1\ta\tw\nT\tw1\t2\t0\tw1:t2\tb\tw")
+           == 0);
+    assert(apply("T\tw1\t2\t0\tw1:t1\ta\tw\nT\tw2\t2\t1\tw1:t2\tb\tw")
+           == 0);
+    assert(apply("T\tw1\t1\t0\tw1:t1\ta\tw\nT\tw1\t1\t1\tw1:t2\tb\tw")
+           == 0);
+    assert(apply("T\tw1\t1\t0\tw1:t1\ta\tz") == 'B' &&
+           m.tabs[0].status == '-' && m.ntabs == 1);
+    /* An empty or removed workspace: one record, no tabs */
+    assert(apply("T\tw2\t0\t0\t-\t\t-") == 'B');
+    assert(m.tabs_valid && m.ntabs == 0 && !strcmp(m.tabs_ws, "w2"));
+    assert(hr_model_tab_index(&m, "w2", "") == 0);
+    assert(apply("T\tw2\t0\t0\tw2:t1\t\t-") == 0 && m.ntabs == 0);
+
+    /* D: the pane and up to 12 lines, oldest first; none for an empty or
+     * unreadable pane */
+    assert(!m.detail_valid);
+    assert(apply("D\tw1:p1\tfirst\t\tthird 汉字") == 'D');
+    assert(m.detail_valid && m.ndetail == 3 &&
+           !strcmp(m.detail_pane, "w1:p1"));
+    assert(!strcmp(m.detail[0], "first") && !m.detail[1][0] &&
+           !strcmp(m.detail[2], "third 汉字"));
+    assert(apply("D\tw1:p2") == 'D' && m.ndetail == 0 &&
+           !strcmp(m.detail_pane, "w1:p2"));
+    assert(apply("D\tw1:p1\t0\t1\t2\t3\t4\t5\t6\t7\t8\t9\t10\t11") == 'D'
+           && m.ndetail == 12 && !strcmp(m.detail[11], "11"));
+    assert(apply("D\tw1:p1\t0\t1\t2\t3\t4\t5\t6\t7\t8\t9\t10\t11\t12")
+           == 0 && m.ndetail == 12);
+    assert(apply("D") == 0 && apply("D\t") == 0 && m.ndetail == 12);
+    assert(apply("D\tw1:p1\ta\nD\tw1:p1\tb") == 0 && m.ndetail == 12);
+
+    /* Questions pop up once each, oldest first, until dismissed or gone */
+    struct hr_popped popped;
+    memset(&popped, 0, sizeof popped);
+    m.nquestions = 0;
+    assert(!hr_model_next_popup(&m, &popped));
+    assert(apply("Q\tqa\tw1:p1\tw1\t-\ta\no\t1\tYes") == 'Q');
+    assert(apply("Q\tqb\tw1:p2\tw1\t-\tb\no\t1\tYes") == 'Q');
+    assert(hr_model_next_popup(&m, &popped) == &m.questions[0]);
+    hr_popped_add(&popped, "qa");
+    hr_popped_add(&popped, "qa");
+    assert(hr_model_next_popup(&m, &popped) == &m.questions[1]);
+    hr_popped_add(&popped, "qb");
+    assert(!hr_model_next_popup(&m, &popped));
+    /* A new qid for the same pane is a new question */
+    assert(apply("Q\tqc\tw1:p1\tw1\tm\ta\no\t1\t[x] Yes") == 'Q');
+    assert(!strcmp(hr_model_next_popup(&m, &popped)->id, "qc"));
+    hr_popped_add(&popped, "qc");
+    for (int i = 0; i < HR_POPPED; i++)
+    {
+        char id[12];
+        snprintf(id, sizeof id, "x%d", i);
+        hr_popped_add(&popped, id);
+    }
+    /* Forgotten once HR_POPPED newer ids have come */
+    assert(!strcmp(hr_model_next_popup(&m, &popped)->id, "qa"));
+    assert(apply("X\tqa") == 'X' && apply("X\tqb") == 'X' &&
+           apply("X\tqc") == 'X');
+
     /* Cut on a character boundary: 汉 is three bytes */
     char small[5];
     hr_copy(small, "汉字", sizeof small);
@@ -277,7 +362,7 @@ int main(int argc, char **argv)
     {
         char junk[256];
         int n = 1 + rand() % sizeof junk;
-        static const char alphabet[] = "WSAQXRTUPNVHo?\t\n1fbw-汉 ";
+        static const char alphabet[] = "WSAQXRTUPNVHDo?\t\n1fbw-汉 ";
         for (int j = 0; j < n; j++)
             junk[j] = alphabet[rand() % (sizeof alphabet - 1)];
         hr_model_apply(&m, junk, n);

@@ -11,13 +11,14 @@
 #include "herdremote_model.h"
 
 #define HR_MESSAGE_MAX 4096
-#define HR_MAX_FIELDS  10
+#define HR_MAX_FIELDS  16
 
 /* Static rather than on the stack: the UI thread's stack is small, and a
  * message is parsed into these before it replaces anything in the model. */
 static char scratch[HR_MESSAGE_MAX + 1];
 static struct hr_workspace new_ws[HR_MAX_WS];
 static struct hr_agent new_agents[HR_MAX_AGENTS];
+static struct hr_tab new_tabs[HR_MAX_TABS];
 static struct hr_question new_question;
 static struct hr_usage new_usage;
 
@@ -151,6 +152,64 @@ static int apply_agents(struct hr_model *m, const char *ws, char **cursor)
     m->nagents = n;
     m->agents_valid = true;
     return 'A';
+}
+
+/* The seven-field T: every record names the workspace and the count, and
+ * the records are numbered from 0. An empty workspace is one record with a
+ * count of 0. The whole message is checked before any of it is applied. */
+static int apply_tabs(struct hr_model *m, char **f, int nf, char **cursor)
+{
+    char *fields[HR_MAX_FIELDS];
+    char ws[16];
+    int n = 0, total = number(f[2]);
+    if (total < 0 || total > HR_MAX_TABS)
+        return 0;
+    hr_copy(ws, f[1], sizeof ws);
+    for (;;)
+    {
+        if (nf != 7 || strcmp(f[0], "T") || strcmp(f[1], ws) ||
+            number(f[2]) != total)
+            return 0;
+        if (total == 0)
+        {
+            if (n || strcmp(f[4], "-"))
+                return 0;
+        }
+        else
+        {
+            if (n >= total || number(f[3]) != n || !f[4][0])
+                return 0;
+            struct hr_tab *t = &new_tabs[n++];
+            hr_copy(t->id, f[4], sizeof t->id);
+            hr_copy(t->label, f[5], sizeof t->label);
+            t->status = state(f[6]);
+        }
+        char *record = next_record(cursor);
+        if (!record)
+            break;
+        nf = split(record, fields);
+        f = fields;
+    }
+    if (n != total)
+        return 0;
+    memcpy(m->tabs, new_tabs, n * sizeof new_tabs[0]);
+    hr_copy(m->tabs_ws, ws, sizeof m->tabs_ws);
+    m->ntabs = n;
+    m->tabs_valid = true;
+    return 'B';
+}
+
+/* D: one record, the pane and its last lines */
+static int apply_detail(struct hr_model *m, char **f, int nf)
+{
+    if (nf < 2 || nf > 2 + HR_DETAIL_LINES || !f[1][0])
+        return 0;
+    hr_copy(m->detail_pane, f[1], sizeof m->detail_pane);
+    m->ndetail = nf - 2;
+    for (int i = 0; i < m->ndetail; i++)
+        hr_copy(m->detail[i], f[2 + i], sizeof m->detail[0]);
+    m->detail_valid = true;
+    return 'D';
 }
 
 static int find_question(const struct hr_model *m, const char *id)
@@ -387,7 +446,49 @@ int hr_model_apply(struct hr_model *m, const char *data, unsigned int length)
         m->herdr_ok = f[2][0] == '1';
         return 'T';
     }
+    if (!strcmp(type, "T") && n == 7)
+        return apply_tabs(m, f, n, &cursor);
+    if (!strcmp(type, "D") && (!cursor || !*cursor))
+        return apply_detail(m, f, n);
     return 0;
+}
+
+int hr_model_tab_index(const struct hr_model *m, const char *ws,
+                       const char *id)
+{
+    if (!m->tabs_valid || strcmp(m->tabs_ws, ws))
+        return -1;
+    if (!id[0])
+        return 0;
+    for (int i = 0; i < m->ntabs; i++)
+        if (!strcmp(m->tabs[i].id, id))
+            return i;
+    return -1;
+}
+
+static bool popped_has(const struct hr_popped *p, const char *id)
+{
+    for (int i = 0; i < HR_POPPED; i++)
+        if (!strcmp(p->id[i], id))
+            return true;
+    return false;
+}
+
+void hr_popped_add(struct hr_popped *p, const char *id)
+{
+    if (!id[0] || popped_has(p, id))
+        return;
+    hr_copy(p->id[p->next], id, sizeof p->id[0]);
+    p->next = (p->next + 1) % HR_POPPED;
+}
+
+const struct hr_question *hr_model_next_popup(const struct hr_model *m,
+                                              const struct hr_popped *p)
+{
+    for (int i = 0; i < m->nquestions; i++)
+        if (!popped_has(p, m->questions[i].id))
+            return &m->questions[i];
+    return NULL;
 }
 
 void hr_model_reset(struct hr_model *m)

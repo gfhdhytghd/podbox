@@ -69,8 +69,8 @@ Sent after every `W`, and again whenever it changes. `tab1` is the state of
 the workspace's first tab and `other` that of all its other tabs, each the
 most pressing of its agents' states, as one letter: `b` asking (a question,
 or herdr's `blocked`), `w` working, `d` done, `i` idle, `u` unknown, `-` no
-agents. Only first-tab panes are read for questions; in the other tabs
-`b` is herdr's `blocked` alone. A record whose `id` is not in the last `W`
+agents. First tabs and the explicitly subscribed tab are read for questions; in
+other tabs `b` is herdr's `blocked` alone (see Navigation v2). A record whose `id` is not in the last `W`
 is ignored, and so is a letter not in this list.
 
 A player that does not know `S` ignores it and works from `W`'s counts. A
@@ -97,15 +97,16 @@ idle green `#40a02b`, unknown grey `#9ca0b0`, working yellow `#df8e1d`.
 Working and asking take green and red here instead, and move. Every dot has
 a thin white edge, so it shows on any album's colours.
 
-### `A` — agents of one workspace
+### `A` — agents of one workspace tab
 
 ```
 A <ws> <n>
 <pane> <kind> <status> <question> <name> <title> <last>  (n records)
 ```
 
-Sent only for the workspace the player subscribed to with `sub`, and again
-whenever it changes. Records come in the order the player lists them.
+Sent only for the workspace/tab the player subscribed to with `sub`, and
+again whenever it changes. The header and agent rows retain their v1 shape.
+Records come in priority order (see Order).
 
 | Field | Budget | Meaning |
 |---|---|---|
@@ -187,6 +188,111 @@ T <age> <herdr_ok>
 `age` is how many seconds old the computer's picture of herdr is. `herdr_ok`
 is `0` while herdr cannot be reached.
 
+### Navigation v2 — PROTOCOL READY
+
+This section is the frozen NAV2 contract (2026-11-06). Protocol version
+remains 1. Unknown commands/messages and malformed frames are ignored.
+Changes to this section after PROTOCOL READY require a `QUESTION:`.
+
+#### `T` — subscribed workspace tabs (distinct from the tick)
+
+One TEXT frame contains the complete tab list, one seven-field record per
+tab, in herdr's tab order (never priority order):
+
+```
+T <ws> <n> <i> <tab_id> <label> <status>   (n records)
+```
+
+`n` is the number of transmitted tabs (0–32). `i` is the zero-based index
+(0 through n-1). Every record repeats `ws` and `n`. `tab_id` has the same
+15-byte budget as pane/workspace ids. `label` is at most 40 UTF-8 bytes;
+use herdr's tab label, or the tab id when empty. `status` is the dominant
+agent state: `b` > `w` > `d` > `i` > `u`, or `-` with no agents.
+As with `S`, non-first/unsubscribed tabs use herdr's agent states alone;
+the subscribed tab also uses detected questions. First tabs are always read.
+Only the first 32 tabs are exposed. Tabs keep herdr's order even when the
+workspace or agent lists reorder.
+
+An empty or removed workspace sends one record with exactly these fields:
+`T <ws> 0 0 - <empty-label> -` (the label field is empty).
+Send the whole list on `sub` and whenever any tab id, order, label or state
+changes. Send `T` before the corresponding `A`. A subscription without an
+explicit tab follows the current first tab. An explicit missing/removed tab
+produces an empty `A`, without falling back to a different tab. A removed
+workspace produces empty `T` and `A`. `sub -` sends neither.
+
+The heartbeat remains exactly `T <age> <herdr_ok>`: one three-field record.
+Parsers distinguish it by field count. Existing firmware ignores the new
+seven-field records and continues to receive the unchanged tick. `A` has
+no tab field; the player clears its agent list on tab switch and applies
+subsequent `A` to the current subscription. Wire messages are ordered.
+
+#### `ft` — focus one tab
+
+```
+ft <req> <ws> <tab_id>
+```
+
+Validate that the tab belongs to this workspace in the current model.
+A missing workspace/tab returns `R <req> err <reason>` without focus.
+Use the same capability probe and local focus path as `fw`/`fp`:
+`client.focus` with `workspace_id`, `tab_id`, `clients: "local"` when
+supported. Without that capability, use `workspace.focus` followed by
+`tab.focus`. Failed probes, local focus and local-client checks never
+retry via legacy calls. `moved: []` uses the same `client.list` check.
+Reply with `R <req> ok Focused <label>` or `R <req> err <reason>`.
+The player handles successful `fw`/`fp`/`ft` silently; errors use the band.
+Focus does not change subscriptions, and subscriptions never focus.
+
+#### `det` / `D` — live pane detail
+
+```
+det <pane>
+det -
+D <pane> <line0> <line1> ... <line11>
+```
+
+`D` is one record with 2–14 tab-separated fields: tag, pane id, then 0–12
+lines, oldest first and newest at the bottom. Each line is at most 60
+UTF-8 bytes (therefore at most 60 characters). Read the pane's visible
+text with herdr `pane.read source=visible`; strip ANSI CSI/OSC/escape
+sequences, discard trailing blank lines, keep the last 12 lines, sanitize
+controls and shorten each field on a UTF-8 boundary. Preserve internal
+blank lines. No special secret filtering is added beyond `A.last`.
+
+The first `det` schedules a read on the next push; then read/send at most
+once per second, including across pane switches. Send only when content
+or pane changes. An empty pane, a pane no longer in the snapshot, or a
+failed pane read sends `D <pane>` (zero lines); never retain another pane's
+text. Recovery sends fresh content when it changes. `det -` stops reads
+and sends no frame. Detail is independent of `sub` and never focuses or
+injects keys. `hr` reset, link loss and shutdown clear both subscriptions
+and their caches. No detail is sent before `hr`.
+
+`sub`, `ft` and `det` must each occupy exactly one record. Id/target fields
+are nonempty, have at most 15 UTF-8 bytes and contain no controls; `ft`
+request ids are nonempty and at most 7 bytes. `sub - <tab_id>` is malformed.
+Malformed commands are ignored without calling herdr.
+
+#### Player navigation and compatibility
+
+The player debounces wheel focus for 250 ms and suppresses it while Play
+is held. Entering a Space sends `fw`; changing tabs sends `ft` immediately,
+clamps at the ends, and selects the first agent without an extra `fp`.
+Entering detail sends `fp` and waits for its matching `R ok` before any
+`k`; an error prevents keys. Detail uses Usage's same single-in-flight key
+queue. Backend `k` validation and desktop-key semantics are unchanged.
+
+New question ids pop up oldest first from any view, deferred while Play is
+held or a talk result is pending. Dismissal/answer restores the previous
+view and selection. A dismissed id stays reachable through the alert row
+but does not pop up again. Pop-up never focuses. `Q`/`X` shapes are unchanged.
+
+Old daemons ignore `ft`, `det`, and the extended `sub`; old firmware ignores
+tab/detail frames. Missing extensions leave the old first-tab `sub <ws>`,
+focus, questions, Usage and heartbeat paths usable. The player must not
+send detail keys until focus succeeds, regardless of daemon version.
+
 ### `U`, `P`, `N` — subscription usage
 
 Reply to `us` in one TEXT frame. Record/field separators are newline/tab,
@@ -241,7 +347,9 @@ down or `ok=0`: retain last data and mark it stale. See
 | Message | Meaning |
 |---|---|
 | `hr 1` | Start, or restart, the session |
-| `sub <ws>` | Send `A` for this workspace from now on; `sub -` stops it |
+| `sub <ws> [<tab_id>]` | Send `T` tabs and `A` agents for this workspace/tab; omitted tab means first tab; `sub -` stops both |
+| `ft <req> <ws> <tab_id>` | Focus this workspace tab on the computer |
+| `det <pane>` / `det -` | Subscribe to one pane's `D` detail / stop detail |
 | `fw <req> <ws>` | Show this workspace, at its first tab, on the computer |
 | `fp <req> <pane>` | Show this pane on the computer |
 | `vd <req> <target>` | Start hold-to-talk; target is a pane id, `w:<ws>`, or `-` |

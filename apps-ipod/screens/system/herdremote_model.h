@@ -19,6 +19,8 @@
 #define HR_MAX_LINES     4
 #define HR_MAX_OPTIONS   8
 #define HR_USAGE_SVCS    4
+#define HR_MAX_TABS      32
+#define HR_DETAIL_LINES  12
 
 struct hr_workspace {
     char id[16];
@@ -29,6 +31,13 @@ struct hr_workspace {
      * hr_agent.status letters, '-' with none. From S; a daemon that sends no
      * S leaves tab1 as W's counts say and other '-'. */
     char tab1, other;
+};
+
+/* One tab of the subscribed workspace, from the seven-field T */
+struct hr_tab {
+    char id[16];
+    char label[44];
+    char status;    /* the tab's most pressing agent state; '-' with none */
 };
 
 struct hr_agent {
@@ -89,6 +98,16 @@ struct hr_model {
     bool agents_valid;
     int nagents;
     struct hr_agent agents[HR_MAX_AGENTS];
+    char tabs_ws[16];       /* the workspace tabs[] belongs to */
+    bool tabs_valid;
+    int ntabs;
+    struct hr_tab tabs[HR_MAX_TABS];
+    /* The last D: the last lines of the pane det subscribed to, oldest
+     * first; a D with no lines is an empty or unreadable pane */
+    char detail_pane[16];
+    bool detail_valid;
+    int ndetail;
+    char detail[HR_DETAIL_LINES][64];
     int nquestions;
     struct hr_question questions[HR_MAX_QUESTIONS];
     /* The last command result, until the screen takes it */
@@ -101,8 +120,9 @@ struct hr_model {
 };
 
 /* Apply one message. Returns its type letter ('W', 'S', 'A', 'Q', 'X', 'R',
- * 'T', 'U', 'V', 'H' for the hello), or 0 if it was not a HerdRemote v1
- * message, in which case the model is unchanged. */
+ * 'T', 'U', 'V', 'D', 'H' for the hello, 'B' for the seven-field T that
+ * lists tabs), or 0 if it was not a HerdRemote v1 message, in which case
+ * the model is unchanged. */
 int hr_model_apply(struct hr_model *m, const char *data, unsigned int length);
 
 void hr_model_reset(struct hr_model *m);
@@ -113,6 +133,28 @@ const struct hr_question *hr_model_question_for(const struct hr_model *m,
 
 /* Copy src into dst of size n, cut on a UTF-8 character boundary */
 void hr_copy(char *dst, const char *src, unsigned int n);
+
+/* The tab the Space view shows: index of id in tabs[], 0 for an empty id
+ * (the first tab), or -1 when the tabs are not known or id is not among
+ * them */
+int hr_model_tab_index(const struct hr_model *m, const char *ws,
+                       const char *id);
+
+/* The questions that have popped up or been dismissed, by qid, so each
+ * pops up once. The oldest is forgotten when they are full, as the model
+ * forgets its questions. */
+#define HR_POPPED 12
+struct hr_popped {
+    char id[HR_POPPED][12];
+    int next;
+};
+
+/* Remember id; already there, nothing changes */
+void hr_popped_add(struct hr_popped *p, const char *id);
+
+/* The oldest question that has not popped up, or NULL */
+const struct hr_question *hr_model_next_popup(const struct hr_model *m,
+                                              const struct hr_popped *p);
 
 /* Key taps waiting to be sent while one k is in flight, as runs of one key
  * and a count, oldest first. A tap of the newest run's key adds to its

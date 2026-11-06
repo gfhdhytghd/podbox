@@ -100,6 +100,11 @@ class Order:
                 others.get(ws["id"], [])]
         if self.note(rows):
             self.save()
+        # Non-first tabs use the same priority order as the legacy agent list.
+        # Sort each shared list in place; never reorder the tab bar itself.
+        for agents in model.get("tab_agents", {}).values():
+            agents[:] = [row for _, row in sorted(enumerate(agents),
+                         key=lambda ir: self.key(ir[1], ir[0]))]
         best = {}
         for wid, agents in model["agents"].items():
             keyed = sorted(((self.key(row, i), row)

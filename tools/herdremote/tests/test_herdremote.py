@@ -225,6 +225,11 @@ class CrossLanguage(unittest.TestCase):
                 hrproto.agents("w1", [dict(pane="w1:p1", kind="claude",
                     status="blocked", question=True, name=None,
                     title="标题", last="行" * 40)]),
+                # Pre-NAV2 firmware ignores these extensions, including T
+                # with seven fields, without replacing its heartbeat state.
+                hrproto.tabs("w1", [dict(id="w1:t1", label="build", status="b"),
+                                    dict(id="w1:t2", label="review", status="w")]),
+                hrproto.detail("w1:p1", ["activity", "newest"]),
                 hrproto.question(q),
                 hrproto.result("5", True, "Answered"),
                 hrproto.tick(3, True)]
@@ -237,7 +242,8 @@ class CrossLanguage(unittest.TestCase):
             with open(path, "wb") as f:
                 f.write(struct.pack("<H", len(failure)) + failure)
             failure_out = subprocess.check_output([exe, path]).decode("utf-8")
-        lines = out.splitlines()
+        # The old C harness reports ignored unknown messages on stdout.
+        lines = [line for line in out.splitlines() if not line.startswith("rejected ")]
         self.assertEqual(lines[0], "hello=1 herdr_ok=1 age=3")
         # The daemon cuts to its byte budgets on a character boundary, and
         # each budget fits the player's field.
@@ -451,6 +457,8 @@ class FakeHerdr(threading.Thread):
         self.moved = [1]
         self.clients = []
         self.errors = {}
+        self.layout = None
+        self.texts = {}
 
     def stop(self):
         self.server.shutdown(socket.SHUT_RDWR)
@@ -458,6 +466,8 @@ class FakeHerdr(threading.Thread):
         self.join(5)
 
     def snapshot(self):
+        if self.layout is not None:
+            return self.layout
         return dict(
             focused_workspace_id="w1",
             agents=[dict(pane_id="w1:p1", name="asker")],
@@ -510,7 +520,7 @@ class FakeHerdr(threading.Thread):
                 elif method == "pane.read":
                     text = self.pane_text if params["pane_id"] == "w1:p1" \
                         else sample("codex-idle-narrow.txt")
-                    result = dict(read=dict(text=text))
+                    result = dict(read=dict(text=self.texts.get(params["pane_id"], text)))
                 elif method == "pane.send_keys":
                     if params["keys"] == ["3"]:
                         self.pane_text = sample("claude-idle-done.txt")

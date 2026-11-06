@@ -5,6 +5,7 @@ connection, newline-delimited JSON, as `herdr api schema` describes.
 """
 import json
 import os
+import re
 import select
 import socket
 import threading
@@ -85,6 +86,9 @@ class Herdr:
             return
         self.call("pane.focus", pane_id=pane_id)
 
+    def focus_tab(self, workspace_id, tab_id):
+        self.focus_workspace(workspace_id, tab_id)
+
     def _focus_local(self, **target):
         # Each API request uses a fresh connection. Probe again before focus
         # so a server replacement between refreshes cannot leave stale support.
@@ -153,14 +157,26 @@ def best_state(statuses):
     return "-"
 
 
-def build_model(snapshot, read):
+def detail_lines(text):
+    """Visible pane tail, without terminal escape sequences or trailing blanks."""
+    text = re.sub(r"\x1b(?:\][\s\S]*?(?:\x07|\x1b\\)|"
+                  r"[PX^_][\s\S]*?\x1b\\|\[[0-?]*[ -/]*[@-~]|[ -/]*[@-~])",
+                  "", text)
+    lines = text.splitlines()
+    while lines and not lines[-1].strip():
+        lines.pop()
+    return lines[-12:]
+
+
+def build_model(snapshot, read, subscribed=None, tab_id=None):
     """The dashboard model from a herdr snapshot.
 
     read(pane_id) returns a pane's visible text. Tab 1 is a workspace's first
     tab in herdr's order, which is the order its tab bar shows; its own
-    number is a creation count and is not used. Only tab 1's agents are
-    listed and read; the agents of the other tabs count by herdr's status
-    alone, so a workspace is working when any of its tabs is.
+    number is a creation count and is not used. First tabs and the selected
+    subscription tab are read; other tabs count by herdr's status alone.
+    agents/others retain the legacy first-tab model for workspace ranking.
+    tab_agents contains every tab, without changing herdr's tab order.
     """
     first_tab = {}
     for tab in snapshot["tabs"]:
@@ -173,46 +189,50 @@ def build_model(snapshot, read):
             by_tab.setdefault(pane["tab_id"], []).append(pane)
     tabs_of = {}
     for t in snapshot["tabs"]:
-        tabs_of.setdefault(t["workspace_id"], []).append(t["tab_id"])
+        tabs_of.setdefault(t["workspace_id"], []).append(t)
     workspaces, agents, others, questions = [], {}, {}, {}
+    tabs, tab_agents = {}, {}
     for ws in snapshot["workspaces"]:
         wid = ws["workspace_id"]
         tab = first_tab.get(wid)
         counts = dict(working=0, waiting=0, done=0, idle=0)
-        rows = []
-        elsewhere = [dict(pane=p["pane_id"], status=p.get("agent_status",
-                                                         "unknown"),
-                          question=False)
-                     for t in tabs_of.get(wid, []) if t != tab
-                     for p in by_tab.get(t, [])]
-        for pane in by_tab.get(tab, []):
-            try:
-                text = read(pane["pane_id"])
-            except HerdrError:
+        tabs[wid] = []
+        for t in tabs_of.get(wid, []):
+            tid = t["tab_id"]
+            rows = []
+            should_read = tid == tab or (wid == subscribed and
+                                         tid == (tab_id or tab))
+            for pane in by_tab.get(tid, []):
                 text = ""
-            q = hrdetect.find_question(text)
-            status = pane.get("agent_status", "unknown")
-            last = hrdetect.last_activity(text)
-            if q:
-                qid = hrdetect.question_id(pane["pane_id"], q)
-                agent_label = "%s · %s" % (ws.get("label") or wid,
-                                           pane.get("agent"))
-                questions[qid] = dict(q, id=qid, pane=pane["pane_id"],
-                                      workspace=wid, agent=agent_label)
-                last = " ".join(q["lines"][-1:]) or last
-            if q or status == "blocked":
-                counts["waiting"] += 1
-            elif status in counts:
-                counts[status] += 1
-            rows.append(dict(pane=pane["pane_id"], kind=pane.get("agent"),
-                             status="blocked" if q else status,
-                             question=bool(q), name=names.get(pane["pane_id"]),
-                             title=pane.get("terminal_title_stripped") or "",
-                             last=last))
-        for row in elsewhere:
-            key = "waiting" if row["status"] == "blocked" else row["status"]
-            if key in counts:
-                counts[key] += 1
+                if should_read:
+                    try:
+                        text = read(pane["pane_id"])
+                    except HerdrError:
+                        pass
+                q = hrdetect.find_question(text)
+                status = pane.get("agent_status", "unknown")
+                last = hrdetect.last_activity(text)
+                if q:
+                    qid = hrdetect.question_id(pane["pane_id"], q)
+                    agent_label = "%s · %s" % (ws.get("label") or wid,
+                                               pane.get("agent"))
+                    questions[qid] = dict(q, id=qid, pane=pane["pane_id"],
+                                          workspace=wid, agent=agent_label)
+                    last = " ".join(q["lines"][-1:]) or last
+                key = "waiting" if q or status == "blocked" else status
+                if key in counts:
+                    counts[key] += 1
+                rows.append(dict(pane=pane["pane_id"], kind=pane.get("agent"),
+                                 status="blocked" if q else status,
+                                 question=bool(q), name=names.get(pane["pane_id"]),
+                                 title=pane.get("terminal_title_stripped") or "",
+                                 last=last))
+            tab_agents[tid] = rows
+            tabs[wid].append(dict(id=tid, label=t.get("label") or tid,
+                                 status=best_state([status_code(r) for r in rows])))
+        rows = tab_agents.get(tab, [])
+        elsewhere = [r for t in tabs_of.get(wid, []) if t["tab_id"] != tab
+                     for r in tab_agents[t["tab_id"]]]
         code = status_code
         workspaces.append(dict(
             id=wid, label=ws.get("label") or wid, focused=wid == focused_ws,
@@ -221,7 +241,8 @@ def build_model(snapshot, read):
         agents[wid] = rows
         others[wid] = elsewhere
     return dict(workspaces=workspaces, agents=agents, others=others,
-                questions=questions)
+                questions=questions, tabs=tabs, tab_agents=tab_agents,
+                panes={p["pane_id"] for p in snapshot["panes"]})
 
 
 def status_code(row):

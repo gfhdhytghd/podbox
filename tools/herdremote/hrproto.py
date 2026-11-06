@@ -23,6 +23,9 @@ MAX_OPTIONS = 8
 MAX_WORKSPACES = 32
 MAX_AGENTS = 16
 MAX_QUESTIONS = 6
+MAX_TABS = 32
+DETAIL_LINES = 12
+DETAIL_LINE_BYTES = 60
 USAGE_SERVICES = ("codex", "claude", "grok", "gemini")
 USAGE_NOTE_BYTES = 40
 
@@ -98,6 +101,23 @@ def agents(workspace_id, items):
     return _fit(["A", clean(workspace_id, 15), str(len(rows))], rows)
 
 
+def tabs(workspace_id, items):
+    """A complete tab list; seven-field T records cannot be mistaken for ticks."""
+    items = items[:MAX_TABS]
+    wid = clean(workspace_id, 15)
+    if not items:
+        return encode([["T", wid, "0", "0", "-", "", "-"]])
+    return encode([["T", wid, str(len(items)), str(i), clean(t["id"], 15),
+                    clean(t["label"], LABEL_BYTES), t["status"]]
+                   for i, t in enumerate(items)])
+
+
+def detail(pane, lines):
+    return encode([["D", clean(pane, 15)] +
+                   [clean(line, DETAIL_LINE_BYTES)
+                    for line in lines[-DETAIL_LINES:]]])
+
+
 def question(q):
     """q: dict with id, pane, workspace, multi, agent, lines, options.
 
@@ -171,7 +191,19 @@ def parse_command(payload):
     fields = records[0]
     name, args = fields[0], fields[1:]
     shapes = {"hr": 1, "sub": 1, "fw": 2, "fp": 2, "a": 3, "us": 0,
-              "vd": 2, "vu": 1, "k": 2}
+              "vd": 2, "vu": 1, "k": 2, "ft": 3, "det": 1}
+    if name in ("sub", "ft", "det"):
+        valid_lengths = (1, 2) if name == "sub" else (shapes[name],)
+        if len(records) != 1 or len(args) not in valid_lengths:
+            return None
+        for i, arg in enumerate(args):
+            limit = 7 if name == "ft" and i == 0 else 15
+            if not arg or len(arg.encode("utf-8")) > limit or any(
+                    ord(c) < 32 or ord(c) == 127 for c in arg):
+                return None
+        if name == "sub" and len(args) == 2 and args[0] == "-":
+            return None
+        return name, args
     if name in ("us", "vd", "vu", "k") and len(records) != 1:
         return None
     if name in ("vd", "vu", "k") and (

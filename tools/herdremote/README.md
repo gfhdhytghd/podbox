@@ -5,28 +5,46 @@ computer onto the iPod, in **System > Agents**. From the player you can:
 
 - see every herdr workspace, with how many of its agents are working,
   waiting for you, done or idle, in any tab;
-- select a workspace, which shows it in herdr on this computer;
-- open a workspace with RIGHT (the wheel's right, fast-forward) and see its
-  first tab's agents with each one's last activity; this changes nothing in
-  herdr;
-- select an agent, which shows its pane in herdr;
-- hold Play/Pause in Agents to dictate with the computer's microphone;
-  release it to finish. The text goes into the focused input on the computer;
-- answer a choice question an agent is asking: Claude Code's questions and
-  permission prompts, and Codex's approvals and questions;
-- press LEFT (the wheel's left, rewind) on the workspace list to see each AI
-  service's 5-hour and weekly limits, its tokens this week and their API
-  price; in Usage, LEFT is the computer's Backspace, the wheel moves its
-  cursor left/right (fast turns jump words), and SELECT is Enter; RIGHT or MENU leaves Usage.
+- turn the wheel in Spaces to select and focus a workspace after 250 ms;
+- SELECT enters the Space; LEFT/RIGHT switches its herdr tabs without wrapping;
+- turn the wheel inside a Space to select and focus an agent pane after 250 ms;
+- SELECT opens that agent's detail, with the last 12 visible pane lines refreshed
+  on change, at most once per second; MENU returns to the Space;
+- hold Play/Pause to dictate with the computer's microphone; release to finish.
+  Wheel focus waits while Play is held;
+- answer Claude Code questions/permission prompts and Codex approvals/questions.
+  New questions pop up oldest first, after any hold-to-talk and its result;
+- switch between Spaces and Usage with LEFT/RIGHT. Usage shows each service's
+  5-hour and weekly limits, tokens this week and their equivalent API price.
 
-LEFT goes back from agent and question views. Only MENU leaves Agents for System.
+Navigation v2 firmware uses these controls:
+
+| View | Wheel | SELECT | LEFT | RIGHT | MENU |
+|---|---|---|---|---|---|
+| Spaces | Select/focus workspace | Enter Space | Usage | Usage | System |
+| Usage | Left/Right keys (words when fast) | Enter key | Backspace key | Spaces | System |
+| Space | Select/focus pane | Agent detail | Previous tab | Next tab | Spaces |
+| Agent detail | Left/Right keys (words when fast) | Enter key | Backspace key | No action | Space |
+| Question | Select option | Choose/tick/Submit | No action | No action | Previous view |
+
+Entering a Space focuses its first tab. Switching tabs focuses the new tab
+immediately and selects its first agent, without an extra pane-focus request.
+Entering detail focuses its pane first; editing waits for that focus result.
+If focus fails, no detail keys are sent. Successful focus is silent; failures
+appear in the message band. Question pop-ups never move computer focus.
+Answering/dismissing restores the previous view and selection. A dismissed
+question stays in the alert row and does not pop up again with the same id.
+
+Older firmware keeps its existing controls and first-tab workspace list.
+The unchanged v1 heartbeat and agent frames remain available; new tab/detail
+frames are ignored by older firmware.
 
 It talks only to herdr's local socket. It never reaches another machine.
 
 On connection and after a herdr reconnect, HerdRemote checks `ping`'s
 `capabilities.client_targeted_focus`. It checks again before each focus
 request, in case the server changed between refreshes. When this capability
-is `true`, workspace/first-tab and pane selections use `client.focus` with
+is `true`, workspace/first-tab, explicit tab and pane selections use `client.focus` with
 `clients: "local"`: remote clients keep their workspace/tab views. Pane
 focus is shared within a tab, so other clients already viewing that tab
 also see its focused pane change. If `client.focus` returns `moved: []`,
@@ -161,13 +179,15 @@ Do not use real `HoldStart`/`HoldStartRaw` as a smoke test: they open the
 computer's microphone and can commit text to the user's current input.
 Optional `V talk`/`V idle` signals are not emitted by this backend.
 
-## Keyboard editing from Usage
+## Keyboard editing from Usage and agent detail
 
-Usage sends keyboard taps to the computer's current keyboard focus. It
-does not move herdr or send keys directly to an agent pane. This lets you
-edit dictated text at the same cursor used by F23/hold-to-talk.
+Usage and agent detail send keyboard taps to the computer's current
+keyboard focus. The key command itself never moves herdr or uses
+`pane.send_keys`. Detail first sends `fp` and waits for its successful
+result before sending keys. Usage edits at the same cursor used by F23
+and hold-to-talk without an initial focus request.
 
-| Usage control | Wire key | Computer key |
+| Usage / detail control | Wire key | Computer key |
 |---|---|---|
 | LEFT press/repeat | `k <req> bs` | Backspace: delete the character before the cursor |
 | Wheel counter-clockwise | `k <req> left` | Left arrow |
@@ -181,8 +201,9 @@ omitting `n` means one. A noninteger or out-of-range count returns
 **Invalid key count**. Success is `R <req> ok` without a message band.
 The iPod keeps one request in flight and coalesces pending steps into
 ordered runs with counts. It hides **Key busy** and older **Key rate limit**
-responses; real failures display their reason. RIGHT/MENU retain navigation
-out of Usage. Other views retain their existing keys.
+responses; real failures display their reason. RIGHT returns Usage to Spaces;
+MENU leaves Usage for System. In detail, MENU returns to the Space and RIGHT
+has no action.
 
 `HERDREMOTE_KEY_TOOL` or `--key-tool` selects `auto`, `ydotool`, or `wtype`.
 In `auto`, HerdRemote prefers the installed ydotool plus its socket;
@@ -264,8 +285,9 @@ The last three are herdr's own dots and colours (`catppuccin-latte`).
 Each dot has a thin white edge, so it shows on any album's colours.
 Other themes show the row's text only.
 
-A question waiting anywhere puts a ⚠ row at the top of every list. Select
-it to open the question. When an answer reaches the agent, the player says
+A detected question puts a ⚠ row at the top of every list. New question ids
+also open a pop-up with Navigation v2 firmware; Play holds and pending talk
+results defer it. Select the alert row to revisit a dismissed question. When an answer reaches the agent, the player says
 **Answered**; a multi-select box that changed says **Updated**. If the
 question changed on the computer first, the answer is refused and no key
 reaches the agent.
@@ -281,8 +303,37 @@ A row at the top says when something is missing:
 | No update for N s | The player has heard nothing for N seconds |
 | herdr data N s old | herdr has stopped answering this program |
 
-**Menu** and **Left** go back one level, and from the workspace list leave
-the screen.
+The navigation table above defines MENU and LEFT for each view.
+
+## Navigation v2 wire contract
+
+[The protocol](../../docs/podbox/herdremote-protocol.md#navigation-v2--protocol-ready)
+contains the frozen `PROTOCOL READY` contract. No version bump is needed.
+
+- `sub <ws> [<tab_id>]` subscribes to that tab's `A` rows. Omit the tab to
+  follow the first tab. `sub -` stops workspace/tab lists.
+- Each subscribed tab list is one frame containing seven-field
+  `T <ws> <n> <i> <tab_id> <label> <status>` records, in herdr order, up to
+  32 tabs. This is separate from the unchanged three-field heartbeat `T`.
+- `ft <req> <ws> <tab_id>` validates membership and focuses the tab through
+  the same local-client path and legacy capability fallback as `fw`/`fp`.
+- `det <pane>` subscribes to `D <pane> <line0> ... <line11>`; each line has
+  a 60-byte UTF-8 budget. ANSI sequences are stripped. Unchanged text is
+  silent; empty/missing/failed panes send a zero-line detail. `det -` stops it.
+- First tabs and the selected tab are read for questions/activity; other
+  tabs use herdr's states. Tab order stays independent of agent priority.
+- Subscriptions never focus or type. Reset, link loss and shutdown clear
+  subscriptions and detail caches. Keyboard and voice ownership are unchanged.
+
+Tests use a private fake herdr socket, mocked key/voice tools and pseudo
+terminals. They never focus real panes, inject real keys, or open a microphone:
+
+```sh
+python3 -m unittest discover -s tools/herdremote/tests -v
+```
+
+These host tests do not establish on-device UI behavior or deployed-service
+acceptance. Deployment and iPod installation are separate from Part B.
 
 ## Files
 
@@ -293,5 +344,5 @@ the screen.
 | `hrdetect.py` | Finds a choice question in a pane's text, and the keys that answer it |
 | `hrproto.py` | The messages; `docs/podbox/herdremote-protocol.md` describes them |
 | `hrvoice.py` | Session-bus voice calls, hold ownership and independent stop watchdog |
-| `hrkeys.py` | Whitelisted desktop key taps, shared rate cap and bounded outstanding work |
+| `hrkeys.py` | Whitelisted desktop key taps, counted batches and bounded outstanding work |
 | `tests/` | `python3 -m unittest discover -s tools/herdremote/tests` |
