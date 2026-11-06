@@ -94,6 +94,10 @@ struct hr_model {
     int herdr_age;          /* seconds, as the last tick said */
     int nws;
     struct hr_workspace ws[HR_MAX_WS];
+    /* Whether the last W or S changed what the spaces list shows: a W that
+     * only moved the computer's focus, or an S that repeats the last,
+     * leaves it false */
+    bool ws_shown_changed;
     char agents_ws[16];     /* the workspace agents[] belongs to */
     bool agents_valid;
     int nagents;

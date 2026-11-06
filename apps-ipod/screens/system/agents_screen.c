@@ -11,9 +11,9 @@
  * commands. Two views are the top level, spaces and usage; two more lie
  * under spaces; and a question opens over any of them:
  *
- *   spaces    workspaces with their agent counts. The wheel moves and, once
- *             it rests, focuses that workspace on the computer (fw); SELECT
- *             enters it, focusing it; LEFT and RIGHT go to usage
+ *   spaces    workspaces with their agent counts. The wheel moves and the
+ *             computer's focus follows it (fw); SELECT enters the
+ *             workspace, focusing it; LEFT and RIGHT go to usage
  *   usage     each AI service's limits, tokens and cost, drawn by this file
  *             over an empty list; RIGHT goes back to spaces. The other keys
  *             type on the computer: LEFT Backspace (once per press and per
@@ -21,7 +21,7 @@
  *             them, a word at a time, when it turns fast), SELECT Enter.
  *             Taps made while one is on its way go together, with a count
  *   agents    one tab's agents, each with its last activity under it; the
- *             title names the tab. The wheel's rest focuses the pane (fp);
+ *             title names the tab. The focus follows the wheel (fp);
  *             SELECT opens the agent's detail; LEFT and RIGHT go to the tab
  *             before or after, focusing it (ft); MENU goes back to spaces
  *   detail    the agent, and the last lines of its pane as the computer
@@ -36,6 +36,11 @@
  * from spaces or usage. Focus sent for the wheel, a tab, a workspace or
  * the detail says nothing when it works and its reason in the band when
  * it fails.
+ *
+ * The list is drawn again only for what changes it: a wheel step draws it
+ * as it moves, and a message does when it alters a row, the title or the
+ * usage or detail view. A focus result, a tick, a voice state or a W that
+ * only moved the computer's focus draws nothing.
  *
  * Play held talks to the computer, in every view: its press sends vd with
  * the selected workspace or pane ("-" in usage), its release vu, and the
@@ -131,12 +136,14 @@ static unsigned int next_req = 1;
 static char pending_req[8];     /* the answer awaiting its result */
 static bool pending_answer;
 static long pending_until;
-/* Focus follows the wheel: a selection that has rested FOCUS_REST is
- * focused on the computer, fw for a workspace and fp for a pane. One fw, fp
- * or ft is out at a time, and says nothing unless it fails. */
-#define FOCUS_REST  (HZ / 4)
+/* Focus follows the wheel: the selected workspace (fw) or pane (fp) is
+ * focused on the computer as soon as the wheel moves. One fw, fp or ft is
+ * out at a time, and says nothing unless it fails; the wheel moving
+ * meanwhile leaves only its latest row wanted, sent when the result comes.
+ * A row the last request already focused is not sent again. */
 #define FOCUS_REPLY (8 * HZ)
-static long focus_at;           /* when the resting selection goes; 0 none */
+static char focus_want[16];     /* the row to focus next; "" for none */
+static char focus_done[16];     /* the row the last fw or fp was for */
 static char focus_req[8];       /* the fw, fp or ft awaiting its result */
 static long focus_until;
 static bool focus_for_detail;   /* that request is the detail view's fp */
@@ -1442,29 +1449,35 @@ static bool take_focus_result(void)
     return true;
 }
 
-/* The wheel moved in the spaces or agents view: focus where it rests */
-static void arm_focus(void)
+/* The wheel moved in the spaces or agents view: the selected workspace or
+ * pane is the one to focus; any other row wants none */
+static void want_focus(struct gui_synclist *list)
 {
-    focus_at = current_tick + FOCUS_REST;
+    int sel = gui_synclist_get_sel_pos(list);
+    const struct row *r = sel >= 0 && sel < nrows ? &rows[sel] : NULL;
+    bool is = r && ((view == VIEW_SPACES && r->kind == ROW_SPACE) ||
+                    (view == VIEW_AGENTS && r->kind == ROW_AGENT));
+    snprintf(focus_want, sizeof focus_want, "%s", is ? r->id : "");
 }
 
-/* Send the selection's focus once it has rested, Play is up with its
- * result in, and no focus is still out */
-static void send_rested_focus(struct gui_synclist *list)
+/* Forget the wanted and the done focus: the view has changed */
+static void reset_focus(void)
 {
-    if (!focus_at || TIME_BEFORE(current_tick, focus_at))
+    focus_want[0] = focus_done[0] = '\0';
+}
+
+/* Send the wanted focus when no request is out and Play is up with its
+ * result in */
+static void send_wanted_focus(void)
+{
+    if (!focus_want[0] || focus_req[0] || talk_held || talk_req[0])
         return;
-    if (talk_held || talk_req[0] || focus_req[0])
-        return;
-    focus_at = 0;
-    int sel = gui_synclist_get_sel_pos(list);
-    if (sel < 0 || sel >= nrows)
-        return;
-    const struct row *r = &rows[sel];
-    if (view == VIEW_SPACES && r->kind == ROW_SPACE)
-        queue_focus("fw", r->id, false);
-    else if (view == VIEW_AGENTS && r->kind == ROW_AGENT)
-        queue_focus("fp", r->id, false);
+    if (strcmp(focus_want, focus_done))
+    {
+        queue_focus(view == VIEW_SPACES ? "fw" : "fp", focus_want, false);
+        snprintf(focus_done, sizeof focus_done, "%s", focus_want);
+    }
+    focus_want[0] = '\0';
 }
 
 /* An R for vd or vu. Returns false for any other request's R. */
@@ -1559,7 +1572,7 @@ static void open_question(struct gui_synclist *list, const char *pane)
     if (q)
         hr_popped_add(&popped, q->id);
     view = VIEW_QUESTION;
-    focus_at = 0;
+    focus_want[0] = '\0';
     show(list, 0);
 }
 
@@ -1591,7 +1604,7 @@ static void open_usage(struct gui_synclist *list)
     int sel = gui_synclist_get_sel_pos(list);
     usage_from = sel >= 0 && sel < nrows ? rows[sel] : (struct row){0};
     view = VIEW_USAGE;
-    focus_at = 0;
+    reset_focus();
     ask_usage();
     show(list, 0);
 }
@@ -1612,7 +1625,7 @@ static void enter_space(struct gui_synclist *list, const char *ws)
     subscribe(space_id, space_tab);
     queue_focus("fw", space_id, false);
     view = VIEW_AGENTS;
-    focus_at = 0;
+    reset_focus();
     show(list, 0);
 }
 
@@ -1624,7 +1637,7 @@ static void close_space(struct gui_synclist *list)
     view = VIEW_SPACES;
     space_id[0] = space_tab[0] = '\0';
     subscribe("", "");
-    focus_at = 0;
+    reset_focus();
     show_row(list, &r);
 }
 
@@ -1642,7 +1655,7 @@ static void switch_tab(struct gui_synclist *list, int dir)
     queue_focus("ft", args, false);
     subscribe(space_id, space_tab);
     model.agents_valid = false;
-    focus_at = 0;
+    reset_focus();
     show(list, 0);
 }
 
@@ -1658,7 +1671,7 @@ static void open_detail(struct gui_synclist *list, const struct hr_agent *a)
     subscribe_detail(detail_pane);
     queue_focus("fp", detail_pane, true);
     view = VIEW_DETAIL;
-    focus_at = 0;
+    reset_focus();
     show(list, 0);
 }
 
@@ -1672,6 +1685,7 @@ static void close_detail(struct gui_synclist *list)
     detail_ready = false;
     detail_pane[0] = '\0';
     view = VIEW_AGENTS;
+    reset_focus();
     show_row(list, &r);
 }
 
@@ -1725,7 +1739,7 @@ static bool poll_link(void)
         nout = 0;
         pending_req[0] = '\0';
         focus_req[0] = '\0';
-        focus_at = 0;
+        reset_focus();
         /* The computer stops recording when the link goes */
         if (talk_held || talk_req[0])
             talk_result("Link lost", true);
@@ -1763,7 +1777,11 @@ static bool poll_link(void)
         if (!type)
             continue;
         last_message = current_tick;
-        changed = true;
+        /* Only what alters a row, the title or a drawn view is a change */
+        if (type == 'W' || type == 'S')
+            changed |= model.ws_shown_changed;
+        else if (type != 'T' && type != 'R' && type != 'V' && type != 'H')
+            changed = true;
         if (type == 'Q' && model.nquestions > before && !had)
             backlight_on();
         if (type == 'U' && model.usage.serial != usage_serial)
@@ -1830,7 +1848,7 @@ int agents_screen(void)
     space_id[0] = space_tab[0] = detail_pane[0] = '\0';
     question_pane[0] = pending_req[0] = focus_req[0] = '\0';
     pending_answer = was_connected = detail_ready = false;
-    focus_at = 0;
+    reset_focus();
     talk_held = talk_shown = false;
     talk_req[0] = talk_note[0] = '\0';
     forget_keys();
@@ -1924,7 +1942,7 @@ int agents_screen(void)
             if (focus_for_detail)
                 key_runs.nruns = 0;
         }
-        send_rested_focus(&list);
+        send_wanted_focus();
         /* The band is drawn over whatever the list drew last; once it has
          * gone the list is drawn again beneath */
         if (talk_wanted())
@@ -1962,7 +1980,7 @@ int agents_screen(void)
             int sel = gui_synclist_get_sel_pos(&list);
             int lines = gui_synclist_get_nb_lines(&list, SCREEN_MAIN);
             if (sel != before && view != VIEW_QUESTION)
-                arm_focus();
+                want_focus(&list);
             if (sel > before && before >= before_top + lines)
             {
                 /* The selection is below the rows in view, which were

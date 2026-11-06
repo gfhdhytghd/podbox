@@ -74,10 +74,22 @@ static char *next_record(char **cursor)
     return start;
 }
 
+static const struct hr_workspace *find_ws(const struct hr_model *m,
+                                          const char *id)
+{
+    for (int i = 0; i < m->nws; i++)
+        if (!strcmp(m->ws[i].id, id))
+            return &m->ws[i];
+    return NULL;
+}
+
+/* A workspace whose counts have not changed keeps the states its last S
+ * gave it, so the S the computer repeats after every W changes nothing */
 static int apply_workspaces(struct hr_model *m, char **cursor)
 {
     char *f[HR_MAX_FIELDS], *record;
     int n = 0;
+    bool same = true;
     while ((record = next_record(cursor)) && n < HR_MAX_WS)
     {
         if (split(record, f) != 7)
@@ -90,10 +102,25 @@ static int apply_workspaces(struct hr_model *m, char **cursor)
         w->done = number(f[4]);
         w->idle = number(f[5]);
         hr_copy(w->label, f[6], sizeof w->label);
-        w->tab1 = w->waiting ? 'b' : w->working ? 'w' : w->done ? 'd' :
-                  w->idle ? 'i' : '-';
-        w->other = '-';
+        const struct hr_workspace *old = find_ws(m, w->id);
+        if (old && old->working == w->working &&
+            old->waiting == w->waiting && old->done == w->done &&
+            old->idle == w->idle)
+        {
+            w->tab1 = old->tab1;
+            w->other = old->other;
+            if (old != &m->ws[n - 1] || strcmp(old->label, w->label))
+                same = false;
+        }
+        else
+        {
+            w->tab1 = w->waiting ? 'b' : w->working ? 'w' : w->done ? 'd' :
+                      w->idle ? 'i' : '-';
+            w->other = '-';
+            same = false;
+        }
     }
+    m->ws_shown_changed = !same || n != m->nws;
     memcpy(m->ws, new_ws, n * sizeof new_ws[0]);
     m->nws = n;
     return 'W';
@@ -120,10 +147,14 @@ static int apply_status(struct hr_model *m, char **cursor)
         w->tab1 = state(f[1]);
         w->other = state(f[2]);
     }
+    m->ws_shown_changed = false;
     for (int i = 0; i < n; i++)
         for (int j = 0; j < m->nws; j++)
             if (!strcmp(m->ws[j].id, new_ws[i].id))
             {
+                if (m->ws[j].tab1 != new_ws[i].tab1 ||
+                    m->ws[j].other != new_ws[i].other)
+                    m->ws_shown_changed = true;
                 m->ws[j].tab1 = new_ws[i].tab1;
                 m->ws[j].other = new_ws[i].other;
             }

@@ -118,6 +118,29 @@ int main(int argc, char **argv)
     assert(apply("S\t1\nw1\tw\tb") == 'S');
     assert(m.ws[0].tab1 == 'w' && m.ws[0].other == 'b');
 
+    /* A W that only moves the focus, and the S repeated after it, change
+     * nothing the list shows; the states S gave stay */
+    assert(m.ws_shown_changed);
+    assert(apply("W\t2\nw1\t-\t1\t2\t3\t4\t项目\n"
+                 "w2\tf\t0\t0\t0\t1\tother") == 'W');
+    assert(!m.ws_shown_changed && m.ws[1].focused && !m.ws[0].focused);
+    assert(m.ws[0].tab1 == 'w' && m.ws[0].other == 'b');
+    assert(apply("S\t2\nw1\tw\tb\nw2\t-\tw") == 'S' && !m.ws_shown_changed);
+    assert(apply("S\t1\nw2\td\tw") == 'S' && m.ws_shown_changed);
+    /* Changed counts, a label, the order or the set are shown */
+    assert(apply("W\t2\nw1\t-\t2\t1\t3\t4\t项目\n"
+                 "w2\tf\t0\t0\t0\t1\tother") == 'W');
+    assert(m.ws_shown_changed && m.ws[0].tab1 == 'b' && m.ws[0].other == '-');
+    assert(apply("W\t2\nw1\t-\t2\t1\t3\t4\t项目\n"
+                 "w2\tf\t0\t0\t0\t1\tother2") == 'W' && m.ws_shown_changed);
+    assert(apply("W\t2\nw2\tf\t0\t0\t0\t1\tother2\n"
+                 "w1\t-\t2\t1\t3\t4\t项目") == 'W' && m.ws_shown_changed);
+    assert(apply("W\t1\nw2\tf\t0\t0\t0\t1\tother2") == 'W' &&
+           m.ws_shown_changed && m.nws == 1);
+    assert(apply("W\t2\nw1\tf\t1\t2\t3\t4\t项目\n"
+                 "w2\t-\t0\t0\t0\t1\tother") == 'W' && m.ws_shown_changed);
+    assert(apply("S\t1\nw1\tw\tb") == 'S');
+
     assert(apply("A\tw1\t1\nw1:p1\tclaude\tb\t1\tasker\t标题\tlast line") == 'A');
     assert(m.agents_valid && m.nagents == 1 && m.agents[0].status == 'b');
     assert(m.agents[0].question && !strcmp(m.agents[0].name, "asker"));

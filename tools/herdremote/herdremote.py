@@ -13,6 +13,7 @@ focus local herdr clients (all clients on older servers) or answer the question.
 Dependencies: Python 3.9+, pyserial. Logs go to stdout.
 """
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 import logging
 import os
 import queue
@@ -133,9 +134,14 @@ class Daemon:
             voice_focus=getattr(args, "voice_focus", False),
             voice_max_hold=getattr(args, "voice_max_hold", 120),
             voice_method=getattr(args, "voice_method", "HoldStart"))
+        self.reader = None
+        self.model_job = self.detail_job = None
+        self.model_key = None
+        self.next_refresh = 0.0
         self.reset_session()
 
     def reset_session(self):
+        self.session_generation = getattr(self, "session_generation", 0) + 1
         self.keys.reset()
         self.voice.stop()
         self.sent_ws = None
@@ -152,22 +158,91 @@ class Daemon:
 
     # --- herdr ---------------------------------------------------------
     def refresh(self):
+        """Synchronous refresh for --once and host callers; run uses a worker."""
+        self.apply_model(self.read_model(self.herdr, self.subscribed,
+                                         self.subscribed_tab, not self.herdr_ok))
+
+    def read_model(self, client, workspace, tab, probe):
         try:
-            if not self.herdr_ok:
-                self.herdr.detect_capabilities()
-            snapshot = self.herdr.snapshot()
-            self.model = self.order.apply(
-                hrherdr.build_model(snapshot, self.herdr.read,
-                                    self.subscribed, self.subscribed_tab))
-            self.model_time = time.monotonic()
+            if probe:
+                client.detect_capabilities()
+            snapshot = client.snapshot()
+
+            def read(pane):
+                if self.stopping.is_set():
+                    raise hrherdr.HerdrError("herdremote stopping")
+                return client.read(pane)
+
+            if self.stopping.is_set():
+                return None, time.monotonic(), "herdremote stopping"
+            model = hrherdr.build_model(snapshot, read, workspace, tab)
+            if self.stopping.is_set():
+                return None, time.monotonic(), "herdremote stopping"
+            return self.order.apply(model), time.monotonic(), None
+        except hrherdr.HerdrError as error:
+            return None, time.monotonic(), str(error)
+
+    def apply_model(self, update):
+        model, sampled, error = update
+        if error is None:
+            self.model, self.model_time = model, sampled
             if not self.herdr_ok:
                 log.info("herdr reachable at %s", self.herdr.path)
             self.herdr_ok = True
-        except hrherdr.HerdrError as error:
+        else:
             if self.herdr_ok or not self.model_time:
                 log.warning("herdr unreachable: %s", error)
             self.herdr_ok = False
-            self.model_time = self.model_time or time.monotonic()
+            self.model_time = self.model_time or sampled
+
+    def read_detail(self, pane, readable):
+        lines = []
+        if readable and not self.stopping.is_set():
+            client = hrherdr.Herdr(self.herdr.path, self.herdr.timeout)
+            try:
+                lines = hrherdr.detail_lines(client.read(pane))
+            except hrherdr.HerdrError:
+                pass
+        return hrproto.detail(pane, lines)
+
+    def pump_reads(self):
+        """Publish complete snapshots on the link thread, with bounded work.
+
+        One model job and one detail job at most; never queue one per focus.
+        Each worker owns its Herdr client, so probes cannot change the focus
+        connection's capabilities. Stale subscription/session results are dropped.
+        """
+        key = (self.session_generation, self.subscribed, self.subscribed_tab)
+        if self.model_job and self.model_job[1].done():
+            requested, future = self.model_job
+            self.model_job = None
+            if requested == key:
+                self.apply_model(future.result())
+        if self.detail_job and self.detail_job[1].done():
+            requested, future = self.detail_job
+            self.detail_job = None
+            if requested[0] == self.session_generation:
+                if requested[1] == self.detail_pane and self.sent_ws is not None:
+                    payload = future.result()
+                    if payload != self.sent_detail:
+                        self.send(payload)
+                        self.sent_detail = payload
+                # Switching detail cannot bypass the one-second send limit.
+                self.next_detail = time.monotonic() + DETAIL_SECONDS
+        now = time.monotonic()
+        if self.model_job is None and (now >= self.next_refresh or key != self.model_key):
+            self.changed.clear()
+            self.model_key = key
+            self.next_refresh = now + REFRESH_SECONDS
+            client = hrherdr.Herdr(self.herdr.path, self.herdr.timeout)
+            self.model_job = (key, self.reader.submit(
+                self.read_model, client, self.subscribed, self.subscribed_tab,
+                not self.herdr_ok))
+        if (self.sent_ws is not None and self.detail_pane and
+                self.detail_job is None and now >= self.next_detail):
+            pane = self.detail_pane
+            self.detail_job = ((self.session_generation, pane), self.reader.submit(
+                self.read_detail, pane, self.herdr_ok and pane in self.model["panes"]))
 
     # --- PodLink session -----------------------------------------------
     def open_link(self):
@@ -212,6 +287,14 @@ class Daemon:
         """Send whatever the player's picture lacks."""
         if self.sent_ws is None:
             return  # the screen has not said hello yet
+        # Replies precede all dashboard encoding/sends. Focus replies already
+        # go directly from command(), before entering push().
+        while not self.results.empty():
+            self.send(hrproto.result(*self.results.get()))
+        for result in self.keys.replies():
+            self.send(hrproto.result(*result))
+        if not self.model_time:
+            return  # do not present an empty startup model while a read is pending
         ws = hrproto.workspaces(self.model["workspaces"])
         st = hrproto.status(self.model["workspaces"])
         if ws != self.sent_ws:
@@ -243,12 +326,8 @@ class Daemon:
             if qid not in self.sent_questions:
                 self.send(hrproto.question(q))
                 self.sent_questions[qid] = True
-        while not self.results.empty():
-            self.send(hrproto.result(*self.results.get()))
-        for result in self.keys.replies():
-            self.send(hrproto.result(*result))
         now = time.monotonic()
-        if self.detail_pane and now >= self.next_detail:
+        if self.reader is None and self.detail_pane and now >= self.next_detail:
             # Share one deadline across switches: repeated det cannot bypass
             # the read/send limit. Never read a pane absent from the snapshot.
             lines = []
@@ -356,26 +435,35 @@ class Daemon:
             else:
                 self.herdr.focus_pane(target)
                 text = "Focused pane"
-            log.info("%s %s", text, target)
             self.send(hrproto.result(req, True, text))
+            log.debug("%s %s", text, target)
         except hrherdr.HerdrError as error:
-            log.warning("focus %s failed: %s", target, error)
             self.send(hrproto.result(req, False, str(error)))
-        self.changed.set()
+            log.warning("focus %s failed: %s", target, error)
 
     def run(self):
         self.usage.start()
         hrherdr.Watcher(self.herdr, self.changed).start()
         self.answerer.start()
-        next_refresh = next_probe = 0.0
+        self.reader = ThreadPoolExecutor(max_workers=1, thread_name_prefix="herdremote-read")
+        try:
+            self.run_loop()
+        finally:
+            self.stopping.set()
+            self.keys.reset()
+            self.voice.stop()
+            if self.link:
+                self.close_link()
+            self.reader.shutdown(wait=True, cancel_futures=True)
+            self.reader = None
+            self.usage.close()
+
+    def run_loop(self):
+        next_probe = 0.0
         while not self.stopping.is_set():
             now = time.monotonic()
-            if now >= next_refresh or (self.changed.is_set() and
-                                       now >= next_refresh - 0.75):
-                self.changed.clear()
-                self.refresh()
-                next_refresh = now + REFRESH_SECONDS
             if not self.link:
+                self.pump_reads()
                 if now >= next_probe:
                     next_probe = now + 1.0
                     self.open_link()
@@ -387,6 +475,7 @@ class Daemon:
                     frame = self.link.frames.popleft()
                     if frame.type == podlink.TEXT:
                         self.command(frame.payload)
+                self.pump_reads()
                 self.push()
             except podlink.LinkClosed as error:
                 log.info("PodLink closed (%s): %s", error.code, error.reason)
@@ -398,11 +487,6 @@ class Daemon:
                 self.close_link()
                 continue
             time.sleep(0.02)
-        self.keys.reset()
-        self.voice.stop()
-        if self.link:
-            self.close_link()
-        self.usage.close()
 
 
 def main():

@@ -335,6 +335,42 @@ python3 -m unittest discover -s tools/herdremote/tests -v
 These host tests do not establish on-device UI behavior or deployed-service
 acceptance. Deployment and iPod installation are separate from Part B.
 
+## Scroll latency
+
+The link loop polls and handles incoming commands before publishing dashboard
+updates. `fw`/`fp`/`ft` send `R` directly after the herdr reply, before logging.
+Successful focus logs use DEBUG, so wheel movement does not write an INFO log
+for every target. The per-focus capability probe and the `moved: []` local
+client check remain unchanged; missing/remote-only local windows still fail.
+
+Snapshot/pane reads and order-file writes run on one separate read worker.
+The link thread adopts complete model results, then sends only changed frames.
+Regular model reads start at most once per second. A changed subscription can
+request an earlier read; only the latest subscription is retained while one
+read is in flight. One model job and one detail job are the maximum pending
+work. Each job uses a separate herdr client so read-side probes cannot alter
+focus capabilities. Old subscription/session results are discarded. Detail
+reads also use this worker and retain the one-second send interval.
+
+The synchronous `--once` path remains available. To measure the command path
+without touching a real desktop, use the fake-server benchmark:
+
+```sh
+python3 tools/herdremote/tests/bench_focus_latency.py --revision 39fc19ab61 --samples 8
+python3 tools/herdremote/tests/bench_focus_latency.py --samples 8
+```
+
+`arrival_to_R` includes time waiting for the daemon to poll the fake link;
+`receipt_to_R` starts at `command()`. The loaded case injects commands while
+an eight-pane refresh is reading (20 ms per pane, 20 ms per snapshot).
+The transport is an in-memory fake link; existing integration tests use PTYs.
+Neither measurement establishes real USB or iPod rendering latency.
+
+For explicitly authorized real read-only timing, `--real-read-only` restricts
+calls to `ping`, `client.list`, `session.snapshot`, and `pane.read`. It writes
+only timing/count summaries, never terminal text or snapshots. It never sends
+focus/keys, opens a player, starts voice, or controls the deployed service.
+
 ## Files
 
 | File | Role |
