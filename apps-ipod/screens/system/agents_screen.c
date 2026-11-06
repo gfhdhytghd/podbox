@@ -85,6 +85,7 @@
 #include "draw/screen_access.h"
 #include "draw/text_wrap.h"
 #include "widgets/list.h"
+#include "skin/statusbar_skinned.h"
 #include "widgets/splash.h"
 #include "widgets/dialog.h"
 #include "system/shutdown.h"
@@ -595,6 +596,10 @@ static const char *option_parts(const struct hr_option *o, bool *ticked,
 #define TEXT_CELL   250
 #define SHORT_CELL  160
 #define RIGHT_CELL  86
+/* The title bar's cell while the link is held, 140 px, less what its bold
+ * font adds to a width measured in the list's font: a title cut to this
+ * does not scroll. The numeric battery display leaves a narrower cell. */
+#define TITLE_CELL  124
 
 static int text_px(const char *text)
 {
@@ -986,8 +991,11 @@ static const char *view_title(void)
     }
     if (view == VIEW_DETAIL)
     {
-        snprintf(title, sizeof title, "%s", agent_name(&detail_agent));
-        return title;
+        /* The agent's name, or its kind when it has none: never the task,
+         * which the page's TASK line carries. Cut rather than scrolled. */
+        const struct hr_agent *a = &detail_agent;
+        return fit(title, sizeof title, a->name[0] ? a->name : a->kind,
+                   TITLE_CELL);
     }
     if (view == VIEW_QUESTION)
     {
@@ -1803,13 +1811,30 @@ static bool take_talk_result(void)
     return true;
 }
 
+/* Scrim gives the agents view a shorter list, with the selected row's
+ * description (%LD) in a band under it, by switching the UI viewport on
+ * the bar's own render, which reads %LD from the list's last draw; and the
+ * list takes a switched viewport through a theme toggle, whose render finds
+ * no list drawn and so switches back, until the next render and draw. A
+ * list drawn once, before the bar has chosen, has rows under the band, and
+ * their dots are drawn over its text at every frame. So the draw that is
+ * seen is the third: two unseen draws and two renders bring the bar and
+ * the list to agree, the way a wheel step after the band appears does. */
+static void settle_viewport(struct gui_synclist *list)
+{
+    gui_synclist_inhibit_flush(true);
+    gui_synclist_draw(list);
+    sb_skin_update(SCREEN_MAIN, true);
+    gui_synclist_draw(list);
+    sb_skin_update(SCREEN_MAIN, true);
+    gui_synclist_inhibit_flush(false);
+    gui_synclist_layout(list);
+}
+
 /* Rebuild and draw, selecting the first row that can be chosen from select
  * on. In the question view the rows above it stay in view as far as they
  * fit, so a question is read from its start; in a list the selection goes
- * to the middle, because the theme's description band under the agents
- * view shortens the list only once its rows are drawn, and a selection
- * put on the last line by the taller count ends under the band. top, when
- * not -1, is the row to keep at the top instead. */
+ * to the middle. top, when not -1, is the row to keep at the top instead. */
 static void show_at(struct gui_synclist *list, int select, int top)
 {
     build_rows(list);
@@ -1820,6 +1845,7 @@ static void show_at(struct gui_synclist *list, int select, int top)
     if (select >= nrows)
         select = 0;
     gui_synclist_select_item(list, select);
+    settle_viewport(list);
     int lines = gui_synclist_get_nb_lines(list, SCREEN_MAIN);
     if (top < 0)
         top = view == VIEW_QUESTION ? select - lines + 1 : select - lines / 2;
