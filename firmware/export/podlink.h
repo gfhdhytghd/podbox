@@ -6,7 +6,7 @@
 
 #define PODLINK_VERSION 1
 #define PODLINK_BUILD "fast-1"
-#define PODLINK_MAX_MESSAGE 4096
+#define PODLINK_MAX_MESSAGE 16384
 #define PODLINK_HEADER 16
 #define PODLINK_FRAME_MAX (PODLINK_HEADER + PODLINK_MAX_MESSAGE + 4)
 enum podlink_type
@@ -51,6 +51,8 @@ bool podlink_open(void);
 int podlink_send(unsigned int type, const void *data, unsigned int length);
 int podlink_poll(struct podlink_message *message);
 enum podlink_connection podlink_state(void);
+/* Session limit: min(local maximum, peer OPEN maximum). */
+unsigned int podlink_max_message(void);
 void podlink_close(void);
 /* Optional screen idle wait; wakes on transport progress, bounded by ticks. */
 void podlink_wait(int ticks);

@@ -186,7 +186,7 @@ int podlink_screen(void)
                 }
                 else
                 {
-                    reply_len = MIN(PODLINK_MAX_MESSAGE, goal - offset);
+                    reply_len = MIN(podlink_max_message(), goal - offset);
                     for (unsigned int i = 0; i < reply_len; ++i)
                         reply[i] = (offset + i) % 251;
                     offset += reply_len;

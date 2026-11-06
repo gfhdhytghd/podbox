@@ -21,7 +21,7 @@ VID, PID = 0x05AC, 0x1261
 MAGIC = b"PLNK"
 HEADER = struct.Struct("<4sBBHII")
 OPEN, TEXT, BINARY, PING, PONG, CLOSE, HELLO = range(1, 8)
-MAX_MESSAGE = 4096
+MAX_MESSAGE = 16384
 HELLO_DATA = struct.pack("<HI", 1, MAX_MESSAGE)
 
 
@@ -132,6 +132,7 @@ class Link:
                 self.send(CLOSE, struct.pack("<H", error.code))
                 raise
             for frame in incoming:
+                self._check_size(frame)
                 self.last_rx = time.monotonic()
                 if frame.type == PING:
                     self.send(PONG, frame.payload, seq=frame.seq)
@@ -158,11 +159,19 @@ class Link:
             if not self.keepalive and now - self.last_rx > 5:
                 self.keepalive = self.send(PING), now
 
+    def _check_size(self, frame):
+        if frame.type not in (HELLO, OPEN) and len(frame.payload) > self.max_message:
+            self.send(CLOSE, struct.pack("<H", 1009))
+            self.opened = False
+            raise LinkClosed(1009, "message exceeds negotiated maximum")
+
     def receive(self, timeout=None):
         deadline = time.monotonic() + (self.timeout if timeout is None else timeout)
         while True:
             if self.frames:
-                return self.frames.popleft()
+                frame = self.frames.popleft()
+                self._check_size(frame)
+                return frame
             self.poll()
             if time.monotonic() > deadline:
                 raise TimeoutError("message receive timeout")
@@ -174,6 +183,7 @@ class Link:
                     time.sleep(.001)
 
     def open(self):
+        self.max_message = MAX_MESSAGE
         seq = self.send(OPEN, HELLO_DATA)
         deadline = time.monotonic() + self.timeout
         while time.monotonic() < deadline:
@@ -183,10 +193,13 @@ class Link:
             if len(frame.payload) != 6:
                 raise RuntimeError("bad handshake length")
             version, maximum = struct.unpack("<HI", frame.payload)
-            if version != 1 or not 1 <= maximum <= MAX_MESSAGE:
+            if version != 1 or not maximum:
                 raise RuntimeError("unsupported handshake")
-            self.max_message = maximum
+            self.max_message = min(self.max_message, maximum)
             if frame.type == OPEN and frame.seq == seq:
+                # The same serial read may have queued application frames.
+                for pending in self.frames:
+                    self._check_size(pending)
                 self.opened = True
                 return
         raise TimeoutError("OPEN handshake timeout")
@@ -241,19 +254,19 @@ class Link:
         self.send(TEXT, f"BENCH TX {count}")
         self.expected(TEXT, f"READY TX {count}".encode())
         start = time.monotonic()
-        for offset in range(0, count, MAX_MESSAGE):
-            self.send(BINARY, pattern(offset, min(MAX_MESSAGE, count - offset)))
+        for offset in range(0, count, self.max_message):
+            self.send(BINARY, pattern(offset, min(self.max_message, count - offset)))
         self.expected(TEXT, f"OK TX {count} errors=0".encode())
         seconds = time.monotonic() - start
         results["host_to_ipod"] = dict(bytes=count, seconds=seconds,
-            bytes_per_second=count / seconds, integrity="PASS", message_bytes=MAX_MESSAGE)
+            bytes_per_second=count / seconds, integrity="PASS", message_bytes=self.max_message)
         self.send(TEXT, f"BENCH RX {count}")
         self.expected(TEXT, f"READY RX {count}".encode())
         start = time.monotonic()
         offset = 0
         while offset < count:
             frame = self.expected(BINARY)
-            if not frame.payload or len(frame.payload) > min(MAX_MESSAGE, count - offset):
+            if not frame.payload or len(frame.payload) > min(self.max_message, count - offset):
                 raise RuntimeError("invalid benchmark frame size")
             if frame.payload != pattern(offset, len(frame.payload)):
                 raise RuntimeError(f"download integrity failed at {offset}")
@@ -261,7 +274,7 @@ class Link:
         self.expected(TEXT, f"OK RX {count}".encode())
         seconds = time.monotonic() - start
         results["ipod_to_host"] = dict(bytes=count, seconds=seconds,
-            bytes_per_second=count / seconds, integrity="PASS", message_bytes=MAX_MESSAGE)
+            bytes_per_second=count / seconds, integrity="PASS", message_bytes=self.max_message)
         return results
 
     def stats(self, reset=False):

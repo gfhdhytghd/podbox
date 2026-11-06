@@ -128,7 +128,10 @@ static uint32_t next_seq, ping_seq, peer_max;
 static uint32_t transport_generation;
 static long last_rx, ping_at, close_at;
 static bool leased, had_usb, ping_pending, release_requested;
-static const unsigned char hello[] = {1, 0, 0, 16, 0, 0};
+static const unsigned char hello[] = {
+    PODLINK_VERSION, 0,
+    PODLINK_MAX_MESSAGE & 255, (PODLINK_MAX_MESSAGE >> 8) & 255,
+    (PODLINK_MAX_MESSAGE >> 16) & 255, (PODLINK_MAX_MESSAGE >> 24) & 255};
 
 static int enqueue(unsigned int type, uint32_t seq, const void *data,
                    unsigned int length, bool control)
@@ -208,6 +211,10 @@ bool podlink_open(void)
 enum podlink_connection podlink_state(void)
 {
     return state;
+}
+unsigned int podlink_max_message(void)
+{
+    return peer_max;
 }
 int podlink_send(unsigned int type, const void *data, unsigned int length)
 {
@@ -327,6 +334,13 @@ static int podlink_poll_impl(struct podlink_message *m)
             continue; /* bad CRC/magic: scan for the next frame */
         }
         last_rx = current_tick;
+        if (state == PODLINK_CONNECTED && incoming.type != PODLINK_OPEN &&
+            incoming.type != PODLINK_HELLO && incoming.length > peer_max)
+        {
+            send_close(1009);
+            state = PODLINK_OPENING;
+            return close_event(m, 1009);
+        }
         if (incoming.type == PODLINK_OPEN)
         {
             const unsigned char *d = incoming.data;
@@ -347,7 +361,9 @@ static int podlink_poll_impl(struct podlink_message *m)
                 continue;
             }
             peer_max = MIN(limit, PODLINK_MAX_MESSAGE);
-            unsigned char answer[6] = {1, 0, peer_max, peer_max >> 8, 0, 0};
+            unsigned char answer[6] = {
+                PODLINK_VERSION, 0, peer_max & 255, (peer_max >> 8) & 255,
+                (peer_max >> 16) & 255, (peer_max >> 24) & 255};
             enqueue(PODLINK_OPEN, incoming.seq, answer, sizeof(answer), true);
             state = PODLINK_CONNECTED;
             ping_pending = false;

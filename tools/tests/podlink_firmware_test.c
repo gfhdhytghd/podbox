@@ -15,7 +15,7 @@ int usb_drv_port_speed(void)
 {
     return test_high_speed;
 }
-static unsigned char output[32768];
+static unsigned char output[3 * PODLINK_FRAME_MAX];
 static int output_size;
 bool usb_podlink_open(void)
 {
@@ -57,6 +57,8 @@ int usb_drv_send_nonblocking(int ep, const void *data, int size)
 {
     (void)ep;
     assert(!sent_size);
+    assert(size > 0 && size <= TRANSIT_BUFFER_SIZE);
+    assert(((uintptr_t)data & 3) == 0);
     assert(output_size + size <= (int)sizeof(output));
     memcpy(output + output_size, data, size);
     output_size += size;
@@ -120,7 +122,18 @@ static void input_frame(unsigned int type, unsigned int seq, const void *p,
 {
     unsigned char frame[PODLINK_FRAME_MAX];
     unsigned int length = podlink_encode(frame, type, seq, p, n);
-    input_bytes(frame, length);
+    assert(length);
+    for (unsigned int pos = 0; pos < length;)
+    {
+        unsigned int chunk = MIN(4096u, length - pos);
+        input_bytes(frame + pos, chunk);
+        pos += chunk;
+        if (pos < length)
+        {
+            struct podlink_message m;
+            assert(!podlink_poll(&m));
+        }
+    }
 }
 static int poll_message(struct podlink_message *m)
 {
@@ -135,6 +148,61 @@ static void clear_output(void)
     output_size = 0;
 }
 
+static void handshake(unsigned int maximum, unsigned int seq)
+{
+    unsigned char offer[6] = {
+        PODLINK_VERSION, 0, maximum & 255, (maximum >> 8) & 255,
+        (maximum >> 16) & 255, (maximum >> 24) & 255};
+    struct podlink_message m;
+    clear_output();
+    input_frame(PODLINK_OPEN, seq, offer, sizeof(offer));
+    for (int i = 0; i < 20; ++i)
+        assert(!poll_message(&m));
+    unsigned int limit = MIN(maximum, PODLINK_MAX_MESSAGE);
+    assert(podlink_state() == PODLINK_CONNECTED);
+    assert(podlink_max_message() == limit);
+    struct podlink_parser check = {0};
+    int got = 0;
+    for (int i = 0; i < output_size; ++i)
+        if (podlink_decode(&check, output[i], &m) == 1)
+        {
+            assert(m.type == PODLINK_OPEN && m.seq == seq);
+            assert(m.length == 6 && m.data[0] == PODLINK_VERSION);
+            assert(m.data[2] == (limit & 255));
+            assert(m.data[3] == (limit >> 8));
+            ++got;
+        }
+    assert(got == 1);
+}
+
+static void roundtrip(unsigned int length)
+{
+    unsigned char payload[PODLINK_MAX_MESSAGE];
+    for (unsigned int i = 0; i < length; ++i)
+        payload[i] = i % 251;
+    clear_output();
+    input_frame(PODLINK_BINARY, 500, payload, length);
+    struct podlink_message m;
+    int got = 0;
+    for (int i = 0; i < 100 && !got; ++i)
+        got = poll_message(&m);
+    assert(got && m.type == PODLINK_BINARY && m.length == length);
+    assert(!memcmp(m.data, payload, length));
+    assert(podlink_send(m.type, m.data, m.length) == PODLINK_SENT);
+    for (int i = 0; i < 100; ++i)
+        assert(!poll_message(&m));
+    struct podlink_parser check = {0};
+    got = 0;
+    for (int i = 0; i < output_size; ++i)
+        if (podlink_decode(&check, output[i], &m) == 1)
+        {
+            assert(m.type == PODLINK_BINARY && m.length == length);
+            assert(!memcmp(m.data, payload, length));
+            ++got;
+        }
+    assert(got == 1);
+}
+
 int main(void)
 {
     usb_serial_init();
@@ -145,19 +213,22 @@ int main(void)
     insert();
     poll_message(&m);
     assert(podlink_state() == PODLINK_OPENING);
+    assert(hello[2] == (PODLINK_MAX_MESSAGE & 255));
+    assert(hello[3] == (PODLINK_MAX_MESSAGE >> 8));
     input_frame(PODLINK_OPEN, 11, hello, sizeof(hello));
     for (int i = 0; i < 20 && podlink_state() != PODLINK_CONNECTED; i++)
         poll_message(&m);
     assert(podlink_state() == PODLINK_CONNECTED);
     clear_output();
-    unsigned char payload[4096];
-    for (int i = 0; i < 4096; i++)
+    unsigned char payload[PODLINK_MAX_MESSAGE];
+    for (int i = 0; i < PODLINK_MAX_MESSAGE; i++)
         payload[i] = i % 251;
     /* TX queue is bounded and DMA completes in fragments without losing bytes.
      */
-    assert(podlink_send(PODLINK_BINARY, payload, 4096) == 1);
-    assert(podlink_send(PODLINK_BINARY, payload, 4096) == 1);
-    assert(podlink_send(PODLINK_BINARY, payload, 4096) == 0);
+    assert(podlink_send(PODLINK_BINARY, payload, sizeof(payload)) == 1);
+    assert(podlink_send(PODLINK_BINARY, payload, sizeof(payload)) == 1);
+    assert(podlink_send(PODLINK_BINARY, payload, sizeof(payload)) == 0);
+    assert(podlink_send(PODLINK_BINARY, payload, sizeof(payload) + 1) == -1);
     for (int i = 0; i < 100; i++)
         poll_message(&m);
     struct podlink_parser check = {0};
@@ -166,8 +237,8 @@ int main(void)
         if (podlink_decode(&check, output[i], &m) == 1)
         {
             assert(m.type == PODLINK_BINARY);
-            assert(m.length == 4096);
-            assert(!memcmp(m.data, payload, 4096));
+            assert(m.length == sizeof(payload));
+            assert(!memcmp(m.data, payload, sizeof(payload)));
             ++frames;
         }
     assert(frames == 2);
@@ -201,6 +272,25 @@ int main(void)
     for (int i = 0; i < 20 && !got; i++)
         got = poll_message(&m);
     assert(got && m.length == 492 && !memcmp(m.data, payload, 492));
+    /* Max frame crosses the RX/TX rings. Packet/ring-aligned frames finish
+     * without a host ZLP; adjacent lengths finish on a short packet. */
+    roundtrip(PODLINK_MAX_MESSAGE);
+    roundtrip(PODLINK_MAX_MESSAGE - 20);
+    roundtrip(PODLINK_MAX_MESSAGE - 21);
+    /* Old hosts advertise 4096, newer peers may advertise more than us. */
+    handshake(4096, 124);
+    roundtrip(4096);
+#if PODLINK_MAX_MESSAGE > 4096
+    assert(podlink_send(PODLINK_BINARY, payload, 4097) == PODLINK_INVALID);
+    input_frame(PODLINK_BINARY, 125, payload, 4097);
+    assert(poll_message(&m) == 1 && m.type == PODLINK_CLOSE);
+    assert(m.data[0] == (1009 & 255));
+    poll_message(&m);
+#endif
+    handshake(16384, 125);
+    roundtrip(PODLINK_MAX_MESSAGE);
+    handshake(65536, 126);
+    roundtrip(PODLINK_MAX_MESSAGE);
     /* Ping replies preserve sequence. */
     clear_output();
     input_frame(PODLINK_PING, 123, "p", 1);
@@ -236,8 +326,8 @@ int main(void)
         poll_message(&m);
     /* Oversized header creates error/CLOSE without allocation. */
     n = podlink_encode(frame, PODLINK_TEXT, 1, NULL, 0);
-    frame[12] = 1;
-    frame[13] = 16;
+    frame[12] = (PODLINK_MAX_MESSAGE + 1) & 255;
+    frame[13] = (PODLINK_MAX_MESSAGE + 1) >> 8;
     input_bytes(frame, 16);
     got = 0;
     for (int i = 0; i < 20 && !got; i++)
@@ -259,12 +349,24 @@ int main(void)
     assert(!memcmp(full_speed, payload, 64));
     assert(serial_wake.count <= 1);
     remove_usb();
+    assert(podlink_open());
+    insert();
+    poll_message(&m);
+    handshake(PODLINK_MAX_MESSAGE, 127);
+    roundtrip(PODLINK_MAX_MESSAGE);
+    roundtrip(PODLINK_MAX_MESSAGE - 20);
+    roundtrip(PODLINK_MAX_MESSAGE - 21);
+    podlink_close();
+    current_tick += 101;
+    poll_message(&m);
+    remove_usb();
     char diagnostics[4096];
     int diag_size = podlink_stats_json(diagnostics, sizeof(diagnostics));
     assert(diag_size > 0 && diag_size < (int)sizeof(diagnostics));
     assert(strstr(diagnostics, "\"build\":\"fast-1\"") != NULL);
     puts(diagnostics);
-    puts("PASS: real C wire/session/serial: bounded queues, RX backpressure, 4 "
-         "KiB integrity, CRC recovery, ping, timeout, close, replug");
+    printf("PASS: real C wire/session/serial: bounded queues, RX backpressure, "
+           "%u KiB integrity at HS/FS, negotiated limits, CRC recovery, ping, "
+           "timeout, close, replug\n", PODLINK_MAX_MESSAGE / 1024);
     return 0;
 }

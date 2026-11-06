@@ -62,7 +62,10 @@ regularly. A poll never waits for USB data. A positive result contains one whole
 message; its data pointer remains valid until the next poll. `podlink_send`
 copies an entire payload or returns `PODLINK_BUSY` without accepting it. Retry
 busy sends after polling. At most two application frames can be queued; a
-third slot is reserved for control traffic. Messages are at most 4096 bytes.
+third slot is reserved for control traffic. Messages are at most the negotiated
+limit: 16384 bytes with current peers, or 4096 when either peer is a legacy
+4096-byte implementation. `podlink_max_message()` returns the session limit;
+the Python client's `Link.max_message` exposes the same limit to callers.
 
 `podlink_state()` distinguishes waiting for USB, handshaking, open and closing.
 Call `podlink_close()` and continue polling until closed. It sends CLOSE and
@@ -82,14 +85,20 @@ initial/final inversion (compatible with Python `zlib.crc32`).
 | 5 | 1 | Flags, zero |
 | 6 | 2 | Reserved, zero |
 | 8 | 4 | Sequence |
-| 12 | 4 | Payload length, 0..4096 |
+| 12 | 4 | Payload length, 0..negotiated maximum (currently 16384) |
 | 16 | length | Payload |
 | 16 + length | 4 | CRC32 of bytes 4 through the end of the payload |
 
 Types are OPEN=1, TEXT=2, BINARY=3, PING=4, PONG=5, CLOSE=6, HELLO=7.
 HELLO and OPEN contain version `u16` followed by maximum message size `u32`.
 The device sends HELLO when USB configures. The host sends OPEN; the device
-acknowledges OPEN with its sequence and negotiated limit. PONG retains the
+acknowledges OPEN with its sequence and negotiated limit. Each side uses the
+smaller of its own maximum and its peer's advertised maximum. A peer advertising
+a larger maximum is supported; zero is invalid. This keeps new hosts compatible
+with 4096-byte firmware and new firmware compatible with 4096-byte hosts.
+An outgoing payload above the session limit is rejected before writing;
+an incoming payload above the limit ends the session with CLOSE 1009.
+PONG retains the
 PING sequence and payload. Both ends send an idle keepalive after five seconds
 and time out an unanswered keepalive after fifteen seconds. CLOSE starts with
 a `u16` code, followed by a UTF-8 reason. Bad CRC or magic triggers scanning for
@@ -97,8 +106,10 @@ the next valid frame. An oversized length triggers CLOSE 1009 without allocating
 memory for that length. The two sides reset their byte queues on USB reconnect.
 
 Demo throughput commands use TEXT `BENCH TX N` / `BENCH RX N`. After TEXT
-`READY TX N` / `READY RX N`, exactly N bytes travel in BINARY messages of up to
-4096 bytes. Byte at offset i is `i % 251`. Final TEXT is `OK TX N errors=0` or
+`READY TX N` / `READY RX N`, exactly N bytes travel in BINARY messages. Host
+uploads and demo downloads use chunks up to the negotiated limit. Ordinary
+echo messages obey the same limit in either direction.
+Byte at offset i is `i % 251`. Final TEXT is `OK TX N errors=0` or
 `OK RX N`. A valid BENCH command replaces any active transfer. A rejected size
 preserves the active transfer. Both directions verify the complete pattern.
 Latency measures protocol PING/PONG and 64-byte binary echo separately.
@@ -119,6 +130,11 @@ cc -std=gnu11 -Wall -Wextra -Werror -g -fsanitize=address,undefined \
   -Itools/tests/podlink_screen_stubs -Itools/tests/podlink_stubs \
   -Ifirmware/export tools/tests/podlink_screen_test.c -o /tmp/podlink-screen-test
 /tmp/podlink-screen-test
+cc -std=gnu11 -Wall -Wextra -Werror -g -fsanitize=address,undefined \
+  -Itools/tests/podlink_screen_stubs -Itools/tests/podlink_stubs \
+  -Ifirmware/export tools/tests/podlink_bench_test.c \
+  firmware/usbstack/podlink_wire.c -o /tmp/podlink-bench-test
+/tmp/podlink-bench-test
 cc -std=c99 -Wall -Wextra -Werror -g -fsanitize=address,undefined \
   -Ifirmware/export tools/tests/usb_profile_test.c -o /tmp/podlink-usb-profile-test
 /tmp/podlink-usb-profile-test
