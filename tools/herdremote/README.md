@@ -5,11 +5,13 @@ computer onto the iPod, in **System > Agents**. From the player you can:
 
 - see every herdr workspace, with how many of its agents are working,
   waiting for you, done or idle, in any tab;
-- turn the wheel in Spaces to select and focus a workspace after 250 ms;
+- turn the wheel in Spaces to select and focus a workspace at once;
 - SELECT enters the Space; LEFT/RIGHT switches its herdr tabs without wrapping;
-- turn the wheel inside a Space to select and focus an agent pane after 250 ms;
-- SELECT opens that agent's detail, with the last 12 visible pane lines refreshed
-  on change, at most once per second; MENU returns to the Space;
+- turn the wheel inside a Space to select and focus an agent pane at once;
+- SELECT opens that agent's detail: task, current activity, latest message and
+  up to three tool steps. A nonempty input takes priority in a cursor-following
+  block of at most five lines. Ordinary updates are at most once per second;
+  completed detail key taps request a fresh read after 75 ms. MENU returns to the Space;
 - hold Play/Pause to dictate with the computer's microphone; release to finish.
   Wheel focus waits while Play is held;
 - answer Claude Code questions/permission prompts and Codex approvals/questions.
@@ -21,11 +23,15 @@ Navigation v2 firmware uses these controls:
 
 | View | Wheel | SELECT | LEFT | RIGHT | MENU |
 |---|---|---|---|---|---|
-| Spaces | Select/focus workspace | Enter Space | Usage | Usage | System |
-| Usage | Left/Right keys (words when fast) | Enter key | Backspace key | Spaces | System |
+| Spaces | Select/focus workspace | Enter Space | Usage | Usage | Confirm exit |
+| Usage | Left/Right keys (words when fast) | Enter key | Backspace key | Spaces | Confirm exit |
 | Space | Select/focus pane | Agent detail | Previous tab | Next tab | Spaces |
 | Agent detail | Left/Right keys (words when fast) | Enter key | Backspace key | No action | Space |
 | Question | Select option | Choose/tick/Submit | No action | No action | Previous view |
+
+Wheel focus sends at once when no focus request is in flight. While waiting
+for its matching `R`, the player retains only the newest target and sends
+that target after `R`. Play holds suppress focus.
 
 Entering a Space focuses its first tab. Switching tabs focuses the new tab
 immediately and selects its first agent, without an extra pane-focus request.
@@ -35,9 +41,13 @@ appear in the message band. Question pop-ups never move computer focus.
 Answering/dismissing restores the previous view and selection. A dismissed
 question stays in the alert row and does not pop up again with the same id.
 
+Top-level MENU opens `Leave Agents?`: SELECT leaves, MENU stays.
+
 Older firmware keeps its existing controls and first-tab workspace list.
-The unchanged v1 heartbeat and agent frames remain available; new tab/detail
-frames are ignored by older firmware.
+The unchanged v1 heartbeat and agent frames remain available. Pre-NAV2
+firmware ignores new tab/detail frames. Typed detail ships with the matching eleven-field firmware from
+[DETAIL-DESIGN.md](../../../ipod/DETAIL-DESIGN.md). A nine-field-only player
+rejects the eleven-field record; other v1 messages keep their shape.
 
 It talks only to herdr's local socket. It never reaches another machine.
 
@@ -202,7 +212,7 @@ omitting `n` means one. A noninteger or out-of-range count returns
 The iPod keeps one request in flight and coalesces pending steps into
 ordered runs with counts. It hides **Key busy** and older **Key rate limit**
 responses; real failures display their reason. RIGHT returns Usage to Spaces;
-MENU leaves Usage for System. In detail, MENU returns to the Space and RIGHT
+MENU opens the top-level exit confirmation from Usage. In detail, MENU returns to the Space and RIGHT
 has no action.
 
 `HERDREMOTE_KEY_TOOL` or `--key-tool` selects `auto`, `ydotool`, or `wtype`.
@@ -317,9 +327,24 @@ contains the frozen `PROTOCOL READY` contract. No version bump is needed.
   32 tabs. This is separate from the unchanged three-field heartbeat `T`.
 - `ft <req> <ws> <tab_id>` validates membership and focuses the tab through
   the same local-client path and legacy capability fallback as `fw`/`fp`.
-- `det <pane>` subscribes to `D <pane> <line0> ... <line11>`; each line has
-  a 60-byte UTF-8 budget. ANSI sequences are stripped. Unchanged text is
-  silent; empty/missing/failed panes send a zero-line detail. `det -` stops it.
+- `det <pane>` subscribes to the eleven-field typed record
+  `D <pane> <age> <task> <now> <say> <step1> <step2> <step3> <input> <cursor>`.
+  Empty slots are retained. SAY keeps the message head (300 characters,
+  900 bytes); TASK/NOW/steps keep at most 80 characters and 240 bytes each.
+  A cut field ends with `…` within both limits.
+- Input preserves hard line breaks as `\n` and literal backslashes as `\\`.
+  Cursor offsets count decoded Unicode code points; escaped-field byte
+  limits include escapes. Full input is sent when it fits. Otherwise the
+  design's window ends 100 characters after the cursor and extends backward
+  to fill its budget, with one leading `…` for an omitted prefix.
+- `link.max_message` selects the negotiated profile: input is at most 4000
+  decoded characters / 12000 escaped bytes on a 16384-byte link, or 500
+  characters / 1500 bytes on a 4096-byte link. Complete budget sums are
+  14148 and 3648 bytes respectively. Encoding rejects oversized records.
+- Age `-1` is unknown. Age `-2` marks grey fallback; otherwise it is elapsed
+  state seconds, incremented locally by the player. Age changes alone do not
+  force frames. Missing/failed/empty panes send all text empty with age `-1`
+  and cursor `0`. `det -` stops detail. See `DETAIL READY 2` for exact rules.
 - First tabs and the selected tab are read for questions/activity; other
   tabs use herdr's states. Tab order stays independent of agent priority.
 - Subscriptions never focus or type. Reset, link loss and shutdown clear
@@ -335,6 +360,57 @@ python3 -m unittest discover -s tools/herdremote/tests -v
 These host tests do not establish on-device UI behavior or deployed-service
 acceptance. Deployment and iPod installation are separate from Part B.
 
+## Detail parser
+
+`hrdetail.py` reads a bounded recent pane window (`pane.read source=recent_unwrapped`,
+240 rendered rows) on the background read worker. It separates the current task,
+working line, latest agent message and up to three tool steps. It removes
+ANSI sequences, prompts and wrapped input, tool output, borders, model bars,
+shortcut hints and warning footers. Text remains plain; the iPod wraps SAY
+and gives it priority over the steps. The wheel continues to type keys.
+
+Claude black bullets and Codex white bullets distinguish messages from tools.
+Claude summary steps and Codex command steps retain only the first line.
+Claude's `done 1:47` means 107 seconds since completion; `Cogitated for 29m`
+alone is a completed work duration and never becomes a done age. Without an
+explicit elapsed time, the daemon reports age only after it observes a state
+transition. It does not invent an age on first observation.
+
+agy's captured layout uses black message/tool bullets and braille working
+spinners. Its captured recent window contains tools and a working line but
+no assistant message start; SAY stays empty rather than showing user input
+or thought text. A message outside the bounded recent window is unavailable.
+No grok pane was present during capture; grok and other unknown layouts use
+the last four non-chrome lines as grey fallback. Known kinds also fall back
+when no message, activity, tool step or question is recognized.
+
+Reviewed, anonymized captures live in `tests/fixtures/detail/`; `capture.json`
+records read-only provenance, requested-window exceptions and redactions.
+They are test data, never executable instructions. The parser does not add a
+new live secret filter; fixture redaction is separate from display parsing.
+
+```sh
+python3 -m unittest discover -s tools/herdremote/tests -p test_detail.py -v
+```
+
+Deploy `hrdetail.py` alongside the other `hr*.py` files. Pair typed-detail
+backend deployment with the final eleven-field firmware. There is no change to focus,
+keyboard or voice commands and no wire-version bump.
+
+Input extraction also preserves the current prompt text and optional cursor
+facts. `read_record()` keeps the complete herdr reply: when it contains a
+visible `cursor` on an input row, the parser maps its row/column to a Unicode
+input offset, preferring `col_chars` for wide cells and combining marks.
+Prompt glyphs and frame padding do not count. Missing, invisible, malformed,
+or off-input cursor data falls back to the input end. When nonempty input
+comes from merged history with no cursor, one extra visible-viewport read
+can supply a recognized input cursor; failed or off-input results preserve
+the recent input and its end fallback. The fake herdr can
+return either the legacy record or a record containing cursor metadata.
+The approved [DETAIL-DESIGN.md](../../../ipod/DETAIL-DESIGN.md) owns all
+field order, budgets, escaping, truncation, state wording and presentation.
+The backend implements it; it does not choose alternate display rules.
+
 ## Scroll latency
 
 The link loop polls and handles incoming commands before publishing dashboard
@@ -343,14 +419,18 @@ Successful focus logs use DEBUG, so wheel movement does not write an INFO log
 for every target. The per-focus capability probe and the `moved: []` local
 client check remain unchanged; missing/remote-only local windows still fail.
 
-Snapshot/pane reads and order-file writes run on one separate read worker.
+Snapshot/pane reads and order-file writes run off the link thread. One model
+job and one detail job use two read slots so detail is not queued behind a
+model read.
 The link thread adopts complete model results, then sends only changed frames.
 Regular model reads start at most once per second. A changed subscription can
 request an earlier read; only the latest subscription is retained while one
 read is in flight. One model job and one detail job are the maximum pending
 work. Each job uses a separate herdr client so read-side probes cannot alter
 focus capabilities. Old subscription/session results are discarded. Detail
-reads also use this worker and retain the one-second send interval.
+reads retain the one-second polling interval. Completed detail key batches
+schedule a fresh read after 75 ms; a burst coalesces pending reads. Replies
+are sent before processing old read results, which are invalidated by keys.
 
 The synchronous `--once` path remains available. To measure the command path
 without touching a real desktop, use the fake-server benchmark:
@@ -377,6 +457,7 @@ focus/keys, opens a player, starts voice, or controls the deployed service.
 |---|---|
 | `herdremote.py` | The program: finds the player, keeps the session, answers |
 | `hrherdr.py` | herdr socket client, and the model the player is sent |
+| `hrdetail.py` | Parses typed task/activity/message/steps from recent pane text |
 | `hrdetect.py` | Finds a choice question in a pane's text, and the keys that answer it |
 | `hrproto.py` | The messages; `docs/podbox/herdremote-protocol.md` describes them |
 | `hrvoice.py` | Session-bus voice calls, hold ownership and independent stop watchdog |

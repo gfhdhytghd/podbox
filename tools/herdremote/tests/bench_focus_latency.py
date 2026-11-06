@@ -38,6 +38,9 @@ class FakeHerdr:
         self.read_started = threading.Event()
         self.calls = []
         self.moved = [1]
+        self.cursors = {}
+        self.texts = {}
+        self.read_gates = {}
         self.read_gate = None
         self.thread = threading.Thread(target=self.run, daemon=True)
         self.handlers = []
@@ -82,10 +85,13 @@ class FakeHerdr:
                                 agent='codex', agent_status='idle') for i in range(8)]))
             elif method == 'pane.read':
                 self.read_started.set()
-                if self.read_gate is not None:
-                    self.read_gate.wait(3)
+                gate = self.read_gates.get(request['params'].get('source'), self.read_gate)
+                if gate is not None:
+                    gate.wait(3)
                 time.sleep(.02 if self.slow else 0)
-                result = dict(read=dict(text='fake activity'))
+                result = dict(read=dict(text=self.texts.get(request['params']['pane_id'], 'fake activity')))
+                if request['params']['pane_id'] in self.cursors:
+                    result['read']['cursor'] = self.cursors[request['params']['pane_id']]
             else:
                 raise AssertionError('unexpected fake method: ' + method)
             try:
@@ -105,6 +111,7 @@ class FakeHerdr:
 class MemoryLink:
     def __init__(self):
         self.opened = True
+        self.max_message = 16384
         self.frames = collections.deque()
         self.messages = []
         self.results = collections.deque()

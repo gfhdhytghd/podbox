@@ -48,8 +48,10 @@ static void dump(void)
             printf("B %s %d %s %s %c\n", m.tabs_ws, i, m.tabs[i].id,
                    m.tabs[i].label, m.tabs[i].status);
     if (m.detail_valid)
-        for (int i = 0; i < m.ndetail; i++)
-            printf("D %s %s\n", m.detail_pane, m.detail[i]);
+        printf("D %s %d %s|%s|%s|%s|%s|%s|%s|%d\n", m.detail_pane,
+               m.detail.age, m.detail.task, m.detail.now, m.detail.say,
+               m.detail.step[0], m.detail.step[1], m.detail.step[2],
+               m.detail.input, m.detail.cursor);
     if (m.result_new)
         printf("R %s %d %s\n", m.result_req, m.result_ok, m.result_text);
     if (m.usage.have)
@@ -73,7 +75,7 @@ static int replay(const char *path)
 {
     FILE *f = fopen(path, "rb");
     unsigned char len[2];
-    static char buf[5000];
+    static char buf[17000];
     if (!f)
         return 2;
     while (fread(len, 1, 2, f) == 2)
@@ -82,7 +84,13 @@ static int replay(const char *path)
         if (n > sizeof buf || fread(buf, 1, n, f) != n)
             return 2;
         if (!hr_model_apply(&m, buf, n))
-            printf("rejected %.20s\n", buf);
+        {
+            /* Cut on a character boundary: the Python test decodes this */
+            char head[24];
+            buf[n] = '\0';
+            hr_copy(head, buf, sizeof head);
+            printf("rejected %s\n", head);
+        }
     }
     fclose(f);
     dump();
@@ -321,22 +329,103 @@ int main(int argc, char **argv)
     assert(hr_model_tab_index(&m, "w2", "") == 0);
     assert(apply("T\tw2\t0\t0\tw2:t1\t\t-") == 0 && m.ntabs == 0);
 
-    /* D: the pane and up to 12 lines, oldest first; none for an empty or
-     * unreadable pane */
+    /* D: eleven fields, the pane, its age, seven texts, any of them empty,
+     * and the cursor */
     assert(!m.detail_valid);
-    assert(apply("D\tw1:p1\tfirst\t\tthird 汉字") == 'D');
-    assert(m.detail_valid && m.ndetail == 3 &&
-           !strcmp(m.detail_pane, "w1:p1"));
-    assert(!strcmp(m.detail[0], "first") && !m.detail[1][0] &&
-           !strcmp(m.detail[2], "third 汉字"));
-    assert(apply("D\tw1:p2") == 'D' && m.ndetail == 0 &&
-           !strcmp(m.detail_pane, "w1:p2"));
-    assert(apply("D\tw1:p1\t0\t1\t2\t3\t4\t5\t6\t7\t8\t9\t10\t11") == 'D'
-           && m.ndetail == 12 && !strcmp(m.detail[11], "11"));
-    assert(apply("D\tw1:p1\t0\t1\t2\t3\t4\t5\t6\t7\t8\t9\t10\t11\t12")
-           == 0 && m.ndetail == 12);
-    assert(apply("D") == 0 && apply("D\t") == 0 && m.ndetail == 12);
-    assert(apply("D\tw1:p1\ta\nD\tw1:p1\tb") == 0 && m.ndetail == 12);
+    assert(apply("D\tw1:p1\t185\tTASK-HERDREMOTE.md execution\t"
+                 "Compiling… 1m 12s\t进行中：跑栈测试。\t\t"
+                 "Ran 7 shell commands\tRead 3 files\t\t0") == 'D');
+    assert(m.detail_valid && !strcmp(m.detail_pane, "w1:p1"));
+    assert(m.detail.age == 185);
+    assert(!strcmp(m.detail.task, "TASK-HERDREMOTE.md execution"));
+    assert(!strcmp(m.detail.now, "Compiling… 1m 12s"));
+    assert(!strcmp(m.detail.say, "进行中：跑栈测试。"));
+    assert(!m.detail.step[0][0] &&
+           !strcmp(m.detail.step[1], "Ran 7 shell commands") &&
+           !strcmp(m.detail.step[2], "Read 3 files"));
+    assert(!m.detail.input[0] && m.detail.cursor == 0);
+    /* An empty pane: every text empty, the age unknown */
+    assert(apply("D\tw1:p2\t-1\t\t\t\t\t\t\t\t0") == 'D' &&
+           !strcmp(m.detail_pane, "w1:p2") && m.detail.age == -1 &&
+           !m.detail.task[0] && !m.detail.now[0] && !m.detail.say[0] &&
+           !m.detail.step[2][0] && !m.detail.input[0]);
+    /* Fallback, and the largest age */
+    assert(apply("D\tw1:p1\t-2\t\t\tlast lines\t\t\t\t\t0") == 'D' &&
+           m.detail.age == -2 && !strcmp(m.detail.say, "last lines"));
+    assert(apply("D\tw1:p1\t2147483647\tt\tn\ts\t1\t2\t3\t\t0") == 'D' &&
+           m.detail.age == 2147483647);
+    /* The input: its escapes undone, the cursor in characters and held at
+     * its end */
+    assert(apply("D\tw1:p1\t0\tt\tn\ts\t\t\t\t"
+                 "第一行\\n2nd \\\\ line\\x\t4") == 'D');
+    assert(!strcmp(m.detail.input, "第一行\n2nd \\ line\\x"));
+    assert(m.detail.cursor == 4);
+    assert(apply("D\tw1:p1\t0\tt\tn\ts\t\t\t\t汉字\t99") == 'D' &&
+           m.detail.cursor == 2);
+    assert(apply("D\tw1:p1\t0\tt\tn\ts\t\t\t\t\t5") == 'D' &&
+           m.detail.cursor == 0);
+    /* Not eleven fields, a bad age or cursor, or a second record leave the
+     * last D */
+    assert(apply("D\tw1:p1\t0\tt\tn\ts\t1\t2\t3") == 0);
+    assert(apply("D\tw1:p1\t0\tt\tn\ts\t1\t2\t3\t\t0\t") == 0);
+    assert(apply("D\tw1:p1\tfirst\t\tthird") == 0);
+    assert(apply("D\tw1:p1\t\tt\tn\ts\t1\t2\t3\t\t0") == 0);
+    assert(apply("D\tw1:p1\t-3\tt\tn\ts\t1\t2\t3\t\t0") == 0);
+    assert(apply("D\tw1:p1\t-\tt\tn\ts\t1\t2\t3\t\t0") == 0);
+    assert(apply("D\tw1:p1\t+1\tt\tn\ts\t1\t2\t3\t\t0") == 0);
+    assert(apply("D\tw1:p1\t1x\tt\tn\ts\t1\t2\t3\t\t0") == 0);
+    assert(apply("D\tw1:p1\t2147483648\tt\tn\ts\t1\t2\t3\t\t0") == 0);
+    assert(apply("D\tw1:p1\t0\tt\tn\ts\t1\t2\t3\t\t") == 0);
+    assert(apply("D\tw1:p1\t0\tt\tn\ts\t1\t2\t3\t\t-1") == 0);
+    assert(apply("D\tw1:p1\t0\tt\tn\ts\t1\t2\t3\t\t1a") == 0);
+    assert(apply("D\t\t0\tt\tn\ts\t1\t2\t3\t\t0") == 0);
+    assert(apply("D") == 0 && apply("D\t") == 0);
+    assert(apply("D\tw1:p1\t0\tt\tn\ts\t1\t2\t3\t\t0\n"
+                 "D\tw1:p1\t0\tt\tn\ts\t1\t2\t3\t\t0") == 0);
+    assert(m.detail.age == 0 && !m.detail.input[0] && m.detail.cursor == 0);
+    /* Texts are cut on a character boundary at the field's size */
+    {
+        static char big[8 + HR_DETAIL_SAY + 400];
+        int n = snprintf(big, sizeof big, "D\tw1:p1\t0\t\t\t");
+        for (int i = 0; i < (HR_DETAIL_SAY + 200) / 3; i++)
+            n += snprintf(big + n, sizeof big - n, "汉");
+        snprintf(big + n, sizeof big - n, "\t\t\t\t\t0");
+        assert(apply(big) == 'D');
+        assert(strlen(m.detail.say) == (HR_DETAIL_SAY - 1) / 3 * 3);
+    }
+
+    /* An input at its budget of 12000 bytes is kept whole */
+    {
+        static char big[12100];
+        int n = snprintf(big, sizeof big, "D\tw1:p1\t0\tt\tn\ts\t\t\t\t");
+        for (int i = 0; i < 4000; i++)
+            n += snprintf(big + n, sizeof big - n, "汉");
+        snprintf(big + n, sizeof big - n, "\t4000");
+        assert(apply(big) == 'D' && strlen(m.detail.input) == 12000 &&
+               m.detail.cursor == 4000);
+    }
+
+    /* Character offsets into UTF-8 */
+    assert(hr_utf8_offset("", 0) == 0 && hr_utf8_offset("", 3) == 0);
+    assert(hr_utf8_offset("ab汉c", 0) == 0 && hr_utf8_offset("ab汉c", 2) == 2);
+    assert(hr_utf8_offset("ab汉c", 3) == 5 && hr_utf8_offset("ab汉c", 4) == 6);
+    assert(hr_utf8_offset("ab汉c", 9) == 6);
+
+    /* The input window follows the cursor's line, and only as far as that */
+    assert(hr_input_window(0, 3, 5, 0) == 0);
+    assert(hr_input_window(2, 5, 5, 0) == 0);
+    assert(hr_input_window(4, 8, 5, 0) == 0);
+    assert(hr_input_window(5, 8, 5, 0) == 1);
+    assert(hr_input_window(7, 8, 5, 1) == 3);
+    assert(hr_input_window(7, 8, 5, 3) == 3);
+    assert(hr_input_window(3, 8, 5, 3) == 3);
+    assert(hr_input_window(2, 8, 5, 3) == 2);
+    assert(hr_input_window(0, 8, 5, 3) == 0);
+    /* A shrunken input clamps the top; a shorter one than the window
+     * starts at its first line */
+    assert(hr_input_window(5, 6, 5, 3) == 1);
+    assert(hr_input_window(1, 4, 5, 3) == 0);
+    assert(hr_input_window(9, 10, 5, -2) == 5);
 
     /* Questions pop up once each, oldest first, until dismissed or gone */
     struct hr_popped popped;

@@ -26,6 +26,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import podlink  # noqa: E402  tools/podlink.py: the PodLink frame codec
 
 import hrdetect  # noqa: E402
+import hrdetail  # noqa: E402
 import hrherdr  # noqa: E402
 import hrorder  # noqa: E402
 import hrproto  # noqa: E402
@@ -40,6 +41,8 @@ REFRESH_SECONDS = 1.0
 TICK_SECONDS = 2.0
 CONFIRM_SECONDS = 5.0
 DETAIL_SECONDS = 1.0
+DETAIL_RECENT_LINES = 240
+DETAIL_KEY_SETTLE_SECONDS = 0.075
 
 log = logging.getLogger("herdremote")
 
@@ -121,7 +124,8 @@ class Daemon:
         self.results = queue.Queue()
         self.answerer = Answerer(self.herdr, self.results, self.changed)
         self.model = dict(workspaces=[], agents={}, others={}, questions={},
-                          tabs={}, tab_agents={}, panes=set())
+                          tabs={}, tab_agents={}, panes=set(), pane_meta={})
+        self.state_seen = {}
         self.model_time = 0.0
         self.herdr_ok = False
         self.port = self.link = None
@@ -153,7 +157,11 @@ class Daemon:
         self.subscribed_tab = None
         self.detail_pane = None
         self.sent_detail = None
+        self.sent_detail_key = None
         self.next_detail = 0.0
+        self.detail_fast_due = None
+        self.detail_edit_revision = getattr(self, "detail_edit_revision", 0) + 1
+        self.key_details = {}
         self.next_tick = 0.0
 
     # --- herdr ---------------------------------------------------------
@@ -186,6 +194,13 @@ class Daemon:
         model, sampled, error = update
         if error is None:
             self.model, self.model_time = model, sampled
+            seen = {}
+            for pane, meta in model.get("pane_meta", {}).items():
+                status = meta["status"]
+                old = self.state_seen.get(pane)
+                since = sampled if old and old[0] != status else old[1] if old else None
+                seen[pane] = (status, since)
+            self.state_seen = seen
             if not self.herdr_ok:
                 log.info("herdr reachable at %s", self.herdr.path)
             self.herdr_ok = True
@@ -193,17 +208,60 @@ class Daemon:
             if self.herdr_ok or not self.model_time:
                 log.warning("herdr unreachable: %s", error)
             self.herdr_ok = False
+            self.state_seen = {}  # transitions during an outage are unknown
             self.model_time = self.model_time or sampled
 
-    def read_detail(self, pane, readable):
-        lines = []
+    def detail_context(self, pane):
+        meta = dict(self.model.get("pane_meta", {}).get(pane, {}))
+        meta.setdefault("kind", "unknown")
+        meta.setdefault("status", "unknown")
+        meta["title"] = hrdetail.clean_title(meta.get("title", ""))
+        since = self.state_seen.get(pane, (None, None))[1]
+        meta["state_age_s"] = -1 if since is None else max(0, int(time.monotonic() - since))
+        return meta
+
+    def detail_key(self, pane):
+        meta = self.detail_context(pane)
+        return (meta["kind"], meta["status"], meta["title"], self.herdr_ok,
+                pane in self.model["panes"], self.detail_edit_revision)
+
+    def detail_limit(self):
+        return getattr(self.link, "max_message", hrproto.MAX_MESSAGE)
+
+    def read_detail(self, pane, readable, meta=None, client=None, max_message=None):
+        fields = {}
         if readable and not self.stopping.is_set():
-            client = hrherdr.Herdr(self.herdr.path, self.herdr.timeout)
+            client = client or hrherdr.Herdr(self.herdr.path, self.herdr.timeout)
             try:
-                lines = hrherdr.detail_lines(client.read(pane))
+                record = client.read_record(pane, source="recent_unwrapped", lines=DETAIL_RECENT_LINES)
+                fields = hrdetail.parse(record["text"], terminal_cursor=record.get("cursor"), **(meta or {}))
+                # herdr omits cursors from merged alternate-screen history.
+                # Only while editing, try the real viewport for a recognized
+                # visible input cursor; keep recent activity and fallback data.
+                if fields["input"] and record.get("cursor") is None:
+                    try:
+                        visible = client.read_record(pane, source="visible")
+                        current = hrdetail.extract_input(visible["text"], (meta or {}).get("kind", "unknown"),
+                                                        visible.get("cursor"))
+                        if current["cursor_source"] == "herdr":
+                            fields.update(current)
+                    except hrherdr.HerdrError:
+                        pass
             except hrherdr.HerdrError:
                 pass
-        return hrproto.detail(pane, lines)
+        return hrproto.detail(pane, fields, max_message=self.detail_limit() if max_message is None else max_message)
+
+    def send_detail(self, payload):
+        fields = payload.split(b"\t")
+        # The player advances a known age locally; elapsed seconds alone do
+        # not cause a frame. A known/unknown/fallback transition still does.
+        mode = b"known" if int(fields[2]) >= 0 else fields[2]
+        key = (tuple(fields[:2] + fields[3:]), mode,
+               self.detail_context(self.detail_pane)["status"])
+        if key != self.sent_detail_key:
+            self.send(payload)
+            self.sent_detail = payload
+            self.sent_detail_key = key
 
     def pump_reads(self):
         """Publish complete snapshots on the link thread, with bounded work.
@@ -222,11 +280,9 @@ class Daemon:
             requested, future = self.detail_job
             self.detail_job = None
             if requested[0] == self.session_generation:
-                if requested[1] == self.detail_pane and self.sent_ws is not None:
-                    payload = future.result()
-                    if payload != self.sent_detail:
-                        self.send(payload)
-                        self.sent_detail = payload
+                if (requested[1] == self.detail_pane and self.sent_ws is not None and
+                        requested[2] == self.detail_key(self.detail_pane)):
+                    self.send_detail(future.result())
                 # Switching detail cannot bypass the one-second send limit.
                 self.next_detail = time.monotonic() + DETAIL_SECONDS
         now = time.monotonic()
@@ -238,11 +294,15 @@ class Daemon:
             self.model_job = (key, self.reader.submit(
                 self.read_model, client, self.subscribed, self.subscribed_tab,
                 not self.herdr_ok))
+        due = self.detail_fast_due if self.detail_fast_due is not None else self.next_detail
         if (self.sent_ws is not None and self.detail_pane and
-                self.detail_job is None and now >= self.next_detail):
+                self.detail_job is None and now >= due):
             pane = self.detail_pane
-            self.detail_job = ((self.session_generation, pane), self.reader.submit(
-                self.read_detail, pane, self.herdr_ok and pane in self.model["panes"]))
+            self.detail_fast_due = None
+            self.detail_job = ((self.session_generation, pane, self.detail_key(pane)),
+                self.reader.submit(self.read_detail, pane,
+                    self.herdr_ok and pane in self.model["panes"], self.detail_context(pane),
+                    None, self.detail_limit()))
 
     # --- PodLink session -----------------------------------------------
     def open_link(self):
@@ -283,16 +343,25 @@ class Daemon:
     def send(self, payload):
         self.link.send(podlink.TEXT, payload)
 
-    def push(self):
-        """Send whatever the player's picture lacks."""
+    def flush_replies(self):
+        """Publish replies before adopting reads that may predate a key batch."""
         if self.sent_ws is None:
-            return  # the screen has not said hello yet
-        # Replies precede all dashboard encoding/sends. Focus replies already
-        # go directly from command(), before entering push().
+            return
         while not self.results.empty():
             self.send(hrproto.result(*self.results.get()))
         for result in self.keys.replies():
             self.send(hrproto.result(*result))
+            target = self.key_details.pop(result[0], None)
+            if self.detail_pane and target == (self.session_generation, self.detail_pane):
+                self.detail_edit_revision += 1
+                if self.detail_fast_due is None:
+                    self.detail_fast_due = time.monotonic() + DETAIL_KEY_SETTLE_SECONDS
+
+    def push(self):
+        """Send whatever the player's picture lacks."""
+        if self.sent_ws is None:
+            return  # the screen has not said hello yet
+        self.flush_replies()
         if not self.model_time:
             return  # do not present an empty startup model while a read is pending
         ws = hrproto.workspaces(self.model["workspaces"])
@@ -327,19 +396,14 @@ class Daemon:
                 self.send(hrproto.question(q))
                 self.sent_questions[qid] = True
         now = time.monotonic()
-        if self.reader is None and self.detail_pane and now >= self.next_detail:
+        due = self.detail_fast_due if self.detail_fast_due is not None else self.next_detail
+        if self.reader is None and self.detail_pane and now >= due:
             # Share one deadline across switches: repeated det cannot bypass
             # the read/send limit. Never read a pane absent from the snapshot.
-            lines = []
-            if self.herdr_ok and self.detail_pane in self.model["panes"]:
-                try:
-                    lines = hrherdr.detail_lines(self.herdr.read(self.detail_pane))
-                except hrherdr.HerdrError:
-                    pass
-            payload = hrproto.detail(self.detail_pane, lines)
-            if payload != self.sent_detail:
-                self.send(payload)
-                self.sent_detail = payload
+            self.detail_fast_due = None
+            self.send_detail(self.read_detail(self.detail_pane,
+                self.herdr_ok and self.detail_pane in self.model["panes"],
+                self.detail_context(self.detail_pane), self.herdr))
             # Measure from completion: a slow read/send must not permit two
             # detail frames less than one second apart.
             now = time.monotonic()
@@ -367,6 +431,9 @@ class Daemon:
             pane = None if args[0] == "-" else args[0]
             if pane != self.detail_pane:
                 self.sent_detail = None
+                self.sent_detail_key = None
+                self.detail_fast_due = None
+                self.key_details.clear()
             self.detail_pane = pane
         elif name == "us":
             self.send(hrproto.usage(self.usage.snapshot(), time.time()))
@@ -388,6 +455,8 @@ class Daemon:
     def key_command(self, req, key, count=1):
         result = ((False, "Session not ready") if self.sent_ws is None else
                   self.keys.request(req, key, count))
+        if result is None and self.detail_pane:
+            self.key_details[req] = (self.session_generation, self.detail_pane)
         if result is not None:
             self.send(hrproto.result(req, *result))
 
@@ -445,7 +514,7 @@ class Daemon:
         self.usage.start()
         hrherdr.Watcher(self.herdr, self.changed).start()
         self.answerer.start()
-        self.reader = ThreadPoolExecutor(max_workers=1, thread_name_prefix="herdremote-read")
+        self.reader = ThreadPoolExecutor(max_workers=2, thread_name_prefix="herdremote-read")
         try:
             self.run_loop()
         finally:
@@ -475,6 +544,7 @@ class Daemon:
                     frame = self.link.frames.popleft()
                     if frame.type == podlink.TEXT:
                         self.command(frame.payload)
+                self.flush_replies()
                 self.pump_reads()
                 self.push()
             except podlink.LinkClosed as error:

@@ -1,0 +1,8 @@
+● Current assistant output.
+────────────────────────
+❯ First input line
+  第二行有中文😀
+
+  Final input line with literal \n text
+────────────────────────
+  ? for shortcuts

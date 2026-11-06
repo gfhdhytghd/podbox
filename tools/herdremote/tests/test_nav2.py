@@ -7,6 +7,7 @@ from unittest import mock
 
 import test_herdremote as fixtures
 from test_herdremote import FakeHerdr, sample, herdremote, hrherdr, hrproto
+import hrdetail
 
 
 class Protocol(unittest.TestCase):
@@ -31,14 +32,15 @@ class Protocol(unittest.TestCase):
         for r in records:
             self.assertEqual(len(r), 7)
             self.assertLessEqual(len(r[5].encode()), 40)
-        payload = hrproto.detail("p" * 15, ["汉\t字\x00" * 60] * 30)
+        payload = hrproto.detail("p" * 15, dict(task="😀" * 100, now="😀" * 100,
+            say="😀" * 400, steps=["😀" * 100] * 3, state_age_s=12))
         fields = hrproto.decode(payload)[0]
-        self.assertEqual(len(fields), 14)
+        self.assertEqual(len(fields), 11)
         self.assertLessEqual(len(payload), 4096)
-        for line in fields[2:]:
-            self.assertLessEqual(len(line.encode()), 60)
-            self.assertNotIn("\x00", line)
-        self.assertEqual(hrproto.decode(hrproto.detail("p", [])), [["D", "p"]])
+        self.assertLessEqual(len(fields[5]), 300)
+        self.assertTrue(all(len(fields[i]) <= 80 and len(fields[i].encode()) <= 240 for i in (3, 4, 6, 7, 8)))
+        self.assertEqual(hrproto.decode(hrproto.detail("p", {})),
+                         [["D", "p", "-1", "", "", "", "", "", "", "", "0"]])
 
     def test_commands_and_legacy_subscription(self):
         for payload, expected in (
@@ -258,8 +260,8 @@ class Detail(Harness):
     def test_detail_read_change_throttle_and_no_focus(self):
         self.server.texts["w1:p3"] = "old\n\x1b[32mnew\x1b[0m\n"
         self.command(b"det\tw1:p3")
-        self.assertEqual(self.records("D"), [[["D", "w1:p3", "old", "new"]]])
-        self.assertEqual(self.server.calls, [("pane.read", dict(pane_id="w1:p3", source="visible"))])
+        self.assertEqual(self.records("D"), [[["D", "w1:p3", "-2", "", "", "old new", "", "", "", "", "0"]]])
+        self.assertEqual(self.server.calls, [("pane.read", dict(pane_id="w1:p3", source="recent_unwrapped", lines=240))])
         self.clear()
         self.server.texts["w1:p3"] = "changed"
         self.now.return_value = 100.9
@@ -267,7 +269,7 @@ class Detail(Harness):
         self.assertEqual(self.server.calls, [])
         self.now.return_value = 101
         self.daemon.push()
-        self.assertEqual(self.records("D"), [[["D", "w1:p3", "changed"]]])
+        self.assertEqual(self.records("D"), [[["D", "w1:p3", "-2", "", "", "changed", "", "", "", "", "0"]]])
         self.clear()
         self.now.return_value = 102
         self.daemon.push()
@@ -283,7 +285,7 @@ class Detail(Harness):
         self.assertEqual(self.server.calls, [])
         self.now.return_value = 101
         self.daemon.push()
-        self.assertEqual(self.records("D"), [[["D", "w1:p4", "running"]]])
+        self.assertEqual(self.records("D"), [[["D", "w1:p4", "-2", "", "", "running", "", "", "", "", "0"]]])
         self.clear()
         self.command(b"det\t-")
         self.now.return_value = 103
@@ -295,11 +297,11 @@ class Detail(Harness):
         self.assertEqual(self.daemon.detail_pane, "w1:p3")
 
     def test_slow_reads_keep_a_full_second_between_detail_frames(self):
-        def slow_read(pane):
+        def slow_read(pane, **kwargs):
             self.now.return_value += .8
-            return "slow pane"
+            return dict(text="slow pane")
 
-        with mock.patch.object(self.daemon.herdr, "read", side_effect=slow_read) as read:
+        with mock.patch.object(self.daemon.herdr, "read_record", side_effect=slow_read) as read:
             self.command(b"det\tw1:p3")
             self.assertAlmostEqual(self.daemon.next_detail, 101.8)
             self.now.return_value = 101
@@ -311,24 +313,24 @@ class Detail(Harness):
 
     def test_missing_empty_read_failure_and_recovery(self):
         self.command(b"det\tmissing")
-        self.assertEqual(self.records("D"), [[["D", "missing"]]])
+        self.assertEqual(self.records("D"), [[["D", "missing", "-1", "", "", "", "", "", "", "", "0"]]])
         self.assertEqual(self.server.calls, [])
         self.server.errors["pane.read"] = "closed"
         self.now.return_value = 101
         self.clear()
         self.command(b"det\tw1:p3")
-        self.assertEqual(self.records("D"), [[["D", "w1:p3"]]])
+        self.assertEqual(self.records("D"), [[["D", "w1:p3", "-1", "", "", "", "", "", "", "", "0"]]])
         self.server.errors.clear()
         self.server.texts["w1:p3"] = "recovered"
         self.now.return_value = 102
         self.clear()
         self.daemon.push()
-        self.assertEqual(self.records("D"), [[["D", "w1:p3", "recovered"]]])
+        self.assertEqual(self.records("D"), [[["D", "w1:p3", "-2", "", "", "recovered", "", "", "", "", "0"]]])
         self.server.texts["w1:p3"] = "\n"
         self.now.return_value = 103
         self.clear()
         self.daemon.push()
-        self.assertEqual(self.records("D"), [[["D", "w1:p3"]]])
+        self.assertEqual(self.records("D"), [[["D", "w1:p3", "-1", "", "", "", "", "", "", "", "0"]]])
         self.daemon.model["panes"].remove("w1:p3")
         self.now.return_value = 104
         self.clear()
@@ -384,13 +386,44 @@ class Wire(unittest.TestCase):
         self.assertIn(("client.focus", dict(workspace_id="w2", tab_id="w2:t1", clients="local")), self.herdr.calls)
         ipod.send("det\tw2:p9")
         detail = ipod.wait_for("D")[0]
-        self.assertEqual(detail, hrproto.decode(hrproto.detail("w2:p9", hrherdr.detail_lines(sample("codex-idle-narrow.txt"))))[0])
+        self.assertEqual(detail, hrproto.decode(hrproto.detail("w2:p9", hrdetail.parse(sample("codex-idle-narrow.txt"), kind="codex", status="working")))[0])
         ipod.send("det\t-")
         ipod.send("hr\t1")
         ipod.wait_for("W")
         self.assertIsNone(self.daemon.detail_pane)
         self.assertIsNone(self.daemon.subscribed)
         self.assertFalse(any(m == "pane.send_keys" for m, _ in self.herdr.calls))
+
+
+class NegotiatedDetail(unittest.TestCase):
+    setUp = fixtures.EndToEnd.setUp
+    max_message = 4096
+
+    def tearDown(self):
+        fixtures.EndToEnd.tearDown(self)
+        self.ipod.close()
+
+    def test_long_input_respects_the_real_pty_link_negotiation(self):
+        self.herdr.texts['w2:p9'] = '• Summary\n› ' + '中' * 2000
+        self.ipod.pump(.3)
+        self.ipod.send('hr\t1')
+        self.ipod.wait_for('W')
+        self.ipod.send('det\tw2:p9')
+        row = self.ipod.wait_for('D')[0]
+        self.assertEqual(self.daemon.link.max_message, self.max_message)
+        self.assertEqual(len(row), 11)
+        self.assertLessEqual(len(hrproto.encode([row])), self.max_message)
+        if self.max_message == 4096:
+            self.assertEqual(row[9], '…' + '中' * 499)
+            self.assertEqual(row[10], '500')
+        else:
+            self.assertEqual(row[9], '中' * 2000)
+            self.assertEqual(row[10], '2000')
+            self.assertGreater(len(hrproto.encode([row])), 4096)
+
+
+class NegotiatedDetail16K(NegotiatedDetail):
+    max_message = 16384
 
 
 if __name__ == "__main__":

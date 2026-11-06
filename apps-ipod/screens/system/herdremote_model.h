@@ -20,7 +20,11 @@
 #define HR_MAX_OPTIONS   8
 #define HR_USAGE_SVCS    4
 #define HR_MAX_TABS      32
-#define HR_DETAIL_LINES  12
+/* D's text fields, at their byte budgets (DETAIL-DESIGN.md) */
+#define HR_DETAIL_TEXT   244
+#define HR_DETAIL_SAY    904
+#define HR_DETAIL_INPUT  12004
+#define HR_DETAIL_STEPS  3
 
 struct hr_workspace {
     char id[16];
@@ -38,6 +42,25 @@ struct hr_tab {
     char id[16];
     char label[44];
     char status;    /* the tab's most pressing agent state; '-' with none */
+};
+
+/* The agent's work as the eleven-field D describes it: what it is on (the
+ * terminal title), its live working line, its latest message to the user,
+ * its last tool steps, oldest first, and what is typed in its input box
+ * with the cursor's place in it. Any text may be empty; a D with every text
+ * empty is an empty or unreadable pane. */
+struct hr_detail {
+    /* Seconds in the state when sent; -1 unknown, -2 fallback: say is the
+     * pane's last plain lines, and now and the steps are empty */
+    int age;
+    char task[HR_DETAIL_TEXT];
+    char now[HR_DETAIL_TEXT];
+    char say[HR_DETAIL_SAY];
+    char step[HR_DETAIL_STEPS][HR_DETAIL_TEXT];
+    /* The input with its line breaks as '\n' (the wire's "\n" and "\\"
+     * undone); cursor is a character offset into it, held at its length */
+    char input[HR_DETAIL_INPUT];
+    int cursor;
 };
 
 struct hr_agent {
@@ -106,12 +129,10 @@ struct hr_model {
     bool tabs_valid;
     int ntabs;
     struct hr_tab tabs[HR_MAX_TABS];
-    /* The last D: the last lines of the pane det subscribed to, oldest
-     * first; a D with no lines is an empty or unreadable pane */
+    /* The last D, for the pane det subscribed to */
     char detail_pane[16];
     bool detail_valid;
-    int ndetail;
-    char detail[HR_DETAIL_LINES][64];
+    struct hr_detail detail;
     int nquestions;
     struct hr_question questions[HR_MAX_QUESTIONS];
     /* The last command result, until the screen takes it */
@@ -137,6 +158,16 @@ const struct hr_question *hr_model_question_for(const struct hr_model *m,
 
 /* Copy src into dst of size n, cut on a UTF-8 character boundary */
 void hr_copy(char *dst, const char *src, unsigned int n);
+
+/* The byte offset of the character chars along s, or of its end when s is
+ * shorter */
+int hr_utf8_offset(const char *s, int chars);
+
+/* The input block's window: the first of its window lines, given the line
+ * the cursor is on among nlines, and the top shown last. The top moves only
+ * as far as keeps the cursor's line in the window, and never past the last
+ * window that is full. */
+int hr_input_window(int cursor_line, int nlines, int window, int top);
 
 /* The tab the Space view shows: index of id in tabs[], 0 for an empty id
  * (the first tab), or -1 when the tabs are not known or id is not among

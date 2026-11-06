@@ -1,0 +1,6 @@
+• Current assistant output.
+
+› Ask Codex to do anything
+
+  GPT-6.1-Sol high Fast · ~/example
+  ? for shortcuts

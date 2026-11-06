@@ -7,7 +7,8 @@ to change the messages.
 
 ## Framing
 
-- A message is UTF-8 text of at most 4096 bytes.
+- A message is UTF-8 text bounded by the negotiated PodLink maximum:
+  16384 bytes with current peers, or 4096 with a legacy peer.
 - Records are separated by `\n`, fields by `\t`. The first field of the first
   record names the message.
 - Field text never contains `\n`, `\t` or any other control character. The
@@ -244,30 +245,106 @@ Reply with `R <req> ok Focused <label>` or `R <req> err <reason>`.
 The player handles successful `fw`/`fp`/`ft` silently; errors use the band.
 Focus does not change subscriptions, and subscriptions never focus.
 
-#### `det` / `D` — live pane detail
+#### Typed detail — DETAIL READY 2 (Amendments 4/5)
+
+Change note for nav2-detail: DESIGN READY was received for
+`/home/wilf/data/PodJS/ipod/DETAIL-DESIGN.md`. That document, owned by
+nav2-detail (Claude), is authoritative for fields, limits, truncation and
+per-state content. This section replaces the Amendment 2 nine-field `D`.
+No new presentation choices are made here. `det` and wire version 1 remain
+unchanged. Changes after DETAIL READY 2 require a `QUESTION:`.
 
 ```
 det <pane>
 det -
-D <pane> <line0> <line1> ... <line11>
+D <pane> <age> <task> <now> <say> <step1> <step2> <step3> <input> <cursor>
 ```
 
-`D` is one record with 2–14 tab-separated fields: tag, pane id, then 0–12
-lines, oldest first and newest at the bottom. Each line is at most 60
-UTF-8 bytes (therefore at most 60 characters). Read the pane's visible
-text with herdr `pane.read source=visible`; strip ANSI CSI/OSC/escape
-sequences, discard trailing blank lines, keep the last 12 lines, sanitize
-controls and shorten each field on a UTF-8 boundary. Preserve internal
-blank lines. No special secret filtering is added beyond `A.last`.
+`D` is exactly one record with **eleven tab-separated fields**, including
+empty fields. All fields are present. `cursor` is `0` for empty input.
 
-The first `det` schedules a read on the next push; then read/send at most
-once per second, including across pane switches. Send only when content
-or pane changes. An empty pane, a pane no longer in the snapshot, or a
-failed pane read sends `D <pane>` (zero lines); never retain another pane's
-text. Recovery sends fresh content when it changes. `det -` stops reads
-and sends no frame. Detail is independent of `sub` and never focuses or
-injects keys. `hr` reset, link loss and shutdown clear both subscriptions
-and their caches. No detail is sent before `hr`.
+| Field | Unicode code points | UTF-8 bytes as sent |
+|---|---:|---:|
+| `pane` | — | 15 |
+| `age`, `cursor` | decimal integers | 11 each |
+| `task`, `now` | 80 each | 240 each |
+| `say` | 300 | 900 |
+| `step1..3` | 80 each | 240 each |
+| `input`, 16384-byte negotiated cap | 4000 | 12000 |
+| `input`, 4096-byte negotiated cap | 500 | 1500 |
+
+The full budget, including tag and ten tabs, is 14148 bytes on a 16384-byte
+link, or 3648 bytes on a 4096-byte link. Both character and byte limits
+apply. Each byte limit measures the UTF-8 field **as sent**, including
+escapes. A character means a decoded Unicode code point, not a byte,
+UTF-16 unit or grapheme. Input's escaped newline/backslash each decode to
+one character and `cursor` counts those decoded characters.
+
+`task` is the terminal title with spinner glyphs and surrounding spaces
+removed. `now` is the live working line without its leading spinner and
+interrupt/shortcut hints (elapsed time and token counts stay); or exactly
+`done`, `idle`, `? Asking` for those states. `say` is the head of the latest
+agent-to-user message, or the question text without options. Steps are the
+last zero to three tool/summary steps, oldest first, newest last, with
+unused slots empty at the end. State is the agent's `A` state. The player
+owns colours, wrapping, line priority, five-line input window and wording.
+
+Non-input text is sanitized as in Framing. Shorten on a character boundary
+to meet **both** limits; a cut nonempty field ends with `…`, included in its
+budgets. Keep the head of SAY. No ANSI/control characters or literal tab
+or newline are sent. The input field additionally preserves hard newlines
+as the visible escape `\n`, and literal backslashes as `\\`. Escapes are
+atomic: never cut inside an escape or UTF-8 character. A typed player
+undoes only `\n` and `\\` after splitting the eleven wire fields.
+
+Send input whole when it fits both limits. Otherwise use exactly the
+cursor-centred window in DETAIL-DESIGN: end 100 characters after the
+cursor (or at the end of the input, if nearer), and extend back as far as
+both budgets allow. Replace an omitted prefix by one `…`, counted in both
+budgets. `cursor` is adjusted to this sent text, including that leading
+ellipsis; it is an integer from 0 through the decoded input length. There
+is no additional suffix ellipsis on this input window.
+
+Use optional `result.read.cursor {row, col, col_chars?, visible}` from
+herdr. Rows are relative to the returned text; `col` counts terminal cells,
+`col_chars` (preferred when present) counts Unicode scalar columns. On a
+visible recognized input row, exclude the prompt and its padding when
+mapping to the input offset. `recent_unwrapped` merges soft-wrapped rows;
+only hard input line breaks count as newlines. Absent, invisible, invalid
+or off-input metadata falls back to the input end. Placeholder hints such
+as `Ask Codex to do anything` and `Try …` are empty input.
+
+`age` is decimal seconds, capped at 2147483647; `-1` means unknown and `-2`
+means fallback. Prefer explicit current-state elapsed time; a completed
+work duration (`Cogitated for 29m`) alone is not a done age. Otherwise use
+an observed state-change time; first observation and unknown transitions
+across an outage have unknown age. Fallback has empty NOW/steps, SAY joins
+the last four non-chrome lines, and input/cursor are retained when found.
+An empty/missing/failed pane clears all text with age `-1` and cursor `0`.
+
+Background reads use `pane.read source=recent_unwrapped`. Assistant
+messages and input are extracted separately; prompts, borders, model bars,
+shortcuts, warnings and tool output do not become SAY. No additional live
+secret filter is added. Test captures must be reviewed/redacted.
+
+Send only on text, cursor, state, pane or age-mode changes. Age increasing
+alone does not force a frame; the player counts it locally. Ordinary polls
+are at most once a second. After an accepted detail-pane `k` batch finishes,
+send its `R` first, then schedule a fresh read after 75 ms (target about
+100 ms to `D` on a responsive herdr). These key-triggered reads are the
+exception to the ordinary one-second interval. Coalesce bursts, discard
+pre-key read results, and keep model reads off the key/detail response path.
+
+`det -`, session reset, link loss and shutdown invalidate old subscriptions
+and results. Detail never focuses or injects keys by itself. No `D` before
+`hr`. Size for the current session's negotiated maximum; an oversized `D`
+is a daemon bug, not a player-side shortening rule.
+
+Compatibility: a nine-field-only player rejects this eleven-field record.
+Ship the matching firmware and daemon. The player rejects field counts
+other than eleven and invalid age/cursor values. Other v1 messages retain
+their existing shape. The daemon can still serve a 4096-byte negotiated
+link using its smaller input budget.
 
 `sub`, `ft` and `det` must each occupy exactly one record. Id/target fields
 are nonempty, have at most 15 UTF-8 bytes and contain no controls; `ft`
@@ -276,8 +353,9 @@ Malformed commands are ignored without calling herdr.
 
 #### Player navigation and compatibility
 
-The player debounces wheel focus for 250 ms and suppresses it while Play
-is held. Entering a Space sends `fw`; changing tabs sends `ft` immediately,
+The player sends wheel focus at once when no focus request is in flight.
+While waiting for its matching `R`, it retains only the newest target and
+sends that target after `R`. It suppresses focus while Play is held. Entering a Space sends `fw`; changing tabs sends `ft` immediately,
 clamps at the ends, and selects the first agent without an extra `fp`.
 Entering detail sends `fp` and waits for its matching `R ok` before any
 `k`; an error prevents keys. Detail uses Usage's same single-in-flight key
@@ -288,8 +366,8 @@ held or a talk result is pending. Dismissal/answer restores the previous
 view and selection. A dismissed id stays reachable through the alert row
 but does not pop up again. Pop-up never focuses. `Q`/`X` shapes are unchanged.
 
-Old daemons ignore `ft`, `det`, and the extended `sub`; old firmware ignores
-tab/detail frames. Missing extensions leave the old first-tab `sub <ws>`,
+Old daemons ignore `ft`, `det`, and the extended `sub`; pre-NAV2 firmware
+ignores tab/detail frames. Raw-detail compatibility is specified above. Missing extensions leave the old first-tab `sub <ws>`,
 focus, questions, Usage and heartbeat paths usable. The player must not
 send detail keys until focus succeeds, regardless of daemon version.
 
@@ -330,7 +408,8 @@ N <tokens> <usd_milli>
   `ok`/`tok` with `indexing N%`; only real failures use `err`.
 - `N`: sums of all four `P` rows, including any retained counters on error.
 
-The whole message fits `MAX_MESSAGE` (4096 bytes). The computer answers
+The whole message fits the negotiated PodLink maximum (currently 16384 bytes;
+4096 with a legacy peer). The computer answers
 from cache immediately, then schedules a refresh when at least 20 seconds
 old. Collectors never block the link thread. The first reply can be the
 initial `tok/indexing 0%` cache, or the persisted snapshot after restart.

@@ -74,15 +74,15 @@ class Scheduling(unittest.TestCase):
         for _ in range(20):
             self.daemon.pump_reads()
         self.assertEqual(len(self.reader.jobs), 1)
-        self.reader.jobs[0][1].set_result(b'D\tp1\told')
+        self.reader.jobs[0][1].set_result(hrproto.detail('p1', dict(say='old')))
         self.daemon.pump_reads()
         self.assertEqual(self.messages, [])
         self.now.return_value = 101
         self.daemon.pump_reads()
         self.assertEqual(len(self.reader.jobs), 2)
-        self.reader.jobs[1][1].set_result(b'D\tp2\tnew')
+        self.reader.jobs[1][1].set_result(hrproto.detail('p2', dict(say='new')))
         self.daemon.pump_reads()
-        self.assertEqual(self.messages, [b'D\tp2\tnew'])
+        self.assertEqual(self.messages, [hrproto.detail('p2', dict(say='new'))])
         self.daemon.command(b'det\tp3')
         self.now.return_value = 101.9
         self.daemon.pump_reads()
@@ -95,7 +95,7 @@ class Scheduling(unittest.TestCase):
         self.daemon.command(b'hr\t1')
         self.daemon.command(b'det\tp1')
         self.reader.jobs[0][1].set_result((dict(stale=True), 100, None))
-        self.reader.jobs[1][1].set_result(b'D\tp1\told session')
+        self.reader.jobs[1][1].set_result(hrproto.detail('p1', dict(say='old session')))
         self.daemon.pump_reads()
         self.assertNotIn('stale', self.daemon.model)
         self.assertEqual(self.messages, [])
@@ -109,6 +109,126 @@ class Scheduling(unittest.TestCase):
         self.daemon.push()
         self.assertEqual(self.messages[1], b'R\t8\tok\tAnswered')
         self.assertTrue(self.messages[2].startswith(b'W\t'))
+
+    def test_elapsed_age_alone_does_not_resend_but_mode_changes_do(self):
+        self.daemon.detail_pane = 'p1'
+        for age in (1, 2, 3):
+            self.daemon.send_detail(hrproto.detail('p1', dict(now='done', say='Summary', state_age_s=age)))
+        self.assertEqual(len(self.messages), 1)
+        self.daemon.send_detail(hrproto.detail('p1', dict(now='done', say='Summary', state_age_s=-1)))
+        self.daemon.send_detail(hrproto.detail('p1', dict(now='done', say='Summary', state_age_s=-2)))
+        self.assertEqual(len(self.messages), 3)
+
+    def test_changed_agent_metadata_discards_an_old_detail_result(self):
+        self.ready()
+        meta = dict(kind='claude', status='working', title='Task')
+        self.daemon.model['pane_meta'] = {'p1': meta}
+        self.daemon.command(b'det\tp1')
+        self.daemon.pump_reads()
+        meta['status'] = 'done'
+        self.reader.jobs[0][1].set_result(hrproto.detail('p1', dict(now='Working')))
+        self.daemon.pump_reads()
+        self.assertEqual(self.messages, [])
+        self.now.return_value = 101
+        self.daemon.pump_reads()
+        self.assertEqual(self.reader.jobs[1][0][3]['status'], 'done')
+        self.reader.jobs[1][1].set_result(hrproto.detail('p1', dict(now='done')))
+        self.daemon.pump_reads()
+        self.assertEqual(self.messages, [hrproto.detail('p1', dict(now='done'))])
+
+    def test_state_age_starts_at_an_observed_transition_not_first_sight(self):
+        model = dict(self.daemon.model)
+        model['pane_meta'] = {'p1': dict(kind='codex', title='Task', status='done')}
+        self.daemon.apply_model((model, 100, None))
+        self.assertEqual(self.daemon.detail_context('p1')['state_age_s'], -1)
+        self.now.return_value = 101
+        self.daemon.apply_model((model, 101, None))
+        self.assertEqual(self.daemon.detail_context('p1')['state_age_s'], -1)
+        model['pane_meta']['p1']['status'] = 'working'
+        self.daemon.apply_model((model, 102, None))
+        self.now.return_value = 105
+        self.assertEqual(self.daemon.detail_context('p1')['state_age_s'], 3)
+        self.daemon.apply_model((None, 106, 'fake outage'))
+        self.daemon.apply_model((model, 107, None))
+        self.assertEqual(self.daemon.detail_context('p1')['state_age_s'], -1)
+
+    def key_reply(self, req='k1'):
+        self.daemon.key_details[req] = (self.daemon.session_generation, self.daemon.detail_pane)
+        with mock.patch.object(self.daemon.keys, 'replies', return_value=[(req, True, None)]):
+            self.daemon.flush_replies()
+
+    def test_key_reply_schedules_fresh_read_after_settle_without_waiting_a_second(self):
+        self.ready()
+        self.daemon.command(b'det\tp1')
+        self.daemon.next_detail = 101
+        self.key_reply()
+        self.assertEqual(self.messages, [hrproto.result('k1', True)])
+        self.daemon.pump_reads()
+        self.assertEqual(len(self.reader.jobs), 0)
+        self.now.return_value = 100.075
+        self.daemon.pump_reads()
+        self.assertEqual(len(self.reader.jobs), 1)
+
+    def test_accepted_detail_key_is_associated_with_its_completion(self):
+        self.ready()
+        self.daemon.command(b'det\tp1')
+        with mock.patch.object(self.daemon.keys, 'request', return_value=None):
+            self.daemon.key_command('k1', 'left')
+        self.assertEqual(self.daemon.key_details['k1'], (self.daemon.session_generation, 'p1'))
+        with mock.patch.object(self.daemon.keys, 'replies', return_value=[('k1', True, None)]):
+            self.daemon.flush_replies()
+        self.assertNotIn('k1', self.daemon.key_details)
+        self.assertAlmostEqual(self.daemon.detail_fast_due, 100.075)
+
+    def test_pre_key_read_result_is_dropped_and_does_not_delay_fresh_read(self):
+        self.ready()
+        self.daemon.command(b'det\tp1')
+        self.daemon.pump_reads()
+        self.key_reply()
+        self.reader.jobs[0][1].set_result(hrproto.detail('p1', dict(say='pre-key')))
+        self.daemon.pump_reads()
+        self.assertEqual(self.messages, [hrproto.result('k1', True)])
+        self.now.return_value = 100.075
+        self.daemon.pump_reads()
+        self.assertEqual(len(self.reader.jobs), 2)
+        self.reader.jobs[1][1].set_result(hrproto.detail('p1', dict(say='post-key')))
+        self.daemon.pump_reads()
+        self.assertEqual(self.messages[-1], hrproto.detail('p1', dict(say='post-key')))
+
+    def test_key_burst_keeps_one_pending_read_and_does_not_postpone_it_forever(self):
+        self.ready()
+        self.daemon.command(b'det\tp1')
+        self.daemon.next_detail = 101
+        for i in range(5):
+            self.now.return_value = 100 + i * .01
+            self.key_reply('k%d' % i)
+            self.daemon.pump_reads()
+        self.assertEqual(len(self.reader.jobs), 0)
+        self.now.return_value = 100.075
+        self.daemon.pump_reads()
+        self.assertEqual(len(self.reader.jobs), 1)
+        self.now.return_value = 100.08
+        self.key_reply('k6')
+        self.reader.jobs[0][1].set_result(hrproto.detail('p1', dict(say='older-key')))
+        self.daemon.pump_reads()
+        self.now.return_value = 100.15
+        self.daemon.pump_reads()
+        self.assertEqual(len(self.reader.jobs), 1)
+        self.now.return_value = 100.155
+        self.daemon.pump_reads()
+        self.assertEqual(len(self.reader.jobs), 2)
+
+    def test_key_reply_after_pane_switch_or_reset_does_not_refresh_another_input(self):
+        self.ready()
+        self.daemon.command(b'det\tp1')
+        self.daemon.key_details['k1'] = (self.daemon.session_generation, 'p1')
+        self.daemon.command(b'det\tp2')
+        with mock.patch.object(self.daemon.keys, 'replies', return_value=[('k1', True, None)]):
+            self.daemon.flush_replies()
+        self.assertIsNone(self.daemon.detail_fast_due)
+        self.daemon.reset_session()
+        self.assertEqual(self.daemon.key_details, {})
+        self.assertIsNone(self.daemon.detail_fast_due)
 
 
 class Replies(unittest.TestCase):
@@ -168,6 +288,55 @@ class Replies(unittest.TestCase):
                 self.server.read_gate.set()
                 runner.join(5)
             self.assertFalse(runner.is_alive())
+
+    def test_worker_sends_post_key_detail_while_model_read_is_blocked(self):
+        self.daemon.command(b'det\tw1:p0')
+        self.server.texts['w1:p0'] = '• Summary\n› a'
+        self.server.cursors['w1:p0'] = dict(row=1, col=3, visible=True)
+        gate = threading.Event()
+        self.server.read_gates['visible'] = gate
+        self.server.read_started.clear()
+        samples = []
+        def tap(key, count):
+            current = self.server.texts['w1:p0'] + 'b'
+            self.server.texts['w1:p0'] = current
+            self.server.cursors['w1:p0']['col'] += 1
+        def latest_input(expected):
+            for payload, stamp in reversed(self.link.messages):
+                if payload.startswith(b'D\t') and hrproto.decode(payload)[0][9] == expected:
+                    return stamp
+            return None
+        with mock.patch.object(herdremote.hrherdr, 'Watcher'), \
+             mock.patch.object(self.daemon.answerer, 'start'), \
+             mock.patch.object(self.daemon.usage, 'start'), \
+             mock.patch.object(self.daemon.usage, 'close'), \
+             mock.patch.object(self.daemon.keys.tool, 'tap', side_effect=tap):
+            runner = threading.Thread(target=self.daemon.run, daemon=True)
+            runner.start()
+            try:
+                self.assertTrue(self.server.read_started.wait(2))
+                with self.link.condition:
+                    self.assertTrue(self.link.condition.wait_for(lambda: latest_input('a') is not None, 1))
+                for i in range(3):
+                    req = 'k%d' % i
+                    self.link.frames.append(types.SimpleNamespace(type=podlink.TEXT,
+                        payload=('k\t%s\tright' % req).encode()))
+                    reply, reply_at = self.link.wait_result(1)
+                    self.assertEqual(hrproto.decode(reply)[0][1:3], [req, 'ok'])
+                    expected = 'a' + 'b' * (i + 1)
+                    with self.link.condition:
+                        self.assertTrue(self.link.condition.wait_for(lambda: latest_input(expected) is not None, 1))
+                        updated_at = latest_input(expected)
+                    samples.append((updated_at - reply_at) * 1000)
+                    self.assertLess(updated_at - reply_at, .3)
+                    self.assertFalse(gate.is_set())
+                self.assertFalse(any(m == 'client.focus' for m, _ in self.server.calls))
+            finally:
+                self.daemon.stopping.set()
+                gate.set()
+                runner.join(5)
+            self.assertFalse(runner.is_alive())
+        print('detail_key_R_to_D_ms=' + ','.join('%.3f' % s for s in samples))
 
     def test_unexpected_loop_error_stops_and_closes_the_reader(self):
         with mock.patch.object(herdremote.hrherdr, 'Watcher'), \

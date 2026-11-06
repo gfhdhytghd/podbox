@@ -7,9 +7,10 @@ character: encode() replaces them with spaces.
 docs/podbox/herdremote-protocol.md is the reference; tools/herdremote/tests
 checks this module against it.
 """
+import unicodedata
 
 VERSION = 1
-MAX_MESSAGE = 4096
+MAX_MESSAGE = 16384
 
 # Field budgets in UTF-8 bytes. They follow what the iPod screen stores and
 # shows, so cutting here never loses text the player could have drawn.
@@ -24,8 +25,10 @@ MAX_WORKSPACES = 32
 MAX_AGENTS = 16
 MAX_QUESTIONS = 6
 MAX_TABS = 32
-DETAIL_LINES = 12
-DETAIL_LINE_BYTES = 60
+DETAIL_TEXT_CHARS = 80
+DETAIL_SAY_CHARS = 300
+DETAIL_TEXT_BYTES = 240
+DETAIL_SAY_BYTES = 900
 USAGE_SERVICES = ("codex", "claude", "grok", "gemini")
 USAGE_NOTE_BYTES = 40
 
@@ -43,11 +46,12 @@ def clean(text, limit):
     return data[:limit].decode("utf-8", errors="ignore")
 
 
-def encode(records):
+def encode(records, max_message=MAX_MESSAGE):
     """records: a list of field lists. Returns the frame payload as bytes."""
     payload = "\n".join("\t".join(fields) for fields in records).encode("utf-8")
-    if len(payload) > MAX_MESSAGE:
-        raise ValueError("HerdRemote message exceeds %d bytes" % MAX_MESSAGE)
+    maximum = min(MAX_MESSAGE, max_message)
+    if len(payload) > maximum:
+        raise ValueError("HerdRemote message exceeds %d bytes" % maximum)
     return payload
 
 
@@ -112,10 +116,55 @@ def tabs(workspace_id, items):
                    for i, t in enumerate(items)])
 
 
-def detail(pane, lines):
-    return encode([["D", clean(pane, 15)] +
-                   [clean(line, DETAIL_LINE_BYTES)
-                    for line in lines[-DETAIL_LINES:]]])
+def detail_text(text, limit, byte_limit=None):
+    text = " ".join("".join(" " if unicodedata.category(c) == "Cc" else c
+                            for c in str(text)).split())
+    byte_limit = byte_limit if byte_limit is not None else limit * 4
+    if len(text) <= limit and len(text.encode("utf-8")) <= byte_limit:
+        return text
+    head = text[:max(0, limit - 1)].encode("utf-8")[:max(0, byte_limit - 3)]
+    return head.decode("utf-8", errors="ignore") + "…"
+
+
+def detail_input(text, cursor, char_limit, byte_limit):
+    """The input window/escapes exactly as DETAIL-DESIGN.md specifies."""
+    text = "".join(c if c == "\n" or unicodedata.category(c) != "Cc" else " " for c in str(text))
+    cursor = max(0, min(len(text), cursor if type(cursor) is int else len(text)))
+
+    def escape(value):
+        return value.replace("\\", "\\\\").replace("\n", "\\n")
+
+    costs = [0]
+    for char in text:
+        costs.append(costs[-1] + (2 if char in "\\\n" else len(char.encode("utf-8"))))
+    if len(text) <= char_limit and costs[-1] <= byte_limit:
+        return escape(text), cursor
+    end = min(len(text), cursor + 100)
+    if end <= char_limit and costs[end] <= byte_limit:
+        return escape(text[:end]), cursor
+    start = end
+    while start > 0:
+        candidate = start - 1
+        if end - candidate + 1 > char_limit or costs[end] - costs[candidate] + 3 > byte_limit:
+            break
+        start = candidate
+    value = "…" + text[start:end]
+    return escape(value), max(0, min(len(value), cursor - start + 1))
+
+
+def detail(pane, fields, max_message=MAX_MESSAGE):
+    age = max(-2, min(2147483647, int(fields.get("state_age_s", -1))))
+    steps = list(fields.get("steps", []))[-3:]
+    steps += [""] * (3 - len(steps))
+    large = max_message >= MAX_MESSAGE
+    typed_input, cursor = detail_input(fields.get("input", ""), fields.get("cursor"),
+                                       4000 if large else 500, 12000 if large else 1500)
+    return encode([["D", clean(pane, 15), str(age),
+                    detail_text(fields.get("task", ""), DETAIL_TEXT_CHARS, DETAIL_TEXT_BYTES),
+                    detail_text(fields.get("now", ""), DETAIL_TEXT_CHARS, DETAIL_TEXT_BYTES),
+                    detail_text(fields.get("say", ""), DETAIL_SAY_CHARS, DETAIL_SAY_BYTES)] +
+                   [detail_text(s, DETAIL_TEXT_CHARS, DETAIL_TEXT_BYTES) for s in steps] +
+                   [typed_input, str(cursor)]], max_message=max_message)
 
 
 def question(q):

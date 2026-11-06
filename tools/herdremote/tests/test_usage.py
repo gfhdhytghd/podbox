@@ -263,7 +263,9 @@ class MathProtocol(unittest.TestCase):
         self.assertEqual(hrproto.decode(payload)[0][-1], '0')
         self.assertLessEqual(len(payload),4096)
         with self.assertRaises(ValueError):
-            hrproto.encode([['x'*4097]])
+            hrproto.encode([['x' * (hrproto.MAX_MESSAGE + 1)]])
+        with self.assertRaises(ValueError):
+            hrproto.encode([['x' * 4097]], max_message=4096)
 
 
 class Cache(unittest.TestCase):

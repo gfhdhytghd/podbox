@@ -10,7 +10,8 @@
 #include <stdlib.h>
 #include "herdremote_model.h"
 
-#define HR_MESSAGE_MAX 4096
+/* PodLink's largest message with this firmware; D's input needs it */
+#define HR_MESSAGE_MAX 16384
 #define HR_MAX_FIELDS  16
 
 /* Static rather than on the stack: the UI thread's stack is small, and a
@@ -230,19 +231,6 @@ static int apply_tabs(struct hr_model *m, char **f, int nf, char **cursor)
     return 'B';
 }
 
-/* D: one record, the pane and its last lines */
-static int apply_detail(struct hr_model *m, char **f, int nf)
-{
-    if (nf < 2 || nf > 2 + HR_DETAIL_LINES || !f[1][0])
-        return 0;
-    hr_copy(m->detail_pane, f[1], sizeof m->detail_pane);
-    m->ndetail = nf - 2;
-    for (int i = 0; i < m->ndetail; i++)
-        hr_copy(m->detail[i], f[2 + i], sizeof m->detail[0]);
-    m->detail_valid = true;
-    return 'D';
-}
-
 static int find_question(const struct hr_model *m, const char *id)
 {
     for (int i = 0; i < m->nquestions; i++)
@@ -342,6 +330,77 @@ static bool small_count(const char *s, int max, bool clamp, int *out)
 }
 
 #define HR_SECONDS 99999999     /* over three years */
+
+/* D's age: a decimal integer from -2 to 2147483647, with no sign but a
+ * minus and no other characters. Returns false for anything else. */
+static bool age_value(const char *s, int *out)
+{
+    bool minus = *s == '-';
+    long long v;
+    if (minus)
+        s++;
+    if (!*s || *s == '-' || !count(s, HR_BIG, &v))
+        return false;
+    if (minus ? v > 2 : v > 2147483647)
+        return false;
+    *out = minus ? -(int)v : (int)v;
+    return true;
+}
+
+/* The input's escapes undone in place: "\\n" is a line break and "\\\\" a
+ * backslash; any other backslash stays */
+static void unescape(char *s)
+{
+    char *out = s;
+    for (; *s; s++)
+    {
+        if (s[0] == '\\' && s[1] == 'n')
+        {
+            *out++ = '\n';
+            s++;
+        }
+        else if (s[0] == '\\' && s[1] == '\\')
+        {
+            *out++ = '\\';
+            s++;
+        }
+        else
+            *out++ = *s;
+    }
+    *out = '\0';
+}
+
+/* The characters in s */
+static int chars_in(const char *s)
+{
+    int n = 0;
+    for (; *s; s++)
+        n += ((unsigned char)*s & 0xc0) != 0x80;
+    return n;
+}
+
+/* D: one record of exactly eleven fields, the pane, its age, seven texts,
+ * any of which may be empty, and the cursor */
+static int apply_detail(struct hr_model *m, char **f, int nf)
+{
+    struct hr_detail *d = &m->detail;
+    long long cursor;
+    if (nf != 11 || !f[1][0] || !age_value(f[2], &d->age) ||
+        !count(f[10], HR_BIG, &cursor) || cursor < 0)
+        return 0;
+    hr_copy(m->detail_pane, f[1], sizeof m->detail_pane);
+    hr_copy(d->task, f[3], sizeof d->task);
+    hr_copy(d->now, f[4], sizeof d->now);
+    hr_copy(d->say, f[5], sizeof d->say);
+    for (int i = 0; i < HR_DETAIL_STEPS; i++)
+        hr_copy(d->step[i], f[6 + i], sizeof d->step[0]);
+    hr_copy(d->input, f[9], sizeof d->input);
+    unescape(d->input);
+    int len = chars_in(d->input);
+    d->cursor = cursor > len ? len : (int)cursor;
+    m->detail_valid = true;
+    return 'D';
+}
 
 /* U, then one P per service and N. A P for a service this screen does not
  * know is left out. */
@@ -482,6 +541,34 @@ int hr_model_apply(struct hr_model *m, const char *data, unsigned int length)
     if (!strcmp(type, "D") && (!cursor || !*cursor))
         return apply_detail(m, f, n);
     return 0;
+}
+
+int hr_utf8_offset(const char *s, int chars)
+{
+    int i = 0;
+    while (s[i] && chars > 0)
+    {
+        do
+            i++;
+        while (((unsigned char)s[i] & 0xc0) == 0x80);
+        chars--;
+    }
+    return i;
+}
+
+int hr_input_window(int cursor_line, int nlines, int window, int top)
+{
+    if (nlines <= window)
+        return 0;
+    if (top > nlines - window)
+        top = nlines - window;
+    if (top < 0)
+        top = 0;
+    if (cursor_line < top)
+        top = cursor_line;
+    else if (cursor_line >= top + window)
+        top = cursor_line - window + 1;
+    return top;
 }
 
 int hr_model_tab_index(const struct hr_model *m, const char *ws,

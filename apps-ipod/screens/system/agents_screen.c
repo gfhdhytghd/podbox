@@ -24,18 +24,27 @@
  *             title names the tab. The focus follows the wheel (fp);
  *             SELECT opens the agent's detail; LEFT and RIGHT go to the tab
  *             before or after, focusing it (ft); MENU goes back to spaces
- *   detail    the agent, and the last lines of its pane as the computer
- *             sends them (det, D), drawn by this file. The keys type as in
- *             usage, once the pane is focused (fp); MENU goes back
+ *   detail    the agent's work, as the computer reads it from the pane
+ *             (det, D) and this file draws it: its name and state with the
+ *             time in it, what it is on (the terminal title, scrolled when
+ *             long), what is typed in its input box with the cursor, in a
+ *             window of five lines that follows the cursor, its live
+ *             working line, its latest message to the user, wrapped, and
+ *             its last tool steps, which give way when the message needs
+ *             the room. DETAIL-DESIGN.md (beside the task cards) is the
+ *             page's specification. The keys type as in usage, once the
+ *             pane is focused (fp); MENU goes back
  *   question  the question and its options; SELECT answers; MENU dismisses
+ *   confirm   "Leave Agents?", from MENU in spaces or usage: SELECT leaves,
+ *             MENU goes back; the other keys do nothing
  *
  * A question pops up as it arrives, over whichever view is open, once Play
- * is up and its result in; answering or dismissing it goes back there. A
- * dismissed question does not pop up again, but the alert row at the top
- * of the spaces and agents views still opens it. Only MENU leaves Agents,
- * from spaces or usage. Focus sent for the wheel, a tab, a workspace or
- * the detail says nothing when it works and its reason in the band when
- * it fails.
+ * is up and its result in, and once the confirm view has closed; answering
+ * or dismissing it goes back there. A dismissed question does not pop up
+ * again, but the alert row at the top of the spaces and agents views still
+ * opens it. Only SELECT in the confirm view leaves Agents. Focus sent for
+ * the wheel, a tab, a workspace or the detail says nothing when it works
+ * and its reason in the band when it fails.
  *
  * The list is drawn again only for what changes it: a wheel step draws it
  * as it moves, and a message does when it alters a row, the title or the
@@ -74,6 +83,7 @@
 #include "input/action.h"
 #include "draw/viewport.h"
 #include "draw/screen_access.h"
+#include "draw/text_wrap.h"
 #include "widgets/list.h"
 #include "widgets/splash.h"
 #include "widgets/dialog.h"
@@ -83,7 +93,8 @@
 #include "herdremote_model.h"
 #include "agents_screen.h"
 
-enum view { VIEW_SPACES, VIEW_AGENTS, VIEW_DETAIL, VIEW_QUESTION, VIEW_USAGE };
+enum view { VIEW_SPACES, VIEW_AGENTS, VIEW_DETAIL, VIEW_QUESTION, VIEW_USAGE,
+            VIEW_CONFIRM };
 
 enum row_kind {
     ROW_STATUS,     /* connection trouble; not selectable */
@@ -125,10 +136,24 @@ static char space_tab[16];      /* its tab; "" is the first */
 static char detail_pane[16];    /* the pane the detail view shows */
 static struct hr_agent detail_agent;    /* that agent, as last listed */
 static bool detail_ready;       /* its fp has succeeded, so keys may go */
+static long detail_at;          /* when the last D came: its age counts on */
+static int detail_shown_age;    /* the minutes the header shows, -1 none */
+/* The detail's task line scrolls when it is wider than the view: it rests
+ * at either end, then moves TASK_STEP pixels every ANIM_TICKS */
+#define TASK_REST   (3 * HZ / 2)
+#define TASK_STEP   2
+static char task_text[HR_DETAIL_TEXT];  /* the task line as drawn */
+static int task_w;              /* its width in pixels */
+static int task_x;              /* its scroll, pixels from the left */
+static int task_y;              /* its line's top in the view */
+static long task_next;          /* when it moves next */
+static bool task_at_end;        /* it rests at its end, to go back */
 static char question_pane[16];  /* the pane the question view answers */
 static enum view question_from; /* the view to go back to, on which row */
 static struct row question_from_row;
 static struct hr_popped popped; /* the questions that have popped up */
+static enum view confirm_from;  /* the view under the confirm, which row */
+static struct row confirm_from_row;
 
 static char outbox[OUTBOX][96];
 static int nout;
@@ -697,7 +722,7 @@ static void build_rows(struct gui_synclist *list)
 {
     char buf[48];
     nrows = 0;
-    if (view == VIEW_USAGE || view == VIEW_DETAIL)
+    if (view == VIEW_USAGE || view == VIEW_DETAIL || view == VIEW_CONFIRM)
         return;
     if (view != VIEW_QUESTION)
     {
@@ -970,7 +995,8 @@ static const char *view_title(void)
         snprintf(title, sizeof title, "%s", q ? q->agent : "Question");
         return title;
     }
-    if (view == VIEW_USAGE)
+    if (view == VIEW_USAGE || (view == VIEW_CONFIRM &&
+                               confirm_from == VIEW_USAGE))
         return "Usage";
     return "Agents";
 }
@@ -1169,14 +1195,187 @@ static void draw_usage(struct gui_synclist *list)
     d->set_viewport(NULL);
 }
 
-/* Draw the detail view over the empty list: the agent's kind and title
- * with its status on the right, then the last lines of its pane, as many
- * as fit, the newest at the bottom */
+/* The detail view's colours beyond the usage view's: the working line, and
+ * the dot by the state */
+#define DET_ACCENT  LCD_RGBPACK(140, 220, 150)
+#define DET_GAP     4       /* pixels between the view's parts */
+#define DET_DOT     9       /* the dot's diameter */
+
+/* Seconds in the state now: the age the last D gave, counted on since it
+ * came; -1 unknown, -2 fallback */
+static int detail_age(void)
+{
+    int age = model.detail.age;
+    if (age < 0)
+        return age;
+    long on = (current_tick - detail_at) / HZ;
+    return on > 2147483647 - age ? 2147483647 : age + (int)on;
+}
+
+/* "<1m", "29m", "1h05m", "2d3h" */
+static const char *fmt_age(char *buf, size_t size, int secs)
+{
+    if (secs < 60)
+        return "<1m";
+    if (secs < 3600)
+        snprintf(buf, size, "%dm", secs / 60);
+    else if (secs < 86400)
+        snprintf(buf, size, "%dh%02dm", secs / 3600, secs % 3600 / 60);
+    else
+        snprintf(buf, size, "%dd%dh", secs / 86400, secs % 86400 / 3600);
+    return buf;
+}
+
+/* A disc DET_DOT across, its top left at x, y */
+static void draw_disc(struct screen *d, int x, int y, unsigned colour)
+{
+    static const unsigned char inset[DET_DOT] = { 3, 1, 1, 0, 0, 0, 1, 1, 3 };
+    d->set_foreground(colour);
+    for (int i = 0; i < DET_DOT; i++)
+        d->hline(x + inset[i], x + DET_DOT - 1 - inset[i], y + i);
+}
+
+/* Draw the task line at its scroll, in a strip of its own so the ticker can
+ * draw it alone */
+static void draw_task(struct screen *d, struct viewport *vp)
+{
+    struct viewport strip = *vp;
+    strip.y += task_y;
+    strip.height = USE_LINE;
+    d->set_viewport(&strip);
+    d->clear_viewport();
+    text_at(d, -task_x, 0, USE_DIM, task_text);
+    d->update_viewport();
+    d->set_viewport(vp);
+}
+
+/* A frame of the task line's scroll, while the detail view is open */
+static void tick_task(struct gui_synclist *list)
+{
+    struct viewport *vp = list->parent[SCREEN_MAIN];
+    int over = task_w - vp->width;
+    if (!task_text[0] || over <= 0 || TIME_BEFORE(current_tick, task_next))
+        return;
+    if (task_at_end)
+    {
+        task_x = 0;
+        task_at_end = false;
+        task_next = current_tick + TASK_REST;
+    }
+    else
+    {
+        task_x += TASK_STEP;
+        if (task_x >= over)
+        {
+            task_x = over;
+            task_at_end = true;
+            task_next = current_tick + TASK_REST;
+        }
+    }
+    draw_task(&screens[SCREEN_MAIN], vp);
+    screens[SCREEN_MAIN].set_viewport(NULL);
+}
+
+/* The input block: what is typed in the agent's input box, in a frame, up
+ * to INPUT_LINES lines of it in a window that follows the cursor's line */
+#define INPUT_LINES 5
+#define INPUT_PAD   3       /* between the frame and the text */
+static int input_top;       /* the window's first line */
+
+/* The line of the wrapped input the cursor is on, and its byte position:
+ * the first line whose text or the spaces after it hold the cursor; after
+ * a line break, the next line. Returns the number of lines. */
+static int input_lines(const char *text, int width, struct font *pf,
+                       const char *cursor_at, int *cursor_line)
+{
+    const char *end;
+    int n = 0;
+    *cursor_line = -1;
+    for (const char *p = text; *p; n++)
+    {
+        const char *next = text_wrap_next_punct(p, width, pf, &end);
+        if (*cursor_line < 0 && cursor_at >= p &&
+            (cursor_at <= end || cursor_at < next || !*next))
+            *cursor_line = n;
+        p = next;
+    }
+    if (n == 0 || text[strlen(text) - 1] == '\n')
+    {
+        /* The cursor sits on the empty line after a final line break */
+        if (*cursor_line < 0)
+            *cursor_line = n;
+        n++;
+    }
+    return n;
+}
+
+static int draw_input(struct screen *d, struct viewport *vp, int y,
+                      bool dim)
+{
+    const struct hr_detail *det = &model.detail;
+    struct font *pf = font_get(vp->font);
+    int width = vp->width - 2 * (INPUT_PAD + 1), x0 = INPUT_PAD + 1;
+    int h = pf->height, cursor_line;
+    const char *text = det->input, *end;
+    const char *cursor_at = text + hr_utf8_offset(text, det->cursor);
+    char line[200];
+    font_lock(vp->font, true);
+    int nlines = input_lines(text, width, pf, cursor_at, &cursor_line);
+    input_top = hr_input_window(cursor_line, nlines, INPUT_LINES, input_top);
+    int shown = MIN(nlines - input_top, INPUT_LINES);
+    d->set_foreground(USE_DIM);
+    d->drawrect(0, y, vp->width, shown * USE_LINE + 2 * INPUT_PAD);
+    int ly = y + INPUT_PAD;
+    const char *p = text;
+    for (int i = 0; i < input_top + shown; i++)
+    {
+        const char *next = *p ? text_wrap_next_punct(p, width, pf, &end)
+                              : p + (end = p, 0);
+        if (i >= input_top)
+        {
+            snprintf(line, sizeof line, "%.*s",
+                     (int)MIN(end - p, (long)sizeof line - 1), p);
+            text_at(d, x0, ly, dim ? USE_DIM : USE_TEXT, line);
+            if (i == cursor_line)
+            {
+                /* The bar after the character before the cursor */
+                const char *at = cursor_at < end ? cursor_at : end;
+                snprintf(line, sizeof line, "%.*s",
+                         (int)MIN(at - p, (long)sizeof line - 1), p);
+                int cx = x0 + (at > p ? text_w(d, line) : 0);
+                d->set_foreground(dim ? USE_DIM : USE_TEXT);
+                d->vline(MIN(cx, vp->width - 2), ly + 1, ly + h - 2);
+            }
+            ly += USE_LINE;
+        }
+        p = next;
+    }
+    font_lock(vp->font, false);
+    return y + shown * USE_LINE + 2 * INPUT_PAD + DET_GAP;
+}
+
+/* The non-empty steps of the detail, oldest first; returns how many */
+static int detail_steps(const char *steps[HR_DETAIL_STEPS])
+{
+    int n = 0;
+    for (int i = 0; i < HR_DETAIL_STEPS; i++)
+        if (model.detail.step[i][0])
+            steps[n++] = model.detail.step[i];
+    return n;
+}
+
+/* Draw the detail view over the empty list. The agent's name and kind head
+ * it, with a dot, its state and the time in it on the right; below a rule
+ * come the task, the working line (or the state when done, idle or
+ * asking), the message, wrapped to as many lines as it needs, and the last
+ * steps, the oldest dropped first when the message needs their lines. A
+ * fallback detail is the pane's last lines in grey, with no time. */
 static void draw_detail(struct gui_synclist *list)
 {
     struct screen *d = &screens[SCREEN_MAIN];
     struct viewport *vp = list->parent[SCREEN_MAIN];
-    char buf[96], line[80];
+    const struct hr_detail *det = &model.detail;
+    char buf[128], age[16], line[200];
     d->set_viewport(vp);
     unsigned fg = vp->fg_pattern;
     d->clear_viewport();
@@ -1184,35 +1383,147 @@ static void draw_detail(struct gui_synclist *list)
     if (a)
         detail_agent = *a;
     a = &detail_agent;
+    bool have = model.detail_valid && !strcmp(model.detail_pane, detail_pane);
+    bool fallback = have && det->age == -2;
+    int secs = have ? detail_age() : -1;
+    const char *t_trouble = trouble(buf, sizeof buf);
+
+    /* The header: name · kind, and the dot, state and time on the right */
     char state = agent_state(a);
-    const char *status = status_word(state);
-    int sw = text_w(d, status);
-    bool titled = a->title[0] && agent_name(a) != a->title;
-    snprintf(buf, sizeof buf, "%s%s%s", a->kind, titled ? " · " : "",
-             titled ? a->title : "");
-    text_at(d, 0, 0, USE_DIM, fit(buf, sizeof buf, buf, vp->width - sw - 8));
-    text_at(d, vp->width - sw, 0, state == 'b' ? USE_WARN : USE_SOFT, status);
+    snprintf(buf, sizeof buf, "%s%s", status_word(state),
+             secs >= 0 ? " " : "");
+    if (secs >= 0)
+    {
+        size_t n = strlen(buf);
+        snprintf(buf + n, sizeof buf - n, "%s", fmt_age(age, sizeof age, secs));
+    }
+    detail_shown_age = secs >= 0 ? secs / 60 : -1;
+    int sw = text_w(d, buf);
+    int h = font_get(vp->font)->height;
+    text_at(d, vp->width - sw, 0, state == 'b' ? USE_WARN : USE_SOFT, buf);
+    draw_disc(d, vp->width - sw - DET_DOT - 5, (h - DET_DOT) / 2,
+              state == 'b' ? DOT_RED : state == 'w' ? DOT_GREEN :
+              state == 'd' ? DOT_TEAL : DOT_GREY);
+    snprintf(buf, sizeof buf, "%s%s%s", a->name[0] ? a->name : "",
+             a->name[0] ? " · " : "", a->kind);
+    text_at(d, 0, 0, USE_DIM,
+            fit(buf, sizeof buf, buf, vp->width - sw - DET_DOT - 13));
     int y = USE_LINE + 2;
     d->set_foreground(USE_DIM);
     d->hline(0, vp->width - 1, y);
-    y += 4;
-    const char *t_trouble = trouble(buf, sizeof buf);
-    bool have = model.detail_valid && !strcmp(model.detail_pane, detail_pane);
-    if (!have || !model.ndetail)
+    y += DET_GAP;
+
+    bool empty = have && !det->task[0] && !det->now[0] && !det->say[0] &&
+                 !det->step[0][0] && !det->step[1][0] && !det->step[2][0];
+    if (!have || empty)
     {
+        task_text[0] = '\0';
         const char *msg = t_trouble ? t_trouble :
                           have ? "Nothing in the pane" : "Waiting for the pane…";
         text_at(d, (vp->width - text_w(d, msg)) / 2,
                 y + (vp->height - y - USE_LINE) / 2, USE_DIM, msg);
+        d->set_foreground(fg);
+        d->update_viewport();
+        d->set_viewport(NULL);
+        return;
     }
-    else
+
+    /* The task, scrolled when wide: a new one starts at its left */
+    if (strcmp(task_text, det->task))
     {
-        int room = (vp->height - y) / USE_LINE;
-        int first = model.ndetail > room ? model.ndetail - room : 0;
-        for (int i = first; i < model.ndetail; i++, y += USE_LINE)
-            text_at(d, 0, y, t_trouble ? USE_DIM : USE_TEXT,
-                    fit(line, sizeof line, model.detail[i], vp->width));
+        snprintf(task_text, sizeof task_text, "%s", det->task);
+        task_w = text_w(d, task_text);
+        task_x = 0;
+        task_at_end = false;
+        task_next = current_tick + TASK_REST;
     }
+    if (task_text[0])
+    {
+        task_y = y;
+        draw_task(d, vp);
+        y += USE_LINE;
+    }
+
+    /* What is typed, first: it is what the wheel's keys are editing */
+    if (det->input[0])
+        y = draw_input(d, vp, y, t_trouble != NULL);
+
+    /* The working line, or the state */
+    if (det->now[0])
+    {
+        unsigned colour = DET_ACCENT;
+        const char *now = det->now;
+        if (!strcmp(now, "done") || !strcmp(now, "idle"))
+        {
+            snprintf(line, sizeof line, "%s%s%s", now,
+                     secs >= 0 ? " · " : "",
+                     secs >= 0 ? fmt_age(age, sizeof age, secs) : "");
+            now = line;
+            colour = USE_SOFT;
+        }
+        else if (now[0] == '?')
+            colour = USE_WARN;
+        text_at(d, 0, y, t_trouble ? USE_DIM : colour,
+                fit(line, sizeof line, now, vp->width));
+        y += USE_LINE;
+    }
+    y += DET_GAP;
+
+    /* The message takes the lines it needs, the steps what is left */
+    const char *steps[HR_DETAIL_STEPS];
+    int nsteps = detail_steps(steps);
+    int avail = (vp->height - y - (nsteps ? DET_GAP : 0)) / USE_LINE;
+    struct font *pf = font_get(vp->font);
+    const char *text = det->say, *end;
+    int need = 0;
+    font_lock(vp->font, true);
+    for (const char *p = text; *p && need < avail; need++)
+        p = text_wrap_next_punct(p, vp->width, pf, &end);
+    int say_lines = need, show_steps = MIN(nsteps, avail - say_lines);
+    unsigned colour = t_trouble || fallback ? USE_DIM : USE_TEXT;
+    for (int i = 0; i < say_lines; i++, y += USE_LINE)
+    {
+        const char *next = text_wrap_next_punct(text, vp->width, pf, &end);
+        snprintf(line, sizeof line, "%.*s", (int)MIN(end - text,
+                                                      (long)sizeof line - 4),
+                 text);
+        if (i == say_lines - 1 && *next)
+        {
+            /* The rest does not fit: the line ends in an ellipsis */
+            size_t n = strlen(line);
+            snprintf(line + n, sizeof line - n, "…");
+            fit(line, sizeof line, line, vp->width);
+        }
+        text_at(d, 0, y, colour, line);
+        text = next;
+    }
+    font_lock(vp->font, false);
+    if (show_steps > 0)
+        y += DET_GAP;
+    for (int i = nsteps - show_steps; i < nsteps; i++, y += USE_LINE)
+    {
+        snprintf(line, sizeof line, "› %s", steps[i]);
+        text_at(d, 0, y, USE_DIM, fit(line, sizeof line, line, vp->width));
+    }
+    d->set_foreground(fg);
+    d->update_viewport();
+    d->set_viewport(NULL);
+}
+
+/* Draw the confirm view over the empty list: the question, and what the
+ * two keys do */
+static void draw_confirm(struct gui_synclist *list)
+{
+    struct screen *d = &screens[SCREEN_MAIN];
+    struct viewport *vp = list->parent[SCREEN_MAIN];
+    const char *title = "Leave Agents?", *hint = "SELECT leave · MENU stay";
+    d->set_viewport(vp);
+    unsigned fg = vp->fg_pattern;
+    d->clear_viewport();
+    int y = (vp->height - 2 * USE_LINE - DET_GAP) / 2;
+    text_at(d, (vp->width - text_w(d, title)) / 2, y, USE_TEXT, title);
+    text_at(d, (vp->width - text_w(d, hint)) / 2, y + USE_LINE + DET_GAP,
+            USE_DIM, hint);
     d->set_foreground(fg);
     d->update_viewport();
     d->set_viewport(NULL);
@@ -1493,9 +1804,12 @@ static bool take_talk_result(void)
 }
 
 /* Rebuild and draw, selecting the first row that can be chosen from select
- * on. The rows above it stay in view as far as they fit, so a question is
- * read from its start; top, when not -1, is the row to keep at the top
- * instead. */
+ * on. In the question view the rows above it stay in view as far as they
+ * fit, so a question is read from its start; in a list the selection goes
+ * to the middle, because the theme's description band under the agents
+ * view shortens the list only once its rows are drawn, and a selection
+ * put on the last line by the taller count ends under the band. top, when
+ * not -1, is the row to keep at the top instead. */
 static void show_at(struct gui_synclist *list, int select, int top)
 {
     build_rows(list);
@@ -1506,14 +1820,17 @@ static void show_at(struct gui_synclist *list, int select, int top)
     if (select >= nrows)
         select = 0;
     gui_synclist_select_item(list, select);
+    int lines = gui_synclist_get_nb_lines(list, SCREEN_MAIN);
     if (top < 0)
-        top = select - gui_synclist_get_nb_lines(list, SCREEN_MAIN) + 1;
+        top = view == VIEW_QUESTION ? select - lines + 1 : select - lines / 2;
     gui_synclist_set_top_item(list, top);
     gui_synclist_draw(list);
     if (view == VIEW_USAGE)
         draw_usage(list);
     else if (view == VIEW_DETAIL)
         draw_detail(list);
+    else if (view == VIEW_CONFIRM)
+        draw_confirm(list);
 }
 
 static void show(struct gui_synclist *list, int select)
@@ -1586,10 +1903,12 @@ static void leave_question(struct gui_synclist *list)
 }
 
 /* A question that has not popped up yet does so now, the oldest first and
- * one at a time, unless Play is held or its result is still to come */
+ * one at a time, unless Play is held or its result is still to come, or
+ * the confirm view is open */
 static void pop_question(struct gui_synclist *list)
 {
-    if (view == VIEW_QUESTION || talk_held || talk_req[0])
+    if (view == VIEW_QUESTION || view == VIEW_CONFIRM || talk_held ||
+        talk_req[0])
         return;
     const struct hr_question *q = hr_model_next_popup(&model, &popped);
     if (!q)
@@ -1666,6 +1985,9 @@ static void open_detail(struct gui_synclist *list, const struct hr_agent *a)
     snprintf(detail_pane, sizeof detail_pane, "%s", a->pane);
     detail_agent = *a;
     detail_ready = false;
+    task_text[0] = '\0';
+    detail_shown_age = -1;
+    input_top = 0;
     forget_keys();
     model.detail_valid = false;
     subscribe_detail(detail_pane);
@@ -1687,6 +2009,27 @@ static void close_detail(struct gui_synclist *list)
     view = VIEW_AGENTS;
     reset_focus();
     show_row(list, &r);
+}
+
+/* MENU at the top level: ask before leaving, over the view it came from */
+static void open_confirm(struct gui_synclist *list)
+{
+    int sel = gui_synclist_get_sel_pos(list);
+    confirm_from = view;
+    confirm_from_row = sel >= 0 && sel < nrows ? rows[sel] : (struct row){0};
+    view = VIEW_CONFIRM;
+    reset_focus();
+    show(list, 0);
+}
+
+/* MENU in the confirm view: back to the view and row it came from */
+static void close_confirm(struct gui_synclist *list)
+{
+    view = confirm_from;
+    if (view == VIEW_USAGE)
+        show(list, 0);
+    else
+        show_row(list, &confirm_from_row);
 }
 
 /* Act on SELECT: enter the workspace, open the agent's detail or the
@@ -1791,6 +2134,8 @@ static bool poll_link(void)
         }
         if (type == 'V' && model.voice == 't' && !talk_held)
             talk_since = current_tick;
+        if (type == 'D')
+            detail_at = current_tick;
         /* The tab shown has gone: back to the first */
         if (type == 'B' && space_tab[0] && !strcmp(model.tabs_ws, space_id)
             && hr_model_tab_index(&model, space_id, space_tab) < 0)
@@ -1848,6 +2193,8 @@ int agents_screen(void)
     space_id[0] = space_tab[0] = detail_pane[0] = '\0';
     question_pane[0] = pending_req[0] = focus_req[0] = '\0';
     pending_answer = was_connected = detail_ready = false;
+    detail_shown_age = -1;
+    task_text[0] = '\0';
     reset_focus();
     talk_held = talk_shown = false;
     talk_req[0] = talk_note[0] = '\0';
@@ -1904,22 +2251,30 @@ int agents_screen(void)
             }
         }
         else if (changed || t != shown_trouble ||
-                 (t && TIME_AFTER(current_tick, redraw_at)))
+                 (t && TIME_AFTER(current_tick, redraw_at)) ||
+                 (view == VIEW_DETAIL && detail_shown_age >= 0 &&
+                  detail_age() / 60 != detail_shown_age))
         {
+            /* The detail's time in state is drawn again each minute */
             shown_trouble = t;
             redraw_at = current_tick + HZ;
             if (view == VIEW_DETAIL)
                 draw_detail(&list);
+            else if (view == VIEW_CONFIRM)
+                draw_confirm(&list);
             else
                 show_same(&list);
         }
 
-        /* Only the dots are drawn again for a frame, and only while one in
-         * view moves and the screen can be seen */
+        /* Only the dots, and the detail's task line, are drawn again for a
+         * frame, and only while one in view moves and the screen can be
+         * seen */
         if (TIME_AFTER(current_tick, frame_at))
         {
             frame_at = current_tick + ANIM_TICKS - 1;
-            if (is_backlight_on(true) && animating(&list))
+            if (is_backlight_on(true) && view == VIEW_DETAIL)
+                tick_task(&list);
+            else if (is_backlight_on(true) && animating(&list))
                 skinlist_redraw_status(&screens[SCREEN_MAIN], &list);
         }
 
@@ -1954,18 +2309,24 @@ int agents_screen(void)
                 draw_usage(&list);
             else if (view == VIEW_DETAIL)
                 draw_detail(&list);
+            else if (view == VIEW_CONFIRM)
+                draw_confirm(&list);
             else
                 show_same(&list);
         }
 
         int before = gui_synclist_get_sel_pos(&list);
         int before_top = list.start_item[SCREEN_MAIN];
-        if (view == VIEW_USAGE || view == VIEW_DETAIL)
+        if (view == VIEW_USAGE || view == VIEW_DETAIL || view == VIEW_CONFIRM)
         {
-            /* No list to scroll: the wheel is the arrow keys */
+            /* No list to scroll: the wheel is the arrow keys, or in the
+             * confirm view nothing */
             action = get_action(CONTEXT_AGENTS, ANIM_TICKS);
             int dir = 0;
-            if (action == ACTION_STD_PREV || action == ACTION_STD_PREVREPEAT)
+            if (view == VIEW_CONFIRM)
+                ;
+            else if (action == ACTION_STD_PREV ||
+                     action == ACTION_STD_PREVREPEAT)
                 dir = -1;
             else if (action == ACTION_STD_NEXT ||
                      action == ACTION_STD_NEXTREPEAT)
@@ -1981,10 +2342,14 @@ int agents_screen(void)
             int lines = gui_synclist_get_nb_lines(&list, SCREEN_MAIN);
             if (sel != before && view != VIEW_QUESTION)
                 want_focus(&list);
-            if (sel > before && before >= before_top + lines)
+            if (view == VIEW_QUESTION && sel > before &&
+                before >= before_top + lines)
             {
                 /* The selection is below the rows in view, which were
-                 * scrolled up to read: scroll back down towards it */
+                 * scrolled up to read: scroll back down towards it. Only
+                 * the question scrolls so; in the agents view a selection
+                 * out of view is the band's doing, and the move itself
+                 * brings it back. */
                 gui_synclist_select_item(&list, before);
                 gui_synclist_set_top_item(&list, before_top + 1);
                 gui_synclist_draw(&list);
@@ -2028,7 +2393,12 @@ int agents_screen(void)
                 int button;
                 get_action_statuscode(&button);
                 bool right = button & BUTTON_RIGHT;
-                if (view == VIEW_USAGE)
+                if (view == VIEW_CONFIRM)
+                {
+                    if (!right)
+                        done = true;
+                }
+                else if (view == VIEW_USAGE)
                 {
                     if (right)
                         close_usage(&list);
@@ -2052,19 +2422,25 @@ int agents_screen(void)
             case ACTION_STD_MENU:
             {
                 /* LEFT goes to usage, the tab before or Backspace; MENU
-                 * goes back a view, and leaves Agents from spaces and
-                 * usage. LEFT acts on the press alone, but for Backspace,
-                 * which its repeats send too. */
+                 * goes back a view, and from spaces and usage asks before
+                 * leaving Agents. LEFT acts on the press alone, but for
+                 * Backspace, which its repeats send too. */
                 int button;
                 int status = get_action_statuscode(&button);
                 bool left = action == ACTION_STD_CANCEL &&
                             (button & BUTTON_LEFT);
+                if (view == VIEW_CONFIRM)
+                {
+                    if (!left)
+                        close_confirm(&list);
+                    break;
+                }
                 if (view == VIEW_USAGE || view == VIEW_DETAIL)
                 {
                     if (left)
                         send_key("bs");
                     else if (view == VIEW_USAGE)
-                        done = true;
+                        open_confirm(&list);
                     else
                         close_detail(&list);
                     break;
@@ -2076,7 +2452,7 @@ int agents_screen(void)
                     if (left)
                         open_usage(&list);
                     else
-                        done = true;
+                        open_confirm(&list);
                 }
                 else if (view == VIEW_AGENTS)
                 {
@@ -2090,7 +2466,8 @@ int agents_screen(void)
                 break;
             }
             case ACTION_AGENTS_TALK:
-                start_talk(&list);
+                if (view != VIEW_CONFIRM)
+                    start_talk(&list);
                 break;
             case ACTION_AGENTS_TALK_END:
                 stop_talk();

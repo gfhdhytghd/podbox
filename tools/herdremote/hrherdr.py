@@ -5,12 +5,12 @@ connection, newline-delimited JSON, as `herdr api schema` describes.
 """
 import json
 import os
-import re
 import select
 import socket
 import threading
 
 import hrdetect
+import hrdetail
 
 
 class HerdrError(RuntimeError):
@@ -66,9 +66,13 @@ class Herdr:
     def snapshot(self):
         return self.call("session.snapshot")["snapshot"]
 
-    def read(self, pane_id):
+    def read(self, pane_id, source="visible", lines=None):
+        return self.read_record(pane_id, source, lines)["text"]
+
+    def read_record(self, pane_id, source="visible", lines=None):
+        """Preserve optional cursor metadata supplied by newer herdr servers."""
         return self.call("pane.read", pane_id=pane_id,
-                         source="visible")["read"]["text"]
+                         source=source, **({"lines": lines} if lines is not None else {}))["read"]
 
     def send_keys(self, pane_id, keys):
         self.call("pane.send_keys", pane_id=pane_id, keys=list(keys))
@@ -159,9 +163,7 @@ def best_state(statuses):
 
 def detail_lines(text):
     """Visible pane tail, without terminal escape sequences or trailing blanks."""
-    text = re.sub(r"\x1b(?:\][\s\S]*?(?:\x07|\x1b\\)|"
-                  r"[PX^_][\s\S]*?\x1b\\|\[[0-?]*[ -/]*[@-~]|[ -/]*[@-~])",
-                  "", text)
+    text = hrdetail.strip_ansi(text)
     lines = text.splitlines()
     while lines and not lines[-1].strip():
         lines.pop()
@@ -240,8 +242,16 @@ def build_model(snapshot, read, subscribed=None, tab_id=None):
             other=best_state([code(r) for r in elsewhere]), **counts))
         agents[wid] = rows
         others[wid] = elsewhere
+    pane_meta = {p["pane_id"]: dict(kind=p.get("agent") or "unknown",
+                 status=p.get("agent_status") or "unknown",
+                 title=p.get("terminal_title_stripped") or "")
+                 for p in snapshot["panes"]}
+    for rows in tab_agents.values():
+        for row in rows:
+            pane_meta[row["pane"]]["status"] = row["status"]
     return dict(workspaces=workspaces, agents=agents, others=others,
                 questions=questions, tabs=tabs, tab_agents=tab_agents,
+                pane_meta=pane_meta,
                 panes={p["pane_id"] for p in snapshot["panes"]})
 
 

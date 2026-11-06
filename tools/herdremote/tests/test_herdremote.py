@@ -229,7 +229,10 @@ class CrossLanguage(unittest.TestCase):
                 # with seven fields, without replacing its heartbeat state.
                 hrproto.tabs("w1", [dict(id="w1:t1", label="build", status="b"),
                                     dict(id="w1:t2", label="review", status="w")]),
-                hrproto.detail("w1:p1", ["activity", "newest"]),
+                hrproto.detail("w1:p1", dict(state_age_s=12, task="😀" * 80,
+                    now="Working", say="中" * 300,
+                    steps=["Read 3 files", "Ran 7 shell commands"],
+                    input="First\\literal\n第二行😀", cursor=8)),
                 hrproto.question(q),
                 hrproto.result("5", True, "Answered"),
                 hrproto.tick(3, True)]
@@ -242,6 +245,18 @@ class CrossLanguage(unittest.TestCase):
             with open(path, "wb") as f:
                 f.write(struct.pack("<H", len(failure)) + failure)
             failure_out = subprocess.check_output([exe, path]).decode("utf-8")
+            for maximum, wanted, wanted_cursor in [
+                    (16384, "😀" * 3000, 3000),
+                    (4096, "…" + "😀" * 374, 375)]:
+                wire = hrproto.detail("w1:p1", dict(state_age_s=0, task="task", now="Working",
+                    input="😀" * 3000, cursor=3000), max_message=maximum)
+                self.assertLessEqual(len(wire), maximum)
+                if maximum == 16384:
+                    self.assertGreater(len(wire), 4096)
+                with open(path, "wb") as f:
+                    f.write(struct.pack("<H", len(wire)) + wire)
+                wide_out = subprocess.check_output([exe, path]).decode("utf-8")
+                self.assertIn("D w1:p1 0 task|Working|||||" + wanted + "|" + str(wanted_cursor), wide_out)
         # The old C harness reports ignored unknown messages on stdout.
         lines = [line for line in out.splitlines() if not line.startswith("rejected ")]
         self.assertEqual(lines[0], "hello=1 herdr_ok=1 age=3")
@@ -252,6 +267,8 @@ class CrossLanguage(unittest.TestCase):
         self.assertEqual(lines[3], "Q 0badf00d w1:p1 w1 0 项目 · claude")
         self.assertIn("? Do you want to proceed?", lines)
         self.assertIn("o 4 No", lines)
+        self.assertIn("D w1:p1 12 " + "😀" * 59 + "…|Working|" + "中" * 300 +
+                      "|Read 3 files|Ran 7 shell commands||First\\literal\n第二行😀|8", out)
         self.assertEqual(lines[-1], "R 5 1 Answered")
         self.assertEqual(failure_out.splitlines()[-1],
                          "R 6 0 No local herdr window")
@@ -459,6 +476,8 @@ class FakeHerdr(threading.Thread):
         self.errors = {}
         self.layout = None
         self.texts = {}
+        self.cursors = {}
+        self.cursors_by_source = {}
 
     def stop(self):
         self.server.shutdown(socket.SHUT_RDWR)
@@ -521,6 +540,11 @@ class FakeHerdr(threading.Thread):
                     text = self.pane_text if params["pane_id"] == "w1:p1" \
                         else sample("codex-idle-narrow.txt")
                     result = dict(read=dict(text=self.texts.get(params["pane_id"], text)))
+                    key = (params["pane_id"], params["source"])
+                    if key in self.cursors_by_source:
+                        result["read"]["cursor"] = self.cursors_by_source[key]
+                    elif params["pane_id"] in self.cursors:
+                        result["read"]["cursor"] = self.cursors[params["pane_id"]]
                 elif method == "pane.send_keys":
                     if params["keys"] == ["3"]:
                         self.pane_text = sample("claude-idle-done.txt")
@@ -706,14 +730,15 @@ class Focus(unittest.TestCase):
 class FakeIpod:
     """The device end of PodLink on a pty master."""
 
-    def __init__(self):
+    def __init__(self, max_message=4096):
         self.master, slave = pty.openpty()
+        self.max_message = max_message
         self.path = os.ttyname(slave)
         self.slave = slave
         self.decoder = podlink.Decoder()
         self.messages = []
         self.seq = 1
-        self.write(podlink.HELLO, struct.pack("<HI", 1, 4096))
+        self.write(podlink.HELLO, struct.pack("<HI", 1, max_message))
 
     def write(self, kind, payload=b"", seq=None):
         if seq is None:
@@ -729,7 +754,7 @@ class FakeIpod:
                 continue
             for frame in self.decoder.feed(os.read(self.master, 4096)):
                 if frame.type == podlink.OPEN:
-                    self.write(podlink.OPEN, frame.payload, seq=frame.seq)
+                    self.write(podlink.OPEN, struct.pack("<HI", 1, self.max_message), seq=frame.seq)
                 elif frame.type == podlink.PING:
                     self.write(podlink.PONG, frame.payload, seq=frame.seq)
                 elif frame.type == podlink.TEXT:
@@ -763,7 +788,7 @@ class EndToEnd(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.herdr = FakeHerdr(os.path.join(self.tmp.name, "herdr.sock"))
         self.herdr.start()
-        self.ipod = FakeIpod()
+        self.ipod = FakeIpod(getattr(self, "max_message", 4096))
         args = types.SimpleNamespace(socket=self.herdr.path,
                                      port=self.ipod.path, once=False,
                                      state=os.path.join(self.tmp.name,

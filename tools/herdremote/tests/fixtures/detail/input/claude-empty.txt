@@ -1,0 +1,5 @@
+● Current assistant output.
+────────────────────────
+❯
+────────────────────────
+  ⏵⏵ bypass permissions on · esc to interrupt
