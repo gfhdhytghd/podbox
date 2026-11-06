@@ -1,0 +1,87 @@
+COMMAND /home/wilf/data/PodJS/podbox.wt-int/review-artifacts/decode_probe /home/wilf/data/PodJS/podbox.wt-int/review-artifacts/fixtures/alpha.png /home/wilf/data/PodJS/podbox.wt-int/review-artifacts/fixtures/alpha.png.ppm
+EXIT 0
+/home/wilf/data/PodJS/podbox.wt-int/review-artifacts/fixtures/alpha.png: rc=12000 dimensions=100x60
+
+COMMAND /home/wilf/data/PodJS/podbox.wt-int/review-artifacts/decode_probe /home/wilf/data/PodJS/podbox.wt-int/review-artifacts/fixtures/baseline.jpg /home/wilf/data/PodJS/podbox.wt-int/review-artifacts/fixtures/baseline.jpg.ppm
+EXIT 0
+/home/wilf/data/PodJS/podbox.wt-int/review-artifacts/fixtures/baseline.jpg: rc=12000 dimensions=100x60
+
+COMMAND /home/wilf/data/PodJS/podbox.wt-int/review-artifacts/decode_probe /home/wilf/data/PodJS/podbox.wt-int/review-artifacts/fixtures/cmyk.jpg /home/wilf/data/PodJS/podbox.wt-int/review-artifacts/fixtures/cmyk.jpg.ppm
+EXIT 0
+/home/wilf/data/PodJS/podbox.wt-int/review-artifacts/fixtures/cmyk.jpg: rc=12000 dimensions=100x60
+
+COMMAND /home/wilf/data/PodJS/podbox.wt-int/review-artifacts/decode_probe /home/wilf/data/PodJS/podbox.wt-int/review-artifacts/fixtures/exif-first.jpg /home/wilf/data/PodJS/podbox.wt-int/review-artifacts/fixtures/exif-first.jpg.ppm
+EXIT 0
+/home/wilf/data/PodJS/podbox.wt-int/review-artifacts/fixtures/exif-first.jpg: rc=12000 dimensions=60x100
+
+COMMAND /home/wilf/data/PodJS/podbox.wt-int/review-artifacts/decode_probe /home/wilf/data/PodJS/podbox.wt-int/review-artifacts/fixtures/image.gif /home/wilf/data/PodJS/podbox.wt-int/review-artifacts/fixtures/image.gif.ppm
+EXIT 0
+/home/wilf/data/PodJS/podbox.wt-int/review-artifacts/fixtures/image.gif: rc=12000 dimensions=100x60
+
+COMMAND /home/wilf/data/PodJS/podbox.wt-int/review-artifacts/decode_probe /home/wilf/data/PodJS/podbox.wt-int/review-artifacts/fixtures/lossless.webp /home/wilf/data/PodJS/podbox.wt-int/review-artifacts/fixtures/lossless.webp.ppm
+EXIT 4
+/home/wilf/data/PodJS/podbox.wt-int/review-artifacts/fixtures/lossless.webp: rc=-4 dimensions=100x100
+
+COMMAND /home/wilf/data/PodJS/podbox.wt-int/review-artifacts/decode_probe /home/wilf/data/PodJS/podbox.wt-int/review-artifacts/fixtures/lossy.webp /home/wilf/data/PodJS/podbox.wt-int/review-artifacts/fixtures/lossy.webp.ppm
+EXIT 0
+/home/wilf/data/PodJS/podbox.wt-int/review-artifacts/fixtures/lossy.webp: rc=12000 dimensions=100x60
+
+COMMAND /home/wilf/data/PodJS/podbox.wt-int/review-artifacts/decode_probe /home/wilf/data/PodJS/podbox.wt-int/review-artifacts/fixtures/orientation1.jpg /home/wilf/data/PodJS/podbox.wt-int/review-artifacts/fixtures/orientation1.jpg.ppm
+EXIT 0
+/home/wilf/data/PodJS/podbox.wt-int/review-artifacts/fixtures/orientation1.jpg: rc=12000 dimensions=100x60
+
+COMMAND /home/wilf/data/PodJS/podbox.wt-int/review-artifacts/decode_probe /home/wilf/data/PodJS/podbox.wt-int/review-artifacts/fixtures/orientation2.jpg /home/wilf/data/PodJS/podbox.wt-int/review-artifacts/fixtures/orientation2.jpg.ppm
+EXIT 0
+/home/wilf/data/PodJS/podbox.wt-int/review-artifacts/fixtures/orientation2.jpg: rc=12000 dimensions=100x60
+
+COMMAND /home/wilf/data/PodJS/podbox.wt-int/review-artifacts/decode_probe /home/wilf/data/PodJS/podbox.wt-int/review-artifacts/fixtures/orientation3.jpg /home/wilf/data/PodJS/podbox.wt-int/review-artifacts/fixtures/orientation3.jpg.ppm
+EXIT 0
+/home/wilf/data/PodJS/podbox.wt-int/review-artifacts/fixtures/orientation3.jpg: rc=12000 dimensions=100x60
+
+COMMAND /home/wilf/data/PodJS/podbox.wt-int/review-artifacts/decode_probe /home/wilf/data/PodJS/podbox.wt-int/review-artifacts/fixtures/orientation4.jpg /home/wilf/data/PodJS/podbox.wt-int/review-artifacts/fixtures/orientation4.jpg.ppm
+EXIT 0
+/home/wilf/data/PodJS/podbox.wt-int/review-artifacts/fixtures/orientation4.jpg: rc=12000 dimensions=100x60
+
+COMMAND /home/wilf/data/PodJS/podbox.wt-int/review-artifacts/decode_probe /home/wilf/data/PodJS/podbox.wt-int/review-artifacts/fixtures/orientation5.jpg /home/wilf/data/PodJS/podbox.wt-int/review-artifacts/fixtures/orientation5.jpg.ppm
+EXIT 0
+/home/wilf/data/PodJS/podbox.wt-int/review-artifacts/fixtures/orientation5.jpg: rc=12000 dimensions=60x100
+
+COMMAND /home/wilf/data/PodJS/podbox.wt-int/review-artifacts/decode_probe /home/wilf/data/PodJS/podbox.wt-int/review-artifacts/fixtures/orientation6.jpg /home/wilf/data/PodJS/podbox.wt-int/review-artifacts/fixtures/orientation6.jpg.ppm
+EXIT 0
+/home/wilf/data/PodJS/podbox.wt-int/review-artifacts/fixtures/orientation6.jpg: rc=12000 dimensions=60x100
+
+COMMAND /home/wilf/data/PodJS/podbox.wt-int/review-artifacts/decode_probe /home/wilf/data/PodJS/podbox.wt-int/review-artifacts/fixtures/orientation7.jpg /home/wilf/data/PodJS/podbox.wt-int/review-artifacts/fixtures/orientation7.jpg.ppm
+EXIT 0
+/home/wilf/data/PodJS/podbox.wt-int/review-artifacts/fixtures/orientation7.jpg: rc=12000 dimensions=60x100
+
+COMMAND /home/wilf/data/PodJS/podbox.wt-int/review-artifacts/decode_probe /home/wilf/data/PodJS/podbox.wt-int/review-artifacts/fixtures/orientation8.jpg /home/wilf/data/PodJS/podbox.wt-int/review-artifacts/fixtures/orientation8.jpg.ppm
+EXIT 0
+/home/wilf/data/PodJS/podbox.wt-int/review-artifacts/fixtures/orientation8.jpg: rc=12000 dimensions=60x100
+
+COMMAND /home/wilf/data/PodJS/podbox.wt-int/review-artifacts/decode_probe /home/wilf/data/PodJS/podbox.wt-int/review-artifacts/fixtures/progressive.jpg /home/wilf/data/PodJS/podbox.wt-int/review-artifacts/fixtures/progressive.jpg.ppm
+EXIT 0
+/home/wilf/data/PodJS/podbox.wt-int/review-artifacts/fixtures/progressive.jpg: rc=12000 dimensions=100x60
+
+COMMAND /home/wilf/data/PodJS/podbox.wt-int/review-artifacts/decode_probe /home/wilf/data/PodJS/podbox.wt-int/review-artifacts/fixtures/rgb.bmp /home/wilf/data/PodJS/podbox.wt-int/review-artifacts/fixtures/rgb.bmp.ppm
+EXIT 0
+/home/wilf/data/PodJS/podbox.wt-int/review-artifacts/fixtures/rgb.bmp: rc=12000 dimensions=100x60
+
+COMMAND /home/wilf/data/PodJS/podbox.wt-int/review-artifacts/decode_probe /home/wilf/data/PodJS/podbox.wt-int/review-artifacts/fixtures/rgb.png /home/wilf/data/PodJS/podbox.wt-int/review-artifacts/fixtures/rgb.png.ppm
+EXIT 0
+/home/wilf/data/PodJS/podbox.wt-int/review-artifacts/fixtures/rgb.png: rc=12000 dimensions=100x60
+
+COMMAND /home/wilf/data/PodJS/podbox.wt-int/review-artifacts/decode_probe /home/wilf/data/PodJS/podbox.wt-int/review-artifacts/fixtures/baseline.jpg /home/wilf/data/PodJS/podbox.wt-int/review-artifacts/fixtures/baseline.jpg-small-buffer.ppm 1024
+EXIT 4
+/home/wilf/data/PodJS/podbox.wt-int/review-artifacts/fixtures/baseline.jpg: rc=-1 dimensions=100x100
+
+COMMAND /home/wilf/data/PodJS/podbox.wt-int/review-artifacts/decode_probe /home/wilf/data/PodJS/podbox.wt-int/review-artifacts/fixtures/rgb.png /home/wilf/data/PodJS/podbox.wt-int/review-artifacts/fixtures/rgb.png-small-buffer.ppm 1024
+EXIT 4
+/home/wilf/data/PodJS/podbox.wt-int/review-artifacts/fixtures/rgb.png: rc=-1 dimensions=100x100
+
+COMMAND /home/wilf/data/PodJS/podbox.wt-int/review-artifacts/decode_probe /home/wilf/data/PodJS/podbox.wt-int/review-artifacts/fixtures/utf16-apic.bin /home/wilf/data/PodJS/podbox.wt-int/review-artifacts/fixtures/utf16-apic.bin-parsed-offset.ppm 1048576 16
+EXIT 4
+/home/wilf/data/PodJS/podbox.wt-int/review-artifacts/fixtures/utf16-apic.bin: rc=-9 dimensions=100x100
+
+COMMAND /home/wilf/data/PodJS/podbox.wt-int/review-artifacts/decode_probe /home/wilf/data/PodJS/podbox.wt-int/review-artifacts/fixtures/utf16-apic.bin /home/wilf/data/PodJS/podbox.wt-int/review-artifacts/fixtures/utf16-apic.bin-correct-offset.ppm 1048576 18
+EXIT 0
+/home/wilf/data/PodJS/podbox.wt-int/review-artifacts/fixtures/utf16-apic.bin: rc=12000 dimensions=100x60

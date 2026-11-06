@@ -1,0 +1,4 @@
+$ /home/wilf/data/PodJS/podbox.wt-int/rebuild-artifacts/metadata_test /home/wilf/data/PodJS/podbox.wt-int/rebuild-artifacts/fixtures/front.mp3 200 /home/wilf/data/PodJS/podbox.wt-int/rebuild-artifacts/fixtures/covr.bin /home/wilf/data/PodJS/podbox.wt-int/rebuild-artifacts/fixtures/pictures.flac /home/wilf/data/PodJS/podbox.wt-int/rebuild-artifacts/fixtures/pictures.ogg
+F08/F16: full ID3 frame loop selects UTF16 front PNG at exact offset
+F10: MP4 covr recognizes EXIF-first JPEG
+F08: FLAC PICTURE and Vorbis base64 choose front cover and decode PNG

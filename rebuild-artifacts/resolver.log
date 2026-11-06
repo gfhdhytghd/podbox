@@ -1,0 +1,8 @@
+$ /home/wilf/data/PodJS/podbox.wt-int/rebuild-artifacts/resolver_test /home/wilf/data/PodJS/podbox.wt-int/rebuild-artifacts/fixtures /iPod_Control/Music/F38/KBMK.mp3
+F05/F11: corrupt cover falls through to folder PNG
+F05/F11: album-name art, front.jpg and folder.bmp resolve and decode
+F04: external replacement changes revision
+F04: changed embedded byte range invalidates its revision
+per-request cancellation; 100 subsequent independent decodes
+F15: /home/wilf/data/PodJS/ipod/backups/pocketrock-2026-11-02/iPod_Control/Artwork/F1060_1.ithmb at 4710400 320x320 stride=320
+iTunes nonexistent sibling: no folder guess

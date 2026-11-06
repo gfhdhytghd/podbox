@@ -1,0 +1,1 @@
+$ cc -std=gnu11 -g -O1 -fsanitize=address,undefined -fno-omit-frame-pointer /home/wilf/data/PodJS/podbox.wt-int/rebuild-artifacts/references_test.c -o /home/wilf/data/PodJS/podbox.wt-int/rebuild-artifacts/references_test

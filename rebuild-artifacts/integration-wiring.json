@@ -1,0 +1,12 @@
+{
+  "database-group": true,
+  "database-representative": true,
+  "background-per-track": true,
+  "WPS": true,
+  "browser": true,
+  "carousel": true,
+  "palette": true,
+  "accessory": true,
+  "immutable-filter": true,
+  "no-global-hook": true
+}

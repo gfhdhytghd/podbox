@@ -1,0 +1,8 @@
+$ /home/wilf/data/PodJS/podbox.wt-int/rebuild-artifacts/cache_test /music/collision-36995733920352 /music/collision-93781325955296
+F13: full-key collision and normalized-path identity
+F07: 300x100 cache contains into 56x18 without stretching
+F06: checksum corruption and truncation detected and rebuilt
+F09: publication generation changes only for changed references
+F06/F14: disk-full, close and rename errors never publish READY
+F14: byte quota evicts an older derivative
+negative request lifetime expires; new generation invalidates misses
