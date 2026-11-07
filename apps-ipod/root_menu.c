@@ -1813,8 +1813,24 @@ static inline int load_screen(int screen)
             pop_current_activity();
     }
 
+    /* Only MENU takes the caller-dependent way back; context-menu exits and
+     * end-of-playback still keep their own destinations. A main-menu WPS
+     * entry has old_previous == GO_TO_ROOT, including after a reboot. */
+    if (ret_val == GO_TO_WPS_MENU)
+        ret_val = old_previous == GO_TO_ALBUM_COVERS ? GO_TO_PREVIOUS
+                                                    : GO_TO_ROOT;
+
     last_screen = screen;
     if (ret_val == GO_TO_PREVIOUS)
+        last_screen = old_previous;
+    /* The album track list is a one-shot dispatch, not a resumable browser.
+     * Keep its carousel caller when it starts playback, so WPS MENU returns
+     * there without re-entering an unarmed track list. The resume token is
+     * still cancelled in browser(): reopening then selects the playing album.
+     * On that reopen load_screen()'s same-screen guard makes MENU leave the
+     * carousel normally, rather than bouncing through WPS or the track list. */
+    else if (screen == GO_TO_ALBUM_COVERS_TRACKS && ret_val == GO_TO_WPS
+             && old_previous == GO_TO_ALBUM_COVERS)
         last_screen = old_previous;
     return ret_val;
 }

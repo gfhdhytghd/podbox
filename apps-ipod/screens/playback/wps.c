@@ -1018,7 +1018,7 @@ long gui_wps_show(void)
             /* menu key functions */
             case ACTION_WPS_MENU:
                 gwps_leave_wps(true);
-                return GO_TO_ROOT;
+                return GO_TO_WPS_MENU;
                 break;
 
 

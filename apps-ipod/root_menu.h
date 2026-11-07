@@ -40,6 +40,8 @@ enum {
     MENU_ATTACHED_USB = -10,
     MENU_SELECTED_EXIT = -9,
 
+    /* WPS MENU: the dispatcher knows whether Album covers opened playback. */
+    GO_TO_WPS_MENU = -6,
     GO_TO_ROOTITEM_CONTEXT = -5,
     GO_TO_PREVIOUS_MUSIC = -4,
     GO_TO_PREVIOUS_BROWSER = -3,
