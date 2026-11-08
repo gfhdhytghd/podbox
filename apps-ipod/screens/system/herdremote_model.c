@@ -679,3 +679,13 @@ const char *hr_wheel_step(struct hr_wheel *w, long now, int dir, long fast)
         return NULL;
     return dir > 0 ? "wright" : "wleft";
 }
+
+bool hr_usage_over_pace(int pct, int remaining, int period)
+{
+    if (pct <= 0 || remaining < 0 || period <= 0)
+        return false;
+    if (remaining > period)
+        remaining = period;
+    /* pct/100 > (period - remaining)/period, in integers */
+    return (long long)pct * period > 100LL * (period - remaining);
+}

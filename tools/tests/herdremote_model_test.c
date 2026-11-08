@@ -479,6 +479,23 @@ int main(int argc, char **argv)
             junk[j] = alphabet[rand() % (sizeof alphabet - 1)];
         hr_model_apply(&m, junk, n);
     }
+    /* Usage pace: used share against elapsed share of the period */
+    {
+        const int h5 = 5 * 3600, wk = 7 * 86400;
+        assert(!hr_usage_over_pace(50, h5 / 2, h5));      /* equal */
+        assert(hr_usage_over_pace(51, h5 / 2, h5));
+        assert(!hr_usage_over_pace(49, h5 / 2, h5));
+        assert(hr_usage_over_pace(1, h5, h5));            /* start */
+        assert(!hr_usage_over_pace(0, h5, h5));
+        assert(!hr_usage_over_pace(50, -1, h5));          /* unknown reset */
+        assert(!hr_usage_over_pace(50, 100, 0));
+        assert(hr_usage_over_pace(10, wk * 9 / 10 + 1, wk));
+        assert(!hr_usage_over_pace(10, wk * 9 / 10, wk));
+        assert(hr_usage_over_pace(60, 4 * 3600, h5));     /* 5h vs week */
+        assert(!hr_usage_over_pace(60, 4 * 3600, wk));
+        assert(hr_usage_over_pace(5, wk * 2, wk));        /* clamped */
+        assert(!hr_usage_over_pace(100, 0, wk));          /* period over */
+    }
     puts("herdremote_model_test: all passed");
     return 0;
 }

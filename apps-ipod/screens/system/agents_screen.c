@@ -1015,7 +1015,9 @@ static const char *view_title(void)
 #define USE_SOFT    LCD_RGBPACK(216, 216, 216)
 #define USE_DIM     LCD_RGBPACK(189, 189, 189)
 #define USE_WARN    LCD_RGBPACK(255, 183, 77)
+#define USE_PACE    LCD_RGBPACK(255, 214, 0)
 #define USE_FULL    LCD_RGBPACK(255, 110, 110)
+#define USE_WEEK    (7 * 86400)
 #define USE_LINE    21      /* pixels from one text line to the next */
 #define USE_BLOCK   40      /* pixels a service takes */
 
@@ -1096,7 +1098,8 @@ static void text_at(struct screen *d, int x, int y, unsigned colour,
 /* One limit in a cell w wide: its label, a bar, and the used percent and
  * reset time at the cell's right. A bar with no room is left out. */
 static void draw_limit(struct screen *d, int x, int y, int w,
-                       const char *label, int pct, int reset, bool dim)
+                       const char *label, int pct, int reset, int period,
+                       bool dim)
 {
     char r[16], text[24];
     if (pct < 0)
@@ -1116,8 +1119,12 @@ static void draw_limit(struct screen *d, int x, int y, int w,
     d->drawrect(bx, by, bw, bh);
     if (pct > 0)
     {
-        /* Stale only greys a bar that is not near its limit */
-        d->set_foreground(pct >= 95 ? USE_FULL : pct >= 80 ? USE_WARN :
+        /* Stale only greys a bar that is neither full nor ahead of its
+         * period; the shown reset time is counted down like fmt_reset */
+        int left = reset < 0 ? -1
+                   : MAX(0, reset - (current_tick - usage_at) / HZ);
+        d->set_foreground(pct >= 95 ? USE_FULL :
+                          hr_usage_over_pace(pct, left, period) ? USE_PACE :
                           dim ? USE_DIM : USE_TEXT);
         d->fillrect(bx + 1, by + 1, MAX(1, (bw - 2) * pct / 100), bh - 2);
     }
@@ -1156,12 +1163,15 @@ static void draw_service(struct screen *d, int y, int w,
     /* A service with no 5h limit has one bar, the week's, the row wide */
     if (s->h5_pct < 0 && s->h5_reset < 0)
     {
-        draw_limit(d, 0, y, w, "Week", s->wk_pct, s->wk_reset, dim);
+        draw_limit(d, 0, y, w, "Week", s->wk_pct, s->wk_reset,
+                   USE_WEEK, dim);
         return;
     }
     int half = (w - 12) / 2;
-    draw_limit(d, 0, y, half, "5h", s->h5_pct, s->h5_reset, dim);
-    draw_limit(d, w - half, y, half, "wk", s->wk_pct, s->wk_reset, dim);
+    draw_limit(d, 0, y, half, "5h", s->h5_pct, s->h5_reset, 5 * 3600,
+               dim);
+    draw_limit(d, w - half, y, half, "wk", s->wk_pct, s->wk_reset, USE_WEEK,
+               dim);
 }
 
 /* Draw the usage view over the empty list, which has cleared its area */

@@ -169,6 +169,12 @@ int hr_utf8_offset(const char *s, int chars);
  * window that is full. */
 int hr_input_window(int cursor_line, int nlines, int window, int top);
 
+/* Whether a usage bar is ahead of its period: pct (0..100) of the limit is
+ * used while remaining of the period's seconds are left. False for an
+ * unknown remaining (< 0), an unknown period (<= 0) or pct <= 0; a bar
+ * exactly on pace is not ahead. */
+bool hr_usage_over_pace(int pct, int remaining, int period);
+
 /* The tab the Space view shows: index of id in tabs[], 0 for an empty id
  * (the first tab), or -1 when the tabs are not known or id is not among
  * them */
