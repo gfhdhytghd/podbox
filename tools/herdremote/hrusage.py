@@ -696,8 +696,7 @@ class Collector:
             'codex': [('.codex/sessions', '**/*.jsonl'), ('.codex/sessions', '**/*.jsonl.zst')],
             'claude': [('.claude/projects', '**/*.jsonl')],
             'grok': [('.grok/sessions', '*/*/usage.json')],
-            'gemini': [('.gemini/antigravity-cli/brain', '*/.system_generated/logs/transcript.jsonl'),
-                       ('.gemini/tmp', '**/session-*.json')],
+            'gemini': [('.gemini/antigravity-cli/brain', '*/.system_generated/logs/transcript.jsonl')],
         }
         for root, pattern in roots[self.service]:
             base = self.home / root
@@ -759,11 +758,6 @@ class Collector:
                 for model, usage in models.items():
                     key = (data.get('sessionId', file.session), turn.get('turnNumber', i), model)
                     file.events[key] = (at, model, counts(usage, 'grok'))
-        else:
-            for i, msg in enumerate(data.get('messages', [])):
-                if msg.get('tokens'):
-                    key = (data.get('sessionId', file.session), msg.get('id', i))
-                    file.events[key] = (timestamp(msg.get('timestamp')), msg.get('model') or 'unknown', counts(msg['tokens'], 'gemini'))
         self.bytes_read += stat.st_size
         file.signature = sig
 

@@ -132,11 +132,10 @@ class Parsers(unittest.TestCase):
         self.assertEqual(out['usd_milli'], 3)  # Argon: .8 + .06 + 2 = 2.86 milli
         self.assertNotIn('unpriced', out['note'])
 
-    def test_gemini_cli_thinking_and_cached_subsets(self):
+    def test_gemini_cli_sessions_are_ignored(self):
         self.put('.gemini/tmp/project/chats/session-1.json', sample('gemini.json'))
         out = self.collector('gemini').collect(NOW)
-        self.assertEqual(out['tokens'], 1200)
-        self.assertEqual(out['usd_milli'], 3)
+        self.assertEqual(out['tokens'], 0)
 
     def test_incremental_append_partial_line_truncate_rotate(self):
         path = self.put('.claude/projects/p/log.jsonl', sample('claude.jsonl'))
@@ -803,14 +802,14 @@ class ArgonPricing(unittest.TestCase):
         collector.consume(file,record,0)
         self.assertEqual(list(file.events.values())[0][1],'future-unpriced-model')
 
-    def test_standard_gemini_cli_without_model_stays_unpriced(self):
-        data=json.loads(sample('gemini.json'))
-        for message in data['messages']:
-            message.pop('model',None)
-        self.put('.gemini/tmp/p/session-test.json',json.dumps(data))
+    def test_agy_record_without_model_is_priced_as_argon(self):
+        record=json.loads(sample('agy.jsonl').splitlines()[-1])
+        for field in ('model','model_id'):
+            record.pop(field,None)
+        self.put('.gemini/antigravity-cli/brain/s/.system_generated/logs/transcript.jsonl',json.dumps(record)+'\n')
         result=self.collector('gemini').collect(NOW)
-        self.assertEqual((result['tokens'],result['usd_milli']),(1200,0))
-        self.assertIn('unpriced',result['note'])
+        self.assertGreater(result['tokens'],0)
+        self.assertNotIn('unpriced',result['note'])
 
     def test_old_agy_index_repriced_without_rereading_or_version_bump(self):
         path=self.put('.gemini/antigravity-cli/brain/s/.system_generated/logs/transcript.jsonl',sample('agy.jsonl'))
