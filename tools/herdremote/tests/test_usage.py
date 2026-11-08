@@ -256,6 +256,14 @@ class MathProtocol(unittest.TestCase):
         for invalid in (b'us\t1',b'us\nfw\t1\tw1'):
             self.assertIsNone(hrproto.parse_command(invalid))
 
+    def test_age_follows_row_refresh_not_limit_sample(self):
+        # Claude's limits are sampled every 15 minutes; its row refreshes every 20 s.
+        rows = [dict(hrusage.row(s, NOW-5, 'ok', ''), updated_at=NOW-5) for s in hrusage.SERVICES]
+        rows[1].update(sampled_at=NOW-800)
+        self.assertEqual(hrproto.decode(hrproto.usage(rows, NOW))[0], ['U','5','1'])
+        rows[1].update(updated_at=NOW-300)
+        self.assertEqual(hrproto.decode(hrproto.usage(rows, NOW))[0], ['U','300','1'])
+
     def test_all_errors_and_extreme_values_still_fit(self):
         rows = [dict(hrusage.row(s,NOW,'err','x'*4000),tokens=10**400,usd_milli=10**400) for s in hrusage.SERVICES]
         payload = hrproto.usage(rows,NOW)

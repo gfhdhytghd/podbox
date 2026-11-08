@@ -214,7 +214,9 @@ def usage(items, now):
         if state not in ("ok", "tok", "none", "err"):
             state = "err"
         any_success |= state != "err"
-        oldest = min(oldest, item.get("sampled_at", now))
+        # Age is the row's refresh time. A limit sampled long ago stays
+        # fresh here: Claude is probed every 15 minutes.
+        oldest = min(oldest, item.get("updated_at", item.get("sampled_at", now)))
         fields = ["P", service, state]
         for prefix in ("h5", "wk"):
             pct = item.get(prefix + "_pct")
