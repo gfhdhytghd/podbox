@@ -1116,8 +1116,9 @@ static void draw_limit(struct screen *d, int x, int y, int w,
     d->drawrect(bx, by, bw, bh);
     if (pct > 0)
     {
-        d->set_foreground(dim ? USE_DIM : pct >= 95 ? USE_FULL :
-                          pct >= 80 ? USE_WARN : USE_TEXT);
+        /* Stale only greys a bar that is not near its limit */
+        d->set_foreground(pct >= 95 ? USE_FULL : pct >= 80 ? USE_WARN :
+                          dim ? USE_DIM : USE_TEXT);
         d->fillrect(bx + 1, by + 1, MAX(1, (bw - 2) * pct / 100), bh - 2);
     }
 }
