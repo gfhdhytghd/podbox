@@ -60,6 +60,8 @@
 #include "core_alloc.h"
 #include "file.h"
 #include "storage.h"
+#include "usb.h"
+#include "system/bg_task.h"
 #include "ata_idle_notify.h"         /* DISK_EVENT_SPINUP */
 #include "string-extra.h"
 #include "metadata/art_cache.h"      /* the palette's own source */
@@ -975,8 +977,7 @@ static int palette_dim(void)
 static bool read_folder_palette(unsigned int hash, int dim,
                                 struct found_palette *out)
 {
-    /* Static, and only touched under palette_lock: the storage thread's
-     * stack has room for the open() below, not for this as well. */
+    /* Shared by audio and background prefetch, under palette_lock. */
     static char aat[MAX_PATH];
     struct art_cache_header hdr;
     struct bitmap bmp;
@@ -1408,15 +1409,14 @@ static void track_change_cb(unsigned short id, void *param)
 /* A track about to play: work out its palette now if the disk is running,
  * rather than at the track change -- with the screen dark that read would land
  * on the first render after it wakes and hold the screen up for a spin-up.
- * Runs on the audio and storage threads, so a disk that is not running is left
+ * Runs on the audio and background threads, so a disk that is not running is left
  * alone: a spin-up here stalls playback's queue. The first candidate that
  * reads is the one palette_from_cache() would settle on too. */
 static void prefetch_path(const char *track_path, unsigned int artist)
 {
-    /* Static for the storage thread's stack, as in read_folder_palette().
-     * Shared safely: nothing between the copy and palette_candidates()
-     * finishing with it yields. */
-    static char path[MAX_PATH];
+    /* Palette resolution can yield. Each caller owns its path while the
+     * audio and background threads prefetch concurrently. */
+    char path[MAX_PATH];
     struct found_palette p;
     unsigned int cand[2];
     unsigned int miss_key;
@@ -1482,27 +1482,43 @@ static void prefetch_cb(unsigned short id, void *param)
     }
 }
 
-/* The disk about to sleep, on the storage thread: the last moment a read
- * costs no spin-up. Every track buffered ahead is covered here, for those
- * whose decoding started with the disk asleep. Static because an
- * mp3entry is too big for the storage thread's stack, and buffered tracks
- * only: audio_peek_track() looks an unbuffered one up in the playlist and
- * the database, deeper than that stack goes. One fewer than the slots, which
- * leaves the playing track's own standing until a dark screen shows it. */
-static void prefetch_idle_cb(unsigned short id, void *param)
+/* Best-effort idle prefetch runs on bgtask's decoder-sized stack. Palette
+ * lookup and thumbnail validation stay off the storage stack. Recheck
+ * the disk and USB here: the worker may not run until after ATA has slept
+ * or a host has requested the disk. Never spin it up for palette prefetch. */
+static void prefetch_idle_work(const struct queue_event *ev)
 {
     static struct mp3entry id3;
 
-    (void)id;
-    (void)param;
-    if (!global_settings.dynamic_colors || palette_dim() == 0)
+    (void)ev;
+    if (!global_settings.dynamic_colors || usb_host_wants_storage() ||
+        !storage_disk_is_active() || palette_dim() == 0)
         return;
     for (int offset = 1; offset < PREFETCH_SLOTS; offset++)
     {
-        if (!audio_peek_buffered_track(&id3, offset))
+        if (usb_host_wants_storage() || !storage_disk_is_active() ||
+            !audio_peek_buffered_track(&id3, offset))
             break;
         prefetch_path(id3.path, id3_artist_key(&id3));
     }
+}
+
+/* Event-only task: no periodic tick, registration, allocation or new thread. */
+#define PALETTE_EVENT_IDLE 3
+static struct bg_task palette_idle_task = {
+    .name = "palette prefetch",
+    .handle_event = prefetch_idle_work,
+};
+
+/* Storage thread: post only. Do not inspect tracks, resolve owners, validate
+ * thumbnails, wait for the worker or perform any filesystem I/O here. */
+static void prefetch_idle_cb(unsigned short id, void *param)
+{
+    (void)id;
+    (void)param;
+    if (global_settings.dynamic_colors &&
+        !bg_task_queued(&palette_idle_task, PALETTE_EVENT_IDLE))
+        bg_task_post(&palette_idle_task, PALETTE_EVENT_IDLE);
 }
 
 static void save_all_theme_colors(void)

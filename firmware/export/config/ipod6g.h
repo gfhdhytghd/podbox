@@ -304,3 +304,6 @@
 
 /* Define this if a programmable hotkey is mapped */
 #define HAVE_HOTKEY
+
+/* Idle database/log callbacks include rename and dynamic path traversal. */
+#define ATA_THREAD_STACK_SIZE (DEFAULT_STACK_SIZE * 4)

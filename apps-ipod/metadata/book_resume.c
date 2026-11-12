@@ -861,12 +861,12 @@ static struct bg_task idle_save_task = {
     .tick = idle_save_tick,
 };
 
-/* Storage thread. The callback is one-shot, so the tick arms it again. */
+/* Storage thread. The tick arms this only while a book is playing. Do not
+ * repeat book_playing() here: metadata fallback can reach the playlist/UI.
+ * book_resume_save() owns the checks and pending end-of-book writes. */
 static void storage_idle(void)
 {
     idle_armed = false;
-    if (!book_playing())
-        return;
     bg_task_post(&idle_save_task, IDLE_SAVE_EVENT);
     semaphore_wait(&idle_saved, IDLE_SAVE_WAIT);
 }

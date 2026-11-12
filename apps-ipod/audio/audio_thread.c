@@ -40,7 +40,9 @@ struct event_queue audio_queue SHAREDBSS_ATTR;
 static struct queue_sender_list audio_queue_sender_list SHAREDBSS_ATTR;
 
 /* Audio thread */
-static long audio_stack[(DEFAULT_STACK_SIZE + 0x1000)/sizeof(long)];
+/* Folder advance can enter USB settings/font reload as well as palette
+ * prefetch. Leave headroom for filesystem frames below those callers. */
+static long audio_stack[(DEFAULT_STACK_SIZE + 0x2000)/sizeof(long)];
 static const char audio_thread_name[] = "audio";
 unsigned int audio_thread_id = 0;
 

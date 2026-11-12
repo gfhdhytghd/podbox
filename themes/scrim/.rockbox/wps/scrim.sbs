@@ -63,31 +63,34 @@
 # - Title. While a screen holds the PodLink link the title is shorter by the
 #   link icon (the L copies), as a title redraw clears its whole viewport.
 %Vl(Chrome,0,0,320,35,3)
-%Vl(ChromeGT,10,8,200,20,3)%Vf(000000)
+%Vl(ChromeGT,10,8,174,20,3)%Vf(000000)
 %?if(%cs,=,10)<%Sx(Quick Settings)|%?if(%Lt,=,Rockbox)<PodBox|%?and(%if(%LH,=,album),%if(%ft(themes/scrim.preferences,album header:),!=,off))<%Sx(Album)|%s%Lt%?and(%if(%LH,=,album),%if(%ft(themes/scrim.preferences,album header:),=,off),%LH(year))< %(%LH(year)%)>>>>
-%Vl(ChromeNT,10,8,152,20,3)%Vf(000000)
+%Vl(ChromeNT,10,8,126,20,3)%Vf(000000)
 %?if(%cs,=,10)<%Sx(Quick Settings)|%?if(%Lt,=,Rockbox)<PodBox|%?and(%if(%LH,=,album),%if(%ft(themes/scrim.preferences,album header:),!=,off))<%Sx(Album)|%s%Lt%?and(%if(%LH,=,album),%if(%ft(themes/scrim.preferences,album header:),=,off),%LH(year))< %(%LH(year)%)>>>>
-%Vl(ChromeGL,10,8,166,20,3)%Vf(000000)
+%Vl(ChromeGL,10,8,140,20,3)%Vf(000000)
 %?if(%cs,=,10)<%Sx(Quick Settings)|%?if(%Lt,=,Rockbox)<PodBox|%?and(%if(%LH,=,album),%if(%ft(themes/scrim.preferences,album header:),!=,off))<%Sx(Album)|%s%Lt%?and(%if(%LH,=,album),%if(%ft(themes/scrim.preferences,album header:),=,off),%LH(year))< %(%LH(year)%)>>>>
-%Vl(ChromeNL,10,8,118,20,3)%Vf(000000)
+%Vl(ChromeNL,10,8,92,20,3)%Vf(000000)
 %?if(%cs,=,10)<%Sx(Quick Settings)|%?if(%Lt,=,Rockbox)<PodBox|%?and(%if(%LH,=,album),%if(%ft(themes/scrim.preferences,album header:),!=,off))<%Sx(Album)|%s%Lt%?and(%if(%LH,=,album),%if(%ft(themes/scrim.preferences,album header:),=,off),%LH(year))< %(%LH(year)%)>>>>
 #
 # - Status icons. The charging glyphs mirror the level glyphs band for
 #   band; one covers levels 2 to 5, so it stands in four places.
 %Vl(Chrome,289,5,24,24,2)%Vf(000000)
-%ar%?or(%lh,%lb,%lw)<%?la<á|â|ã|ä|å|æ|ç|è>|%?bc<%?bl<·|·|¸|¸|¸|¸|¹|º>|%?bl<1|1|2|3|4|5|6|7>>>
+%ar%?bc<%?bl<·|·|¸|¸|¸|¸|¹|º>|%?bl<1|1|2|3|4|5|6|7>>
+# Busy work has its own cell; charging remains visible during a cache rebuild.
+%Vl(Chrome,263,5,24,24,2)%Vf(000000)
+%?or(%lh,%lb,%lw)<%?la<á|â|ã|ä|å|æ|ç|è>>
 #
 # - PodLink, while a screen holds the link: outlined while it waits for the
 #   computer, filled once a session is open
-%Vl(ChromeGL,176,5,24,24,2)%Vf(000000)
+%Vl(ChromeGL,150,5,24,24,2)%Vf(000000)
 %?lk<_|`|>
-%Vl(ChromeNL,128,5,24,24,2)%Vf(000000)
+%Vl(ChromeNL,102,5,24,24,2)%Vf(000000)
 %?lk<_|`|>
 #
 # - Time, and the battery percentage when the display is numeric
-%Vl(ChromeG,210,8,70,24,1)%Vf(000000)
+%Vl(ChromeG,184,8,70,24,1)%Vf(000000)
 %ar%?cf<%cH:%cM|%cl:%cM %cP>
-%Vl(ChromeN,162,8,118,24,1)%Vf(000000)
+%Vl(ChromeN,136,8,118,24,1)%Vf(000000)
 %ar%?cf<%cH:%cM|%cl:%cM %cP>  %bl%%
 #
 # List viewport

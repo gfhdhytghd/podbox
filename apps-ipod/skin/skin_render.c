@@ -475,7 +475,10 @@ static void draw_spectrum_segments(struct screen *display,
         display->set_foreground(bar_fg);
 }
 
-static bool do_non_text_tags(struct gui_wps *gwps, struct skin_draw_info *info,
+/* skin_render_line recurses for each conditional. Keep drawing scratch out
+ * of every recursive frame, including branches that only produce text. */
+static bool __attribute__((noinline))
+do_non_text_tags(struct gui_wps *gwps, struct skin_draw_info *info,
                              struct skin_element *element)
 {
     struct wps_token *token = (struct wps_token *)SKINOFFSETTOPTR(skin_buffer, element->data);

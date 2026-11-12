@@ -1104,10 +1104,16 @@ bool list_do_action(int context, int timeout,
 {
     timeout = list_do_action_timeout(lists, timeout);
     keyclick_set_callback(gui_synclist_keyclick_callback, lists);
+    bool inhibited = skin_flush_inhibited();
     skin_inhibit_flush(true);
     *action = get_action(context, timeout);
-    skin_inhibit_flush(false);
-    return gui_synclist_do_button(lists, action);
+    skin_inhibit_flush(inhibited);
+    bool handled = gui_synclist_do_button(lists, action);
+    /* ACTION_NONE need not redraw the list. The status bar still rendered
+     * during get_action, and its dirty rectangles must reach the LCD. */
+    if (!inhibited)
+        skin_flush_dirty();
+    return handled;
 }
 
 /* Simple use list implementation */
