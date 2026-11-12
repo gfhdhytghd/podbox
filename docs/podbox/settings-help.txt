@@ -1350,10 +1350,21 @@ Any button press resets the countdown, so the timer only fires once you have
 actually stopped touching it.
 
 [usb charging]
-Whether the player charges from a USB connection. Force charges even from a
-port that does not advertise enough current, which not every port tolerates.
-On an iPod Classic, Force also tops up a nearly full battery from a plain
-charger, which it otherwise leaves alone.
+Whether the player charges from a USB connection. On enables charging at the
+100 mA input limit before configuration and at 500 mA once a host grants it.
+The input limit includes the player's own consumption. The charge controller
+reduces battery current to leave room for that load. Charging continues with
+the backlight off. Off disables USB battery charging. Suspend blocks USB input.
+Force also selects 500 mA after ten seconds without host requests; this is an
+explicit override, not a host grant.
+
+An automatic weak-source guard watches the charge-status pin at both input
+limits, with the light on or off. Eight qualified short dropouts in 90 seconds
+pause battery charging for one minute; repeated patterns double the pause up
+to 30 minutes. USB still powers the player during the pause. Charging retries
+automatically. A steady full-battery or thermal-pause indication does not
+trigger the guard. Unplugging, applying charging settings or ten minutes of
+stable charging resets the back-off. Debug > Battery shows the guard state.
 
 [car adapter mode]
 Pauses when external power is cut and resumes when it returns, so the player

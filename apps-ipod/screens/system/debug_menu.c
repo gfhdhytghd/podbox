@@ -704,6 +704,38 @@ static bool view_battery(void)
                          charger_inserted() ? "present" : "absent");
                 lcd_putsf(0, 4, "USB current limit: %d mA",
                           usb_charging_maxcurrent());
+#if defined(IPOD_6G)
+                /* Read output latches as well as software policy: an input
+                 * left in SUSP cannot charge even if maxcurrent says 100. */
+                unsigned int gpio_b = PDAT(11), gpio_c = PDAT(12);
+                unsigned int input = power_thread_inputs;
+                lcd_putsf(0, 5, "Input: USB %d / dock %d",
+                          !!(input & POWER_INPUT_USB),
+                          !!(input & POWER_INPUT_MAIN_CHARGER));
+                lcd_putsf(0, 6, "Host grant: %d mA",
+                          usb_charging_current_grant());
+                lcd_putsf(0, 7, "Charge enabled: %d C1:%d C2:%d",
+                          !(gpio_c & 6), !!(gpio_c & 2), !!(gpio_c & 4));
+                lcd_putsf(0, 8, "USB setting: %s",
+                          usb_charging_get_mode() == USB_CHARGING_DISABLE ?
+                          "off" : usb_charging_get_mode() == USB_CHARGING_FORCE ?
+                          "force" : "on");
+                lcd_putsf(0, 9, "SUSP: %d HPWR: %d",
+                          !!(gpio_b & 0x80), !!(gpio_b & 0x40));
+                lcd_putsf(0, 10, "Battery: %d mV", y);
+                lcd_putsf(0, 11, "USB state: %d (0=D 1=A 2=C)",
+                          usb_core_get_state());
+                lcd_putsf(0, 12, "Host: %d Stack: %d",
+                          usb_host_is_present(), usb_core_is_enabled());
+                struct usb_charge_guard_status guard;
+                usb_charging_guard_get_status(&guard);
+                lcd_putsf(0, 13, "Dropouts: %u/8 Triggers: %u",
+                          guard.dropouts, guard.triggers);
+                lcd_putsf(0, 14, "Backoff: %us Next: %us",
+                          guard.backoff_seconds, guard.next_backoff_seconds);
+                lcd_putsf(0, 15, "Last trigger: %lds (boot)",
+                          guard.last_trigger_tick / HZ);
+#endif
 #endif /* target type */
                 break;
             case 2: /* voltage deltas: */

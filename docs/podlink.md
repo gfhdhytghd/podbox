@@ -133,3 +133,94 @@ The CDC driver does not request a CPU boost. Legacy serial logging remains
 disabled by default. Idle logging returns without taking the serial mutex;
 interrupt-context log messages are not forwarded to CDC on targets that expose
 `is_thread_context()`. PodLink always excludes log messages from its stream.
+
+## Charging in PodLink
+
+PodLink and normal storage use the same saved **Charge During USB Connection**
+setting (**Settings > Battery & Power**). With `on` or `force`, both request 500 mA
+(`bMaxPower` byte 250, in 2 mA units). With `off`, both request 100 mA
+(`bMaxPower` byte 50) and do not enable USB battery charging, including the
+unconfigured state. The default is `on`; an absent `usb charging`
+line in config.cfg uses that default. Select the setting before reconnecting:
+a host's existing 100 mA
+grant is not raised merely because the setting changed.
+
+Before configuration, the device restores USB input to 100 mA on every attach,
+including after boot settings or unplug set SUSP. With `on`, charging is enabled
+at that safe limit even before a computer configures us, with the backlight
+lit or dark. Charge Only keeps the USB device stack running in the normal UI
+so the computer can configure a 500 mA grant. `force`
+retains the explicit 500 mA no-host override after ten seconds. This override
+is not a negotiated host grant. A configured
+500 mA source enables the iPod6g charger and reports a charging source to the
+battery status bar, without waiting for a storage-mode handover. Suspend
+disables USB input and battery charging; resume restores the existing grant.
+Unplug clears the grant. A bus reset requires configuration again. The
+LTC4066 still controls battery charge termination and the battery's charge
+current (the 100/500 mA limit includes device consumption).
+
+On iPod6g, an automatic weak-source guard monitors `!CHRG` every 10 ms whenever
+USB battery charging is enabled, including the normal UI, PodLink, wall
+chargers and the powered USB host-DAC path. A qualified dropout is 20-490 ms
+high following at least one second low. Eight completed dropouts in a rolling
+90-second window inhibit battery charging for 1, 2, 4, 8, 16, then at most
+30 minutes on successive detections. SUSP and HPWR retain the applicable USB
+budget during this back-off; the battery icon reports USB power without a
+charging source. Each pause ends in an automatic retry. Unplugging or applying
+the charging setting resets the guard; ten continuous minutes of low `!CHRG`
+reset the next delay to one minute. Suspend stops sampling and clears partial
+pulse evidence; resume observes a new trace and respects any remaining pause.
+
+A steady high pin, including full-battery indication or a long thermal pause,
+does not trigger the guard. Repeated load/source/temperature transitions that
+match the same short-pulse signature can cause a temporary false trigger;
+`!CHRG` does not identify a DAC or measure battery current. A configured MFi DAC
+can receive a 500 mA grant just like a PC, so enumeration never bypasses the
+guard. The separate USB host-audio path is known via `usb_host_probe_active()`;
+its external-VBUS 500 mA allowance is not a computer's negotiated grant.
+**System > Debug > Battery** shows C1/C2, SUSP, HPWR, host grant, USB device
+state (0=Default, 1=Address, 2=Configured), host presence, stack enabled,
+dropout/trigger counts, remaining back-off, next delay and last trigger time
+in seconds since boot. No physical charging result follows from these fields.
+
+Run the production USB core and iPod6g power code against RAM-backed hardware:
+
+```sh
+cc -std=gnu11 -Wall -Wextra -Werror -g -fsanitize=address,undefined \
+  -ffunction-sections -fdata-sections -Wl,--gc-sections \
+  -Itools/tests/charging_stubs -Ifirmware/export -Ifirmware/usbstack \
+  tools/tests/usb_charging_test.c -o /tmp/podlink-usb-charging-test
+/tmp/podlink-usb-charging-test
+```
+
+Physical acceptance remains separate. With a partially discharged battery,
+select `on`, unplug, enter **System > PodLink**, and reconnect.
+Read the host descriptor using `lsusb -v -d 05ac:1261`: expect `bMaxPower 500mA`,
+one configuration, and CDC interfaces in link mode. Find the matching USB
+device directory under `/sys/bus/usb/devices` by its `idVendor=05ac` and
+`idProduct=1261`; read its `bMaxPower` and `bConfigurationValue` (expect `500mA`
+and `1`). Record the directory and serial. Do not select a tty by number.
+
+Confirm the battery animation while the link is active. For a separate
+diagnostic run, select Settings > System > Show Debug Menu = Yes, then open
+System > Debug > Battery. Scroll down once from the voltage graph to the status
+page. Record `USB current limit`, `Input: USB / dock`, `Host grant`,
+`Charge enabled` (C1/C2 gates), `USB setting`, `SUSP`, `HPWR`, battery mV,
+and `Pwr status` (the hardware !CHRG pin). `Host grant` is zero before host
+configuration or during suspend, reset and unplug; force/DAC allowances are
+shown only in `USB current limit`. These are policy and GPIO observations,
+not a battery current meter. Opening that
+screen requires leaving PodLink, so do not label it a simultaneous observation
+of PodLink charging. A full battery may correctly stop charging.
+Repeat after the screen/backlight has been off for at least 15 seconds.
+Check unplug/replug without leaving PodLink. Press Menu to return to storage.
+Confirm storage enumeration and charging.
+Repeat with `off` (100 mA, no host battery charging) and `force` (500 mA after
+configuration). For each setting, unplug/replug before reading descriptors.
+
+Run a separate host suspend/resume check.
+During suspend, confirm charger input/charge stops with a USB power meter;
+after resume, confirm the prior grant, battery animation and link recovery.
+Keep the normal storage volume unmounted for its suspend comparison.
+Do not infer physical charge current or link throughput from host-only tests.
+
