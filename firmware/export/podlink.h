@@ -23,7 +23,7 @@
 #include <stdint.h>
 
 #define PODLINK_VERSION 1
-#define PODLINK_MAX_MESSAGE 4096
+#define PODLINK_MAX_MESSAGE 16384
 #define PODLINK_HEADER 16
 #define PODLINK_FRAME_MAX (PODLINK_HEADER + PODLINK_MAX_MESSAGE + 4)
 enum podlink_type
