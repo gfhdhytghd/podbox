@@ -151,6 +151,8 @@ screens/system/art_check.c
 screens/system/bg_task_info.c
 #ifdef HAVE_USB_PODLINK
 screens/system/podlink_screen.c
+screens/system/agents_screen.c
+screens/system/herdremote_model.c
 #endif
 screens/system/db_search.c
 screens/system/file_search.c

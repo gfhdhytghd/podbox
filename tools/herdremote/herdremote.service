@@ -1,0 +1,29 @@
+# User service for HerdRemote. Install:
+#   cp herdremote.service ~/.config/systemd/user/
+#   systemctl --user edit herdremote     (set ExecStart to your checkout)
+#   systemctl --user enable --now herdremote
+#   journalctl --user -u herdremote -f
+[Unit]
+Description=HerdRemote: herdr agents on the iPod's System > Agents
+After=default.target
+
+[Service]
+ExecStart=/usr/bin/python3 %h/podbox/tools/herdremote/herdremote.py
+# Without this the journal gets the log in blocks, minutes late
+Environment=PYTHONUNBUFFERED=1
+# Inherit DBUS_SESSION_BUS_ADDRESS from the graphical session's user manager.
+# Optional voice config (CLI options override these):
+# Environment=HERDREMOTE_VOICE_FOCUS=off
+# Environment=HERDREMOTE_VOICE_MAX_HOLD=120
+# Environment=HERDREMOTE_VOICE_METHOD=HoldStart
+# Usage keyboard tool: auto (ydotool then wtype), ydotool, or wtype.
+# Environment=HERDREMOTE_KEY_TOOL=auto
+# Wheel arrows only, integer 1..8; effective count capped at 32.
+# Environment=HERDREMOTE_KEY_SCALE=1
+# The list order's times: ~/.local/state/herdremote/order.json
+StateDirectory=herdremote
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

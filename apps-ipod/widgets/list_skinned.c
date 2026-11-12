@@ -37,6 +37,17 @@
 static struct listitem_viewport_cfg *listcfg[NB_SCREENS] = {NULL};
 static struct gui_synclist *current_list;
 
+/* Where the last draw put each %Ls, main screen only, for
+ * skinlist_redraw_status(). status_list is the list they belong to. */
+#define STATUS_CELLS 16
+static struct status_cell {
+    struct viewport vp;
+    int item;
+} status_cells[STATUS_CELLS];
+static int nstatus_cells;
+static struct gui_synclist *status_list;
+static bool drawing_rows;
+
 /* Working copies of the selected row's viewports, one per %Vl in the layout.
  *
  * The selected row cannot draw straight from the skin buffer the way the other
@@ -50,7 +61,7 @@ static struct gui_synclist *current_list;
  * and skinlist_set_cfg() retires the lines when that changes. A layout with
  * more viewports than slots reuses the last one, which is the old behaviour for
  * the overflow only. */
-#define SKINLIST_SEL_VPS 12
+#define SKINLIST_SEL_VPS 32
 static struct skin_viewport selected_vps[NB_SCREENS][SKINLIST_SEL_VPS];
 
 static void skinlist_stop_selected_scroll(enum screen_type screen)
@@ -376,6 +387,44 @@ bool skinlist_get_item(struct screen *display, struct gui_synclist *list, int x,
     return true;
 }
 
+void skinlist_draw_status(struct screen *display, struct viewport *vp)
+{
+    struct gui_synclist *list = current_list;
+    if (!drawing_rows || !list || !list->callback_draw_status)
+        return;
+    if (list->callback_draw_status(current_drawing_line, list->data,
+                                   display, vp) &&
+        display->screen_type == SCREEN_MAIN && nstatus_cells < STATUS_CELLS)
+    {
+        status_cells[nstatus_cells].vp = *vp;
+        status_cells[nstatus_cells].item = current_drawing_line;
+        nstatus_cells++;
+    }
+    display->set_viewport(vp);
+    display->set_foreground(vp->fg_pattern);
+    display->set_background(vp->bg_pattern);
+}
+
+int skinlist_redraw_status(struct screen *display, struct gui_synclist *list)
+{
+    if (display->screen_type != SCREEN_MAIN || list != status_list ||
+        !list->callback_draw_status)
+        return 0;
+    for (int i = 0; i < nstatus_cells; i++)
+    {
+        struct viewport *vp = &status_cells[i].vp;
+        struct viewport *old = display->set_viewport(vp);
+        display->set_foreground(vp->fg_pattern);
+        display->set_background(vp->bg_pattern);
+        display->clear_viewport();
+        list->callback_draw_status(status_cells[i].item, list->data,
+                                   display, vp);
+        display->update_viewport();
+        display->set_viewport(old);
+    }
+    return nstatus_cells;
+}
+
 bool skinlist_draw(struct screen *display, struct gui_synclist *list)
 {
     int cur_line, display_lines;
@@ -384,6 +433,12 @@ bool skinlist_draw(struct screen *display, struct gui_synclist *list)
     char* label = NULL;
     const int list_start_item = list->start_item[screen];
     struct gui_wps wps;
+    /* A draw that falls back to the core renderer leaves no %Ls behind */
+    if (screen == SCREEN_MAIN)
+    {
+        nstatus_cells = 0;
+        status_list = list;
+    }
     if (!skinlist_is_configured(screen, list))
         return false;
 
@@ -448,6 +503,7 @@ bool skinlist_draw(struct screen *display, struct gui_synclist *list)
     if (row_height > listcfg[screen]->height && list->nb_items > 0)
         row_top = (parent->height % row_height) / 2;
 
+    drawing_rows = true;
     for (cur_line = 0; cur_line < display_lines; cur_line++)
     {
         struct skin_element* viewport;
@@ -572,6 +628,7 @@ bool skinlist_draw(struct screen *display, struct gui_synclist *list)
         }
         row_top += row_height;
     }
+    drawing_rows = false;
     current_column = -1;
     current_row = -1;
     parent->fg_pattern = dc_saved_fg;

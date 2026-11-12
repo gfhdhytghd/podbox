@@ -1,0 +1,12 @@
+
+  Working directory · resume
+  Session = latest cwd recorded in the resumed session
+  Current = your current working directory
+
+› 1. Use session directory (/home/wilf/data/viewflow-wt/headlessws)
+  2. Use current directory (/home/wilf/data/Hackathon)
+  3. Always use session directory
+  4. Always use current directory
+
+  enter continue · esc use session · ^c quit
+

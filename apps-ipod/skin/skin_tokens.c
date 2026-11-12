@@ -58,6 +58,9 @@
 #include "ata.h" /* ata_disk_isssd() */
 #endif
 #include "audio/ab_repeat.h"
+#ifdef HAVE_USB_PODLINK
+#include "podlink.h"
+#endif
 #include "lang.h"
 #include "system/activity.h"
 #include "system/format_time.h"
@@ -1782,6 +1785,12 @@ const char *get_token_value(struct gui_wps *gwps,
              * with the browser on top, not a menu over it */
             const char *s;
 
+            /* Every row there that can be chosen has one */
+            if (get_current_activity() == ACTIVITY_AGENTS)
+            {
+                s = skinlist_get_selected_description(buf, buf_size);
+                return s && *s ? s : NULL;
+            }
             if (!browser_showing_episodes()
                 || get_current_activity() != ACTIVITY_DATABASEBROWSER)
                 return NULL;
@@ -1810,6 +1819,9 @@ const char *get_token_value(struct gui_wps *gwps,
                 return NULL;
             return browser_header_text(lh->field, buf, buf_size);
         }
+        case SKIN_TOKEN_LIST_ITEM_STATUS:
+            /* A picture, drawn in skin_render.c; as a value it is empty */
+            return NULL;
         case SKIN_TOKEN_LIST_HAS_ART_ROWS:
             /* List-level, and answerable before anything draws -- which is what
              * lets it choose between two %Lb where %?La cannot. */
@@ -2114,6 +2126,26 @@ const char *get_token_value(struct gui_wps *gwps,
             /* generic busy flag for other long-running work; set via
              * ui_set_working() -- no built-in driver yet */
             return sb_show_working() ? "w" : NULL;
+        case SKIN_TOKEN_PODLINK:
+            /* Link mode: absent when off, so normal USB shows nothing; 1
+             * while it waits for the computer, 2 once a session is open */
+#ifdef HAVE_USB_PODLINK
+            switch (podlink_state())
+            {
+                case PODLINK_CLOSED:
+                    return NULL;
+                case PODLINK_CONNECTED:
+                    if (intval)
+                        *intval = 2;
+                    return "o";
+                default:
+                    if (intval)
+                        *intval = 1;
+                    return "w";
+            }
+#else
+            return NULL;
+#endif
         case SKIN_TOKEN_LOADING_ANIM:
             /* Time-cycling frame index for an animated "busy" spinner. A theme
              * conditional (%?la<f0|f1|...|fN>) maps it to N glyphs; the frame

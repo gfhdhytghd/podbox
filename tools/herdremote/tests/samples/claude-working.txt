@@ -1,0 +1,14 @@
+
+● Running 1 shell command · 1m 38s…
+  ⎿  $ timeout 240 bash -c 'until herdr pane read w0:p6 --source visible --lines 6 | grep -E "GPT-" | grep -vqE "Ultrafast|Fast"; do sleep 5; done';
+     echo rc=$?; herdr pane read w0:p6 --source visible --lines 60 | grep -E 'GPT-|Service tier|↳' | tail -5 (1m 37s)
+     (ctrl+b to run in background)
+
+✽ Deciphering… (2m 34s · ↓ 3.7k tokens)
+  ⎿  Tip: Use /btw to ask a quick side question without interrupting Claude's current work
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── 手机手表互测进度 ─
+❯
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ bypass permissions on · 1 shell · esc to interrupt · ← 2 agents · ↓ to manage
+

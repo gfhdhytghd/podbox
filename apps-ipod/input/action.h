@@ -99,6 +99,7 @@ enum {
     CONTEXT_SPIKE, /* uses the ACTION_SPIKE_ defines below */
     CONTEXT_MUSIC_QUIZ, /* uses the ACTION_QUIZ_ defines below */
     CONTEXT_LIST_SELECT, /* a list in selecting mode: ACTION_LS_ */
+    CONTEXT_AGENTS, /* System > Agents: a list with ACTION_AGENTS_TALK */
     LAST_CONTEXT_PLACEHOLDER,
 };
 
@@ -329,6 +330,11 @@ enum {
     /* A list's selecting mode (widgets/list_select.c) */
     ACTION_LS_TOGGLE,
     ACTION_LS_MENU,
+
+    /* System > Agents: Play down and up, hold to talk */
+    ACTION_AGENTS_TALK,
+    ACTION_AGENTS_TALK_END,
+    ACTION_AGENTS_LEFT_REPEAT,
 
     LAST_ACTION_PLACEHOLDER, /* custom actions should be this + something */
 };

@@ -1,0 +1,7 @@
+● Explored 1 file
+────────────────────────
+> /stat
+────────────────────────
+> /statusline          Toggle the statusline
+  /agy-customizations  Comprehensive guide
+  ↑/↓ Navigate · enter Select · tab Complete

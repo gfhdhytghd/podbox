@@ -1,0 +1,1 @@
+{"sessionId":"fixture-gemini","projectHash":"scrubbed","startTime":"2026-11-04T12:00:00Z","lastUpdated":"2026-11-04T12:01:00Z","messages":[{"id":"message-1","timestamp":"2026-11-04T12:01:00Z","type":"gemini","model":"gemini-3.1-pro-preview","tokens":{"input":1000,"cached":600,"output":100,"thoughts":100,"tool":0,"total":1200}}]}

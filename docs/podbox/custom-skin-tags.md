@@ -53,6 +53,7 @@ preceding group repeats.
 | [`%lb`](#lb--background-index-building) | background work running |
 | [`%lw`](#lw--foreground-work-in-progress) | foreground work running |
 | [`%la`](#la--animated-spinner-frame) | spinner frame |
+| [`%lk`](#lk--podlink-link-mode) | PodLink link mode |
 | [`%La(offset[, nowrap, radius, filters])`](#laoffset-nowrap-radius-filters--list-item-album-art) | a list row's cover |
 | [`%Ld`](#ld--does-the-list-on-screen-draw-art-rows) | does this list draw art rows |
 | [`%Lb(label, width, height[, tile, art height])`](#lblabel-width-height-tile-art-height--art-row-height) | changed: art row height |
@@ -62,6 +63,7 @@ preceding group repeats.
 | [`%Lr`](#lr--where-a-number-setting-sits-in-its-range) | where a number setting sits in its range |
 | [`%LP`](#lp--is-this-row-playing) | is this row playing |
 | [`%Lm`](#lm--is-this-row-ticked) | is this row ticked |
+| [`%Ls`](#ls--the-rows-status-picture) | a row's status picture |
 | [`%LH([field])`](#lhfield--the-lists-header) | the album over its track list |
 | [`%Cl(...[, filters, radius, label])`](#changed-behaviour-cl-album-art-filters-rounded-corners-and-names) | changed: art filters, corners, names |
 | [`%Cd([name][, x, y, width, height])`](#showing-part-of-an-artwork) | changed: named art, a window of it |
@@ -512,6 +514,25 @@ If a frame is a literal `|`, escape it as `%|` — a bare one ends the branch:
 %?la<%||/|-|\>       # an ASCII spinner: | / - \
 ```
 
+### `%lk` — PodLink link mode
+
+Whether a screen that talks to a computer over USB -- **System > PodLink** or
+**System > Agents** -- holds the link. As a conditional it takes the first
+branch while the player waits for the computer, the second once a session is
+open, and the last when link mode is off, which includes an ordinary USB disk
+connection:
+
+```
+%?lk<...waiting...|...connected...|>
+```
+
+Scrim draws `_` (outlined) and `` ` `` (filled) from `24x24-icons.fnt`.
+
+Keep the icon's viewport clear of the title's. A list redraws its title on
+every wheel move, which clears the title viewport, and an icon inside it
+vanishes until the next full skin update. Scrim switches to a shorter title
+viewport while `%lk` is set: `%?lk<%Vd(TitleShort)|%Vd(TitleShort)|%Vd(Title)>`.
+
 ---
 
 ## List rows
@@ -730,6 +751,26 @@ draw a mark at all, and `%if(%Lm,=,m)` which one:
 A skin that uses `%Lm` anywhere draws the marks itself. Every other skin gets
 `[x] ` or `[ ] ` in front of the row's text while it is selecting, which also
 means a comparison of `%LT` with a row's name does not match then.
+
+---
+
+### `%Ls` — the row's status picture
+
+Marks the viewport where the screen draws a row's status itself. On
+**System > Agents** that is the coloured status dot of a workspace or agent,
+which breathes while it works and blinks while it waits for you. Put `%Ls`
+in a row viewport the size of the picture, on the line the viewport's other
+content is on. The screen draws over the viewport's background after the
+line, and redraws only that area while it animates.
+
+```
+%Vl(Rows,2,3,24,24,2)
+%?if(%cs,=,40)<%Ls>
+```
+
+On every other list `%Ls` draws nothing, and as a value it is always
+empty. A skin without it gets no dots: on Agents, the row's text only, or
+whatever the skin draws from `%Lv`.
 
 ---
 
@@ -1228,6 +1269,7 @@ upstream does not. The numbers never change; a new screen gets the next one.
 | 7 files | 17 time and date | 27 documents | 37 listening progress |
 | 8 database | 18 bookmarks | 28 images | 38 book shelf |
 | 9 *unused* | 19 shortcuts | 29 search | 39 music quiz |
+| | | | 40 agents |
 
 3, 4, 9, 11 and 14 never come up in this build. A skin may test them; it will
 never match.

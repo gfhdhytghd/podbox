@@ -21,6 +21,8 @@ static const struct tag_info custom_tags[] =
     TAG(SKIN_TOKEN_VLED_BUILDING,      "lb", "",     SKIN_REFRESH_DYNAMIC),
     TAG(SKIN_TOKEN_VLED_WORKING,       "lw", "",     SKIN_REFRESH_DYNAMIC),
     TAG(SKIN_TOKEN_LOADING_ANIM,       "la", "",     SKIN_REFRESH_DYNAMIC),
+    /* PodLink's link mode: %?lk<waiting|open|off> */
+    TAG(SKIN_TOKEN_PODLINK,            "lk", "",     SKIN_REFRESH_DYNAMIC),
     /* The alignment argument is lowercase 's', not 'S', so it accepts '-'.
      * Arguments are positional and the parser rejects '-' on an uppercase type
      * outright, so an uppercase one here would make `gap` unreachable without
@@ -132,10 +134,16 @@ static const struct tag_info custom_tags[] =
 
     /* The selected row's description, wherever it is used: on a list of
      * podcast episodes, the episode's comment tag, or a space where it has
-     * none -- so %?LD says the list is one -- and empty on any other list
+     * none -- so %?LD says the list is one; on System > Agents, the selected
+     * agent's kind, title and last activity; and empty on any other list
      * and on one whose episodes have no notes. For a %wt below the list.
      * (%LC is upstream's row column.) */
     TAG(SKIN_TOKEN_LIST_SELECTED_DESC, "LD", "",           SKIN_REFRESH_DYNAMIC),
+
+    /* The row's status picture, drawn by the list's owner into the viewport
+     * %Ls is in, after the line; nothing on a list that draws none. Today
+     * that is System > Agents' status dots, which animate. */
+    TAG(SKIN_TOKEN_LIST_ITEM_STATUS,   "Ls", "",           SKIN_REFRESH_DYNAMIC),
 
     /* The list's header, from the browser's state as %LD is: bare, the kind
      * of header ("album") or empty; with a field word, that field (name,

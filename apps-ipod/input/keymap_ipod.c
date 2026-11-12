@@ -119,6 +119,19 @@ static const struct button_mapping button_context_music_quiz[]  = {
     LAST_ITEM_IN_LIST
 }; /* button_context_music_quiz */
 
+/* System > Agents is a list where Play is held to talk to the computer: the
+ * press and the release each act, and the repeats in between are claimed so
+ * nothing else sees them. A release is taken whatever came before it, so a
+ * hold always ends. LEFT held repeats Backspace in the usage view. */
+static const struct button_mapping button_context_agents[]  = {
+    { ACTION_AGENTS_TALK,       BUTTON_PLAY,                 BUTTON_NONE },
+    { ACTION_NONE,              BUTTON_PLAY|BUTTON_REPEAT,   BUTTON_NONE },
+    { ACTION_AGENTS_TALK_END,   BUTTON_PLAY|BUTTON_REL,      BUTTON_NONE },
+    { ACTION_AGENTS_LEFT_REPEAT, BUTTON_LEFT|BUTTON_REPEAT,  BUTTON_NONE },
+
+    LAST_ITEM_IN_LIST__NEXTLIST(CONTEXT_LIST)
+}; /* button_context_agents */
+
 static const struct button_mapping button_context_tree[]  = {
     { ACTION_TREE_WPS,          BUTTON_PLAY|BUTTON_REL,      BUTTON_PLAY },
     /* Held PLAY does nothing here either. This context serves the main menu as
@@ -537,6 +550,9 @@ const struct button_mapping* get_context_mapping(int context)
 
         case CONTEXT_LIST_SELECT:
             return button_context_list_select;
+
+        case CONTEXT_AGENTS:
+            return button_context_agents;
 
         case CONTEXT_SETTINGS_TIME:
         case CONTEXT_SETTINGS_COLOURCHOOSER:

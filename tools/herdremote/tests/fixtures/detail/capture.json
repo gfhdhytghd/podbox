@@ -1,0 +1,63 @@
+{
+  "captured_at": "2026-11-06T07:52:11.215267+00:00",
+  "source": "pane.read source=recent",
+  "grok_candidates": 0,
+  "fixtures": [
+    {
+      "file": "claude-working.txt",
+      "pane": "w9:pE",
+      "kind": "claude",
+      "status": "working",
+      "title": "Hymission PR 缺陷与作者意图",
+      "sha256": "a580874025df69ca93fe6566cab97afd54fa90dbec747298c403131174f5d190",
+      "line_count": 77
+    },
+    {
+      "file": "claude-done.txt",
+      "pane": "wC:p1",
+      "kind": "claude",
+      "status": "done",
+      "title": "手机手表互测进度 (3)",
+      "sha256": "96d7b9ec18629acb991b237285eb704f8e87abbe9662577a2d92a92b8230f3c1",
+      "line_count": 80
+    },
+    {
+      "file": "claude-idle.txt",
+      "pane": "w7:p1",
+      "kind": "claude",
+      "status": "idle",
+      "title": "防御性编程与防呆设计",
+      "sha256": "1067a93972025d4c4ad91571f54ebd9f7f2ae7e981b81bf27156a1a7a291a060",
+      "line_count": 80
+    },
+    {
+      "file": "codex-working.txt",
+      "pane": "w7:p0",
+      "kind": "codex",
+      "status": "working",
+      "title": "Complete 3x3 cursor handoff matrix | handoff",
+      "sha256": "33c56c4f95561783bba45fcaaed87e81bccf6ee2dbc98ebdf846c542108433c4",
+      "line_count": 37
+    },
+    {
+      "file": "codex-done.txt",
+      "pane": "wC:p5S",
+      "kind": "codex",
+      "status": "done",
+      "title": "执行 T-APKSIZE 任务 | podjs-watch",
+      "sha256": "03bf8020617bd7fcb50946c55ebcaa1747b0c909bb7f91e0a5e82a444420824c",
+      "line_count": 80
+    },
+    {
+      "file": "agy-working.txt",
+      "pane": "wG:p3P",
+      "kind": "agy",
+      "status": "working",
+      "title": "agy --model gemini-4-argon-high --mode accept-edits --effort high",
+      "sha256": "face74991d561878f7fe9ad505803233470b6c350d7ae7c008b2e1b11fbe6aed",
+      "requested_lines": 240,
+      "line_count": 240
+    }
+  ],
+  "redactions": "Home/user paths, private IPv4 addresses, email addresses, token-like values and credential assignments anonymized; original text is not retained."
+}

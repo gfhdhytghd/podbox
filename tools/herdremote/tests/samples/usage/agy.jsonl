@@ -1,0 +1,2 @@
+{"step_index":0,"type":"USER_INPUT","status":"DONE","created_at":"2026-11-04T12:00:00Z","content":"scrubbed"}
+{"step_index":1,"source":"CASCADE","type":"PLANNER_RESPONSE","status":"DONE","created_at":"2026-11-04T12:01:00Z","input_tokens":1000,"cache_read_tokens":600,"output_tokens":200,"thinking":"scrubbed","tool_calls":[]}

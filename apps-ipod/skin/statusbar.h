@@ -25,6 +25,7 @@ struct status_info {
     int repeat;
     bool inserted;
     bool usb_inserted;
+    int podlink; /* 0 off, 1 waiting for the computer, 2 open */
     bool battery_state;
     bool shuffle;
     bool keylock;

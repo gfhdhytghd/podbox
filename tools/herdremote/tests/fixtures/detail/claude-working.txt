@@ -1,0 +1,77 @@
+  改动
+
+  - src/plugin/main.cpp — 新增 luaDispatcherName，makeLuaDispatcher 在闭包之后压入调度器名称再调用 wrapDispatcher。19 行新增。
+  - 提交：40b236b（master）、820ab88（hyprland-master 合并 master）。两个分支已推送到 origin。
+  - Codex（portal-fix）完成任务后，我关闭了它的 tab，删除了临时 worktree .wt/portal-hyprland-master。
+
+  验证
+
+  - 已验证：修复后的 .so 在当前 Hyprland（55ce619）加载成功。hyprctl plugins list 显示 hypr-agent-portal 0.4.0。
+  - 已验证：portalctl guard 返回 {"available": true, "source": "native-plugin", ...}；portalctl panic status 返回 ok；portalctl screenshot 生成
+    6144×3456 的 PNG。Codex 和我各独立跑了一遍，结果一致。
+  - 已验证：合入 master 的内容与 Codex 的补丁逐行相同。
+  - 失败：ctest 21 项中 hypr-agent-portal-security 1 项失败 — 断言 assert outcomes.count("created") == 1 and outcomes.count("rejected") ==
+    1。该失败在修改前已存在，与本次改动无关。
+  - 未验证：pointer、keyboard、session、manage、approval 这 5 个调度器 — 它们走同一条修复后的路径，但我没有向真实窗口发输入。
+
+  未做
+
+  - hyprpm 持久化 — /var/cache/hyprpm/wilf 归 root，hyprpm 需要密码。重启 Hyprland 后插件会消失。
+
+  待确认
+
+  重启前，你必须执行以下命令，插件才会持久化。先卸载我手动加载的那份，再让 hyprpm 重建：
+
+  hyprctl plugin unload /home/user/data/hyprland_plugins/.wt/portal-hyprland-master/build-fix/libhypr-agent-portal.so
+  hyprpm update
+  hyprpm disable hypr-agent-protal
+  hyprpm enable hypr-agent-portal
+  hyprpm reload
+  python3 /home/user/data/hyprland_plugins/Hypr-ComputerUse-MCP/scripts/hypr-agent-portalctl guard
+
+  未确认：hyprpm update 的构建步骤含 ctest，上述 security 用例失败是否会让 hyprpm 判定构建失败 — 11-05
+  的缓存在同样有失败用例时构建成功，所以我判断可以通过。失败时把输出发我。
+
+✻ Brewed for 2m 17s · done 2:40
+
+❯ [Image #1] 不该开的CI，关掉它
+  ⎿  [Image #1]
+
+● 进行中：查看 Hypr-Agent-Portal 仓库的 GitHub workflow，关闭失败的 CI。
+
+  Ran 1 shell command
+
+❯ 顺便检查一下其他仓库里存不存在这种东西
+
+  Ran 4 shell commands
+
+❯ Hyper Agent Protocol，请你修改完之后提交一下。然后你也可以现在就让codex测试一下它是否可用。
+
+  Ran 2 shell commands
+
+● Write(~/.claude/jobs/example/tmp/ta[REDACTED_TOKEN].md)
+  ⎿  Wrote 45 lines to ~/.claude/jobs/example/tmp/ta[REDACTED_TOKEN].md
+       1 # Task: end-to-end usability test of hypr-agent-portal through its MCP tools
+       2
+       3 You are a tester. Use ONLY the MCP server named `hypr-agent-protal` (it is the hypr-agent-portal
+       4 bridge; the name is a legacy alias) that is already configured in your Codex config. Do NOT use
+       5 Browser MCP, node_repl, or shell workarounds for the actions below; the point is to verify the
+       6 MCP tools themselves. You may use the shell only to read files and to write the report.
+       7
+       8 Repo (read-only reference): /home/user/data/hyprland_plugins/Hypr-ComputerUse-MCP
+       9 The plugin was just fixed and is loaded in the running Hyprland. Do not rebuild, reload,
+      10 unload, or modify anything in the repo. Do not run hyprpm.
+     … +35 lines
+
+● Running 2 shell commands…
+  ⎿  $ herdr agent start portal-test --kind codex --pane w9:p1N -- -m gpt-6.1-sol -c model_reasoning_effort=high -c service_tier=fast 2>&1 |
+     tail -c 120; echo; sleep 4; herdr agent prompt portal-test "Read and execute the task card at
+     /home/user/.claude/jobs/example/tmp/ta[REDACTED_TOKEN].md. U…
+
+· Synthesizing… (2m 21s · ↓ 6.6k tokens)
+  ⎿  Tip: Use /btw to ask a quick side question without interrupting Claude's current work
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────── Hymission PR 缺陷与作者意图 ─
+❯
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← 3 agents · esc to interrupt

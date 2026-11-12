@@ -1,0 +1,40 @@
+
+❯ UI test 2. Call AskUserQuestion once with TWO questions: Q1 header 'Size' question 'Which size?' options Small,
+  Medium, Large. Q2 header 'Toppings' question 'Which toppings?' multiSelect true, options Cheese, Olives, Basil. Then
+  reply with the answers only.
+
+● User answered Claude's questions:
+  ⎿  · Which size? → Medium
+     · Which toppings? → Cheese, Basil
+
+● Size: Medium
+  Toppings: Cheese, Basil
+
+✻ Brewed for 2s · done 4:06
+
+❯ UI test 3. Use the Bash tool to run exactly: echo herdremote-permission-test > note.txt   (do not use any other
+  tool).
+
+  Ran 1 shell command
+
+● Ran echo herdremote-permission-test > note.txt with Bash. It completed with no output, so note.txt in the working
+  directory should now contain herdremote-permission-test. I did not read the file back to confirm.
+
+✻ Worked for 2s · done 4:06
+
+❯ UI test 4. Use the Write tool to create poem.txt containing one line: hello ipod. Do not use Bash.
+
+● Write(poem.txt)
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ Create file
+ poem.txt
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+  1 hello ipod
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+ Do you want to create poem.txt?
+ ❯ 1. Yes
+   2. Yes, and switch to accept edits (auto-approve file edits and common file commands) for this session (shift+tab)
+   3. No
+
+ Esc to cancel · Tab to amend

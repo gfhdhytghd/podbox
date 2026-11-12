@@ -1,0 +1,80 @@
+    里记录当前窗格的环境变量指向了另一个项目（HERDR_PANE_ID=wC:p1），而我用了"在当前窗格旁边拆分"的方式开窗格。以后开窗格会直接指定 viewflow
+    工作区里的目标窗格，这条已经写进了记忆。
+
+  两个 Codex 正在做的事
+
+  1. samesys（w7:pZ）：修复 Mac↔Mac 滚动放大（M2）、Linux↔Linux 触控板滚动失效（L2）和 Windows 按键丢失（W3），并把连接配置测试补成 3×3
+     全组合。
+  2. handoff（w7:p0）：给 9 种有序组合都补上光标接管，每条连接的两端都可以控制对方。分支是 handoff-matrix，按阶段提交：设计、Linux
+     接收端、Windows 发送端、Mac 发送端、连接配置、测试、文档。
+     - 我按你的测试安排给它补充了要求：Mac↔Mac 代码要尽量简单、尽量复用已测过的部分，还要附上给测试人员的逐步检查清单；Linux↔Linux
+       给你一份简短清单。
+
+  Windows 虚拟机
+
+  - 进行中：两台精简版 Windows 11（tiny11）正在下载系统镜像，用 Docker 运行，配置在 /home/user/data/viewflow-wt/winvm/compose.yaml。
+    - vfwin-a：4 GB 内存。Windows 程序只能在 Windows 上用 MSVC 编译，所以由它负责编译。
+    - vfwin-b：2 GB 内存。
+    - 两台在同一个内部网络里（172.31.77.11 和 172.31.77.12），可以直接互连。
+    - 网页控制台和远程桌面端口只绑在本机 127.0.0.1 上，网页控制台是 8016 / 8026。
+    - 你原来的 WinApps 虚拟机没有动。
+  - 未确认：Docker 警告磁盘所在的 btrfs 文件系统可能干扰 Windows 安装。装好后我会检查；安装失败的话，就换成关闭写时复制的目录重装。
+  - 未开始：在虚拟机里安装编译工具（Visual Studio Build Tools、Rust、Python）。要等系统装好。
+  - 编译时 vfwin-a 的 4 GB 内存可能不够。到时候我只在编译期间临时调大，编译完再调回 4 GB。
+
+✻ Worked for 3m 5s · done 2:42 · 1 shell still running
+
+※ recap: 目标是让 3×3 全部系统组合都能互连，两端都能接管对方的光标。两个 Codex 正在修缺陷和实现光标接管，两台 Windows
+  虚拟机正在安装；下一步是系统装好后，在虚拟机里装编译工具，再编译和测试 Windows 端。 (disable recaps in /config)
+
+❯ 我们QEMU好像有一个已经在运行的大虚拟机了
+
+  Ran 3 shell commands
+
+❯ 你可以尝试用编译
+
+  Ran 5 shell commands
+
+❯ 你需要的话，我允许你在本次绘画中使用sudo，密码是admin。
+
+  Listed 1 directory, ran 2 shell commands, searched memories
+
+● Key login works as windowsvm\user. Checking build tools in that VM.
+
+  Ran 3 shell commands
+
+● 我会用你那台大的 Windows 虚拟机（Windows-AutoShop）编译 Windows 程序。两台精简版 Windows 虚拟机现在各只分 2 GB 内存，只用来跑 Windows↔Windows
+  测试。
+
+  编译机：Windows-AutoShop
+
+  - 已验证：能用你现有的 SSH 密钥登录 192.0.2.1，账户是 windowsvm\user，不需要密码。
+  - 我把这台虚拟机的 SSH 主机密钥单独存在 /home/user/data/viewflow-wt/winvm/known_hosts，你的 ~/.ssh/known_hosts 没有改。
+  - 已验证：编译工具基本齐全。
+    - 已装：Visual Studio 2022 Build Tools、Rust（cargo）、Git。
+    - 以前的编译目录还在：C:\Users\wilf\viewflow-build-636e9e01…。
+    - cmake 和 ninja 不在命令搜索路径里，打开 VS 开发者环境后应该就能用。编译时我会确认。
+  - 资源：C 盘剩 35 GB，空闲内存 13.1 GB。这台虚拟机本身分了 24 GB 内存和 10 个核心。
+
+  测试机：两台精简版 Windows 11
+
+  - 进行中：两台都在下载系统镜像，各 2 GB 内存、2 个核心。原来给 vfwin-a 的 4 GB 是为编译准备的，现在已经调回 2 GB。
+
+  sudo
+
+  - 目前不需要 sudo。需要时，我只会在命令里通过标准输入临时传入密码，不写进任何文件。
+
+  顺带确认的一件事
+
+  - 已验证：之前 viewflowd 每 5 秒报一次的 mTLS handshake failed 来自 192.0.2.1，也就是这台 AutoShop 虚拟机。它的网卡 MAC 地址
+    52:54:00:12:34:56 和 QEMU 启动参数里的一致。
+  - 原因未确认。这台虚拟机里的 Viewflow 一直用对方不认的证书在连接。确认方法：检查虚拟机里 Viewflow 的配对和证书状态。
+
+  Codex 那边把 Windows 端的代码写好后，我会在 AutoShop 里编译，再拷到两台测试机上测 Windows↔Windows。
+
+✻ Worked for 1m 18s · done 2:48 · 1 shell still running
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── 防御性编程与防呆设计 ─
+❯
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ bypass permissions on · ← 4 agents · 1 shell · ↓ to manage

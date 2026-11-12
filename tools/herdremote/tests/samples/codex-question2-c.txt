@@ -1,0 +1,40 @@
+
+
+? Pick a fruit
+
+  • Apple
+  • Pear
+  • Plum
+
+? Pick a fruit
+
+  • Apple
+  • Pear
+  • Plum
+
+  Worked for 11s • 4:08 AM
+
+
+› UI test 3. Call request_user_input once: question 'Pick a colour', options Red, Green, Blue. Then reply with the
+  answer only.
+
+
+? Pick a colour
+
+  • Red
+  • Green
+  • Blue
+
+
+↪ Re: Pick a colour
+
+  Green
+
+
+• Working (18s • esc to interrupt)
+
+
+› Ask Codex to do anything
+
+  GPT-6.1-Sol medium · /tmp/claude-1000/-home-wilf-data-PodJS-podbox-wt-herdr/f8880791-6aa7-4335-baad-1c7a95ca0be1/scr…
+  ← for agents · ? for shortcuts                                                             ⚠ 2 warnings · f2 to view

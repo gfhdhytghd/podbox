@@ -1,0 +1,80 @@
+  └ (no output)
+    + Show details
+
+• Ran tail -10 /home/user/data/OPPO_Develop/.codex-tmp/cloud-v2/evidence/T-APKSIZE/rereview-fixes/logs/runtime-legacy-focused.log; cat platforms/android/runtime/build/test-results/testReleaseUnitTest/TEST-dev.podjs.runtime.PodManifestConsumersTest.xml | head -6; tail -6 /home/user/data/O…
+  └  289 expect() calls
+    Ran 44 tests across 4 files. [1210.00ms]
+    11:`logs/framework-full-final.log` is the final complete framework command after the integration-test source registration. The earlier successful complete run remains in framework-full.log. `logs/app-full.log` and app-tsc.log cover the fixed app source using the isolated framework. N…
+    + 21 lines (^t to expand)
+
+• Ran CARGO_BUILD_JOBS=4 cargo test -p podjs-runtime --lib legacy_large_package_manifest_still_validates_and_mounts -- --nocapture > /home/user/data/OPPO_Develop/.codex-tmp/cloud-v2/evidence/T-APKSIZE/rereview-fixes/logs/runtime-legacy-focused.log 2>&1
+  └ (no output)
+
+• Ran python3 - <<'PY' …
+  └ Negative control detected both regressions; restored R3 sources pass final focused checks
+    + Show details
+
+• Ran tail -16 /home/user/data/OPPO_Develop/.codex-tmp/cloud-v2/evidence/T-APKSIZE/rereview-fixes/logs/runtime-legacy-focused.log; tail -8 /home/user/data/OPPO_Develop/.codex-tmp/cloud-v2/evidence/T-APKSIZE/rereview-fixes/logs/android-negative-control.log; cat /home/user/data/OPPO_Develo…
+  └         try {PodWorkManagerTakeover.readConfig(new ByteArrayInputStream(padded(compact,65537)),true,base.getPackageName());fail("oversized compact metadata accepted");}
+            catch(java.io.IOException expected) {assertEquals("legacy_config_invalid",expected.getMessage());}
+        }
+    + 152 lines (^t to expand)
+
+• 已验证：Rust 检查通过 4 个目标标识、16 组输入的校验与挂载。Android 对照检查中，换回上轮读取器后，两项回归测试均失败；恢复本次代码后均通过。这证明测试可以检出 R3。
+
+• Ran tail -55 /home/user/data/OPPO_Develop/.codex-tmp/cloud-v2/reports/T-APKSIZE.md; rg -n 'fn .*' crates/podjs-runtime/src/lib.rs | sed -n '64,84p'; git diff --check; cat /home/user/data/OPPO_Develop/.codex-tmp/cloud-v2/evidence/T-APKSIZE/rereview-fixes/android-negative-control.json; t…
+  └ 71    2    tests/android-manifest/dev/podjs/runtime/PodManifestConsumersTest.java
+    3    1    tests/java/dev/podjs/runtime/PackageManifestReadTest.java
+    20    1    tests/package-manifest.test.ts
+    + 98 lines (^t to expand)
+
+• Ran CARGO_BUILD_JOBS=4 cargo test -p podjs-runtime --lib package > /home/user/data/OPPO_Develop/.codex-tmp/cloud-v2/evidence/T-APKSIZE/rereview-fixes/logs/runtime-package-focused.log 2>&1 …
+  └ (no output)
+    + Show details
+
+• Ran python3 - <<'PY' …
+  └ Rust production package validator exactly matches 7c07336
+    + Show details
+
+• Exited (status 1) tail -10 /home/user/data/OPPO_Develop/.codex-tmp/cloud-v2/evidence/T-APKSIZE/rereview-fixes/logs/runtime-package-focused.log; tail -7 /home/user/data/OPPO_Develop/.codex-tmp/cloud-v2/evidence/T-APKSIZE/rereview-fixes/logs/runtime-revalidation-focused.log; git diff --c…
+  └ 19M    platforms/android/runtime/build
+    124K    platforms/android/build
+    1.5M    platforms/android/.gradle
+    + 77 lines (^t to expand)
+
+• 已完成：R3 代码修复与聚焦检查。后台和伴侣同步的 128 KiB 限制保持不变。包身份不匹配与校验失败后的挂载拒绝检查通过。现在提交 apksize，并追加「复审修复」报告。
+
+• Ran git add crates/podjs-runtime/include/podjs_runtime.h crates/podjs-runtime/src/lib.rs docs/apk-size.md packages/cli/src/package-manifest.ts platforms/android/runtime/src/main/cpp/jni_bridge.cpp platforms/android/runtime/src/main/java/dev/podjs/runtime/PodManifest.java platforms/andr…
+  └ [apksize 388fee9] fix(packaging): preserve legacy manifest reader compatibility
+     12 files changed, 144 insertions(+), 57 deletions(-)
+    388fee9d70a4cb9e0731c5e4689da7981f2fc3ec
+    + Show details
+
+• Ran python3 - <<'PY' …
+  └ Report appended: /home/user/data/OPPO_Develop/.codex-tmp/cloud-v2/reports/T-APKSIZE.md
+    + Show details
+
+• Ran python3 - <<'PY' …
+  └ ## apksize
+    388fee9d70a4cb9e0731c5e4689da7981f2fc3ec fix(packaging): preserve legacy manifest reader compatibility
+    1022:## 14. 复审修复（R3；聚焦检查阶段）
+    + 1 line (^t to expand)
+
+• 已完成：R3 修复与聚焦检查。提交到 apksize：388fee9。
+
+  • 恢复运行时原有读取范围。
+  • 保留构建端 128 KiB 预算。
+  • 已验证：200 KiB 旧 manifest 可读、可挂载，旧调度回退成功。
+  • 已验证：超预算构建仍遭拒。
+
+  报告「复审修复」节 (/home/user/data/OPPO_Develop/.codex-tmp/cloud-v2/reports/T-APKSIZE.md:1022)包含测试与证据。
+
+  等待 R4 提交号，再 rebase 并跑全量。本轮没有 push 或合并。工作树干净。
+
+  Worked for 6m 36s • 2:48 AM
+
+
+› Ask Codex to do anything
+
+  GPT-6.1-Sol high Fast · ~/data/PodJS/podjs-watch · 执行 T-APKSIZE 任务
+  ? for shortcuts                                                                                                                                                                                                                                                      ⚠ 3 warnings · f2 to view

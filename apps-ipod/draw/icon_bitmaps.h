@@ -61,6 +61,8 @@ enum icons_7x8 {
     Icon_DownArrow,
     Icon_UpArrow,
     Icon_RepeatAB,
+    Icon_PodLinkWait,
+    Icon_PodLinkOpen,
     Icon7x8Last
 };
 
