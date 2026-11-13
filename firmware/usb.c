@@ -154,10 +154,6 @@ bool usb_confirm_blocked(void)
 
 bool usb_confirm_pending(uint32_t epoch)
 {
-#ifdef IPOD_ACCESSORY_PROTOCOL
-    if (iap_accessory_present())
-        return false;
-#endif
     return usb_detect() == USB_INSERTED && epoch == usb_consent.epoch &&
            usb_consent.state == USB_CONSENT_PROMPT;
 }
@@ -176,9 +172,6 @@ static int usb_confirm_tmo_cb(struct timeout *tmo)
 
 void usb_confirm_configured(bool configured, bool accessory, bool probe_iap)
 {
-#ifdef IPOD_ACCESSORY_PROTOCOL
-    accessory |= iap_accessory_present();
-#endif
     usb_confirm_has_config = configured;
     if (!configured || accessory)
     {
@@ -960,9 +953,6 @@ static void NORETURN_ATTR usb_thread(void)
                     usb_iap2_car_seen()
 #else
                     false
-#endif
-#ifdef IPOD_ACCESSORY_PROTOCOL
-                    || iap_accessory_present()
 #endif
                     ))
                 button_queue_post(SYS_USB_CONFIRM, usb_consent.epoch);

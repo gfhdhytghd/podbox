@@ -72,7 +72,7 @@ static int confirm_action(struct dialog *d, int action, void *data)
             }
             break;
         default:
-            if (action & SYS_EVENT)
+            if (action & (SYS_EVENT | BUTTON_MULTIMEDIA))
                 default_event_handler(action);
             break;
     }
@@ -86,6 +86,22 @@ static const struct button_mapping *confirm_keymap(int context)
         { ACTION_STD_OK, BUTTON_SELECT, BUTTON_NONE },
         { ACTION_STD_CANCEL, BUTTON_MENU, BUTTON_NONE },
         { ACTION_WPS_PLAY, BUTTON_PLAY | BUTTON_REL, BUTTON_PLAY },
+#ifdef IPOD_ACCESSORY_PROTOCOL
+        { ACTION_WPS_PLAY, BUTTON_RC_PLAY | BUTTON_REL, BUTTON_RC_PLAY },
+        { BUTTON_MULTIMEDIA_STOP, BUTTON_RC_PLAY | BUTTON_REPEAT,
+          BUTTON_RC_PLAY },
+        { BUTTON_MULTIMEDIA_STOP, BUTTON_RC_STOP, BUTTON_NONE },
+        { BUTTON_MULTIMEDIA_NEXT, BUTTON_RC_RIGHT | BUTTON_REL,
+          BUTTON_RC_RIGHT },
+        { BUTTON_MULTIMEDIA_PREV, BUTTON_RC_LEFT | BUTTON_REL,
+          BUTTON_RC_LEFT },
+        { BUTTON_MULTIMEDIA_VOLUME_UP, BUTTON_RC_VOL_UP, BUTTON_NONE },
+        { BUTTON_MULTIMEDIA_VOLUME_UP, BUTTON_RC_VOL_UP | BUTTON_REPEAT,
+          BUTTON_NONE },
+        { BUTTON_MULTIMEDIA_VOLUME_DOWN, BUTTON_RC_VOL_DOWN, BUTTON_NONE },
+        { BUTTON_MULTIMEDIA_VOLUME_DOWN, BUTTON_RC_VOL_DOWN | BUTTON_REPEAT,
+          BUTTON_NONE },
+#endif
         LAST_ITEM_IN_LIST
     };
     return keys;

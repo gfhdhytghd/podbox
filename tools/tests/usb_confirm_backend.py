@@ -35,7 +35,7 @@ static struct event_queue usb_queue;
 static bool usb_confirm_has_config, usb_host_present, cable, car, serial_iap;
 static int prompts, detach_count, attach_count, normal_profiles;
 static int usb_detect(void) { return cable ? USB_INSERTED : USB_EXTRACTED; }
-static bool iap_accessory_present(void) { return serial_iap; }
+bool iap_accessory_present(void) { return serial_iap; }
 static bool usb_iap2_car_seen(void) { return car; }
 static void queue_post(struct event_queue *q, int id, intptr_t data)
 { (void)q; assert(tail < 32); pending[tail++] = (struct event){id, data}; }
@@ -80,8 +80,46 @@ static void tick(void)
     usb_confirm_tmo_cb(&usb_confirm_tmo);
     drain();
 }
+static void serial_case(int arrival, bool connect)
+{
+    begin(false, false);
+    serial_iap = arrival == 0;
+    usb_confirm_configured(false, false, false);
+    usb_host_present = true;
+    usb_confirm_configured(true, false, true);
+    if (arrival == 1)
+        serial_iap = true;
+    printf("serial case %d, connect %d: classification\n", arrival, connect);
+    fflush(stdout);
+    tick();
+    assert(prompts == 1);
+    if (arrival == 2)
+        serial_iap = true;
+    assert(usb_confirm_pending(usb_consent.epoch));
+    /* More frames and repeated SET_CONFIG must not close the question. */
+    usb_confirm_configured(true, false, false); drain();
+    assert(usb_confirm_pending(usb_consent.epoch));
+    assert(prompts == 1 && usb_confirm_blocked());
+    usb_confirm_reply(usb_consent.epoch, connect); drain();
+    assert(!usb_confirm_pending(usb_consent.epoch));
+    assert(usb_confirm_blocked() == !connect);
+    assert(normal_profiles == (int)connect);
+    assert(detach_count == (int)connect && attach_count == (int)connect);
+    assert(serial_iap); /* USB consent does not turn the serial transport off. */
+}
 int main(void)
 {
+#ifdef SERIAL_CASE
+    serial_case(SERIAL_CASE, false);
+    serial_case(SERIAL_CASE, true);
+    return 0;
+#else
+    for (int arrival = 0; arrival < 3; ++arrival)
+    {
+        serial_case(arrival, false);
+        serial_case(arrival, true);
+    }
+#endif
     begin(false, false);
     assert(usb_confirm_blocked());
     usb_confirm_configured(false, false, true); drain();
@@ -107,15 +145,12 @@ int main(void)
     usb_confirm_reply(usb_consent.epoch, true); drain();
     assert(normal_profiles == 1 && detach_count == 1 && attach_count == 1);
     assert(!usb_confirm_blocked());
-    for (int accessory = 0; accessory < 3; ++accessory)
+    for (int accessory = 0; accessory < 2; ++accessory)
     {
         begin(false, false); usb_host_present = true;
         usb_confirm_configured(true, false, true);
         if (accessory == 0) { car = true; tick(); }
         if (accessory == 1) usb_confirm_configured(true, true, false);
-        if (accessory == 2) {
-            serial_iap = true; usb_confirm_configured(true, false, false);
-        }
         drain();
         assert(!prompts && usb_confirm_blocked());
     }
@@ -141,7 +176,18 @@ cmd = ["cc", "-std=gnu11", "-Wall", "-Wextra", "-Werror", "-g",
        "-I" + str(ROOT / "firmware/export"), str(c), "-o", str(OUT / "backend")]
 print(" ".join(cmd), flush=True)
 subprocess.run(cmd, check=True)
-subprocess.run([str(OUT / "backend")], check=True)
+failures = []
+def run_test(binary):
+    result = subprocess.run([str(binary)])
+    if result.returncode:
+        failures.append((binary.name, result.returncode))
+run_test(OUT / "backend")
+for arrival in range(3):
+    binary = OUT / ("serial-" + str(arrival))
+    variant = cmd[:-3] + ["-DSERIAL_CASE=" + str(arrival), str(c), "-o", str(binary)]
+    print(" ".join(variant), flush=True)
+    subprocess.run(variant, check=True)
+    run_test(binary)
 
 ui = (ROOT / "apps-ipod/widgets/usb_confirm.c").read_text()
 callbacks = ui[ui.index("static int confirm_action("):
@@ -152,20 +198,36 @@ ui_ports = r'''
 #include <stdint.h>
 #include <stdio.h>
 #define SYS_EVENT (1u << 31)
+#define IPOD_ACCESSORY_PROTOCOL
+#define BUTTON_MULTIMEDIA (1u << 28)
 enum { ACTION_STD_OK = 1, ACTION_STD_CANCEL, ACTION_WPS_PLAY,
-       BUTTON_MULTIMEDIA_PLAYPAUSE, DIALOG_ABORT, DIALOG_ACCEPT,
+       DIALOG_ABORT, DIALOG_ACCEPT,
        DIALOG_CONTINUE, BUTTON_SELECT, BUTTON_MENU, BUTTON_PLAY,
        BUTTON_NONE, BUTTON_REL = 0x100, AUDIO_STATUS_PLAY = 0x200,
-       AUDIO_STATUS_PAUSE = 0x400 };
+       AUDIO_STATUS_PAUSE = 0x400, BUTTON_REPEAT = 0x800,
+       BUTTON_RC_PLAY = 0x10000, BUTTON_RC_STOP = 0x20000,
+       BUTTON_RC_LEFT = 0x40000, BUTTON_RC_RIGHT = 0x80000,
+       BUTTON_RC_VOL_UP = 0x100000, BUTTON_RC_VOL_DOWN = 0x200000,
+       BUTTON_RC_MENU = 0x400000, BUTTON_RC_SELECT = 0x800000,
+       BUTTON_MULTIMEDIA_PLAYPAUSE = BUTTON_MULTIMEDIA | 1,
+       BUTTON_MULTIMEDIA_STOP = BUTTON_MULTIMEDIA | 2,
+       BUTTON_MULTIMEDIA_PREV = BUTTON_MULTIMEDIA | 4,
+       BUTTON_MULTIMEDIA_NEXT = BUTTON_MULTIMEDIA | 8,
+       BUTTON_MULTIMEDIA_VOLUME_UP = BUTTON_MULTIMEDIA | 0x40,
+       BUTTON_MULTIMEDIA_VOLUME_DOWN = BUTTON_MULTIMEDIA | 0x80 };
+#include "usb_confirm.h"
 #define LAST_ITEM_IN_LIST {0, 0, 0}
 struct button_mapping { int action, button, prerequisite; };
 struct dialog { bool backlight_on; };
-static bool pending = true;
-static int reply_count, pause_count, resume_count, system_events;
+static bool cable = true, serial_iap;
+static struct usb_consent usb_consent = { USB_CONSENT_PROMPT, 42 };
+static int reply_count, pause_count, resume_count, system_events, remote_events;
 static int status = AUDIO_STATUS_PLAY;
 static bool connect;
-static bool usb_confirm_pending(uint32_t epoch)
-{ assert(epoch == 42); return pending; }
+static int usb_detect(void) { return cable ? 1 : 0; }
+#define USB_INSERTED 1
+bool iap_accessory_present(void) { return serial_iap; }
+PRODUCTION_PENDING
 static void usb_confirm_reply(uint32_t epoch, bool yes)
 { assert(epoch == 42); ++reply_count; connect = yes; }
 static int audio_status(void) { return status; }
@@ -174,9 +236,25 @@ static void pause_action(bool update)
 static void unpause_action(bool update)
 { assert(update); ++resume_count; status &= ~AUDIO_STATUS_PAUSE; }
 static void default_event_handler(int action)
-{ assert(action & SYS_EVENT); ++system_events; }
+{
+    if (action & SYS_EVENT) ++system_events;
+    else { assert(action & BUTTON_MULTIMEDIA); ++remote_events; }
+}
 '''
+pending_start = source.index("bool usb_confirm_pending(uint32_t epoch)")
+pending_end = source.index("void usb_confirm_reply(", pending_start)
+ui_ports = ui_ports.replace("PRODUCTION_PENDING", source[pending_start:pending_end])
 ui_tests = r'''
+static int key_action(int button, int prerequisite)
+{
+    const struct button_mapping *keys = confirm_keymap(0);
+    for (; keys->action; ++keys)
+        if (keys->button == button &&
+            (keys->prerequisite == BUTTON_NONE ||
+             keys->prerequisite == prerequisite))
+            return keys->action;
+    return 0;
+}
 int main(void)
 {
     struct dialog d = {0}; uint32_t epoch = 42;
@@ -184,7 +262,9 @@ int main(void)
     assert(keys[0].button == BUTTON_SELECT && keys[0].action == ACTION_STD_OK);
     assert(keys[1].button == BUTTON_MENU && keys[1].action == ACTION_STD_CANCEL);
     assert(keys[2].button == (BUTTON_PLAY | BUTTON_REL));
-    assert(keys[3].action == 0); /* no fallback mapping for wheel / other keys */
+    /* Serial frames arriving during the actual popup must not abort it. */
+    serial_iap = true;
+    assert(usb_confirm_pending(epoch));
     for (int ignored = 20; ignored < 100; ++ignored)
         assert(confirm_action(&d, ignored, &epoch) == DIALOG_CONTINUE);
     assert(!reply_count && !pause_count && !resume_count && !system_events);
@@ -192,21 +272,47 @@ int main(void)
     assert(!d.backlight_on);
     assert(confirm_action(&d, ACTION_STD_OK, &epoch) == DIALOG_CONTINUE);
     assert(confirm_action(&d, ACTION_STD_CANCEL, &epoch) == DIALOG_CONTINUE);
-    assert(!reply_count && pending);
+    assert(!reply_count && usb_confirm_pending(epoch));
     /* Play/Pause keeps its behavior even when the light was off. */
     assert(confirm_action(&d, ACTION_WPS_PLAY, &epoch) == DIALOG_CONTINUE);
     assert(pause_count == 1 && (status & AUDIO_STATUS_PAUSE));
     confirm_action(&d, BUTTON_MULTIMEDIA_PLAYPAUSE, &epoch);
     assert(resume_count == 1 && !(status & AUDIO_STATUS_PAUSE));
+    assert(key_action(BUTTON_RC_PLAY | BUTTON_REL, BUTTON_RC_PLAY) ==
+           ACTION_WPS_PLAY);
+    for (int i = 0; i < 2; ++i)
+        assert(confirm_action(&d, key_action(BUTTON_RC_PLAY | BUTTON_REL,
+                                             BUTTON_RC_PLAY), &epoch) ==
+               DIALOG_CONTINUE);
+    assert(pause_count == 2 && resume_count == 2);
+    const struct button_mapping remote[] = {
+        { BUTTON_MULTIMEDIA_STOP, BUTTON_RC_PLAY | BUTTON_REPEAT, BUTTON_RC_PLAY },
+        { BUTTON_MULTIMEDIA_STOP, BUTTON_RC_STOP, BUTTON_NONE },
+        { BUTTON_MULTIMEDIA_NEXT, BUTTON_RC_RIGHT | BUTTON_REL, BUTTON_RC_RIGHT },
+        { BUTTON_MULTIMEDIA_PREV, BUTTON_RC_LEFT | BUTTON_REL, BUTTON_RC_LEFT },
+        { BUTTON_MULTIMEDIA_VOLUME_UP, BUTTON_RC_VOL_UP, BUTTON_NONE },
+        { BUTTON_MULTIMEDIA_VOLUME_UP, BUTTON_RC_VOL_UP | BUTTON_REPEAT, BUTTON_RC_VOL_UP },
+        { BUTTON_MULTIMEDIA_VOLUME_DOWN, BUTTON_RC_VOL_DOWN, BUTTON_NONE },
+        { BUTTON_MULTIMEDIA_VOLUME_DOWN, BUTTON_RC_VOL_DOWN | BUTTON_REPEAT, BUTTON_RC_VOL_DOWN },
+    };
+    for (unsigned i = 0; i < sizeof(remote) / sizeof(remote[0]); ++i)
+    {
+        int action = key_action(remote[i].button, remote[i].prerequisite);
+        assert(action == remote[i].action);
+        assert(confirm_action(&d, action, &epoch) == DIALOG_CONTINUE);
+    }
+    assert(remote_events == 8 && !reply_count && usb_confirm_pending(epoch));
+    assert(!key_action(BUTTON_RC_MENU, BUTTON_NONE));
+    assert(!key_action(BUTTON_RC_SELECT, BUTTON_NONE));
     d.backlight_on = true;
     assert(confirm_action(&d, ACTION_STD_CANCEL, &epoch) == DIALOG_ACCEPT);
     assert(reply_count == 1 && !connect);
     assert(confirm_action(&d, ACTION_STD_OK, &epoch) == DIALOG_ACCEPT);
     assert(reply_count == 2 && connect);
-    pending = false;
+    cable = false;
     assert(confirm_action(&d, ACTION_STD_OK, &epoch) == DIALOG_ABORT);
     assert(reply_count == 2);
-    puts("production popup callbacks: dark wake-only SELECT/MENU, lit choices, ignored keys, dark Play/Pause, unplug PASS");
+    puts("production popup callbacks: serial frames, remote playback keys, dark wake-only SELECT/MENU, lit choices, unplug PASS");
 }
 '''
 c = OUT / "ui.c"
@@ -214,4 +320,7 @@ c.write_text(ui_ports + callbacks + ui_tests)
 cmd[-3:] = [str(c), "-o", str(OUT / "ui")]
 print(" ".join(cmd), flush=True)
 subprocess.run(cmd, check=True)
-subprocess.run([str(OUT / "ui")], check=True)
+run_test(OUT / "ui")
+if failures:
+    print("FAILED:", failures, flush=True)
+    sys.exit(1)
