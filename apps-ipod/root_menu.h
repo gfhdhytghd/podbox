@@ -15,6 +15,9 @@
 #include "widgets/list.h"               /* enum list_row_kind */
 
 void root_menu(void) NORETURN_ATTR;
+#ifdef HAVE_USB_PODLINK
+void root_menu_agents_shortcut(void);
+#endif
 struct menu_table {
     char *string;
     const struct menu_item_ex *item;
@@ -134,6 +137,7 @@ enum {
     /* Every book's Listening Stats (screens/browse/listen_progress.c), from
      * the Audiobooks menu's built-in row */
     GO_TO_LISTEN_STATS,
+    GO_TO_AGENTS,
 };
 extern struct menu_item_ex root_menu_;
 

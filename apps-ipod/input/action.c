@@ -42,6 +42,20 @@
 #include "system/appevents.h"
 #include "button.h"
 #include "action.h"
+#ifdef HAVE_USB_PODLINK
+#include "input/agents_shortcut.h"
+#include "root_menu.h"
+static struct agents_shortcut_state shortcut;
+static bool shortcut_talking;
+void agents_shortcut_talking(bool talking)
+{
+    shortcut_talking = talking;
+}
+#endif
+#if defined(IPOD_ACCESSORY_PROTOCOL) && defined(HAVE_USB_PODLINK)
+#include "input/agents_remote.h"
+#include "iap/remote_capture.h"
+#endif
 #include "kernel.h"
 #include "core_alloc.h"
 
@@ -277,12 +291,50 @@ static void action_handle_backlight(bool backlight, bool ignore_next)
 * if waiting for button release ACTION_NONE is returned until
 * button is released/repeated.
 */
+#ifdef HAVE_USB_PODLINK
+int agents_shortcut_get_button(int timeout)
+{
+    int button = button_get_w_tmo(timeout);
+    bool fire;
+    button = agents_shortcut_button(&shortcut, button, button_status(),
+                                    shortcut_talking, &fire);
+    return fire ? AGENTS_SHORTCUT_BUTTON : button;
+}
+#endif
+
 static inline bool action_poll_button(action_last_t *last, action_cur_t *cur)
 {
     bool ret = true;
     int *button = &cur->button;
 
+#if defined(IPOD_ACCESSORY_PROTOCOL) && defined(HAVE_USB_PODLINK)
+    static struct agents_remote_state remote;
+    bool agents = cur->context == CONTEXT_AGENTS;
+    int timeout = cur->timeout;
+    if (agents && remote.menu_down && (timeout < 0 || timeout > HZ / 10))
+        timeout = HZ / 10;
+    *button = button_get_w_tmo(timeout);
+#else
     *button = button_get_w_tmo(cur->timeout);
+#endif
+#ifdef HAVE_USB_PODLINK
+    bool fire;
+    *button = agents_shortcut_button(&shortcut, *button, button_status(),
+                                     shortcut_talking, &fire);
+    if (fire)
+    {
+        last->button = BUTTON_REL;
+        last->action = ACTION_NONE;
+        last->wait_for_release = false;
+        *button = ACTION_AGENTS_SWITCH;
+        return true;
+    }
+#endif
+
+#if defined(IPOD_ACCESSORY_PROTOCOL) && defined(HAVE_USB_PODLINK)
+    *button = agents_remote_button(&remote, agents, *button,
+                                    button_status(), current_tick);
+#endif
 
    /* ********************************************************
     * Can return button immediately, sys_event & multimedia
@@ -846,6 +898,21 @@ int get_action(int context, int timeout)
         return ACTION_REDRAW;
     }
 #endif
+#ifdef HAVE_USB_PODLINK
+    if (action == ACTION_AGENTS_SWITCH && context != CONTEXT_WPS &&
+        context != CONTEXT_AGENTS)
+    {
+#ifdef IPOD_ACCESSORY_PROTOCOL
+        bool capture = remote_input_active;
+        remote_input_active = false;
+#endif
+        root_menu_agents_shortcut();
+#ifdef IPOD_ACCESSORY_PROTOCOL
+        remote_input_active = capture;
+#endif
+        return ACTION_REDRAW;
+    }
+#endif
     return action;
 }
 
@@ -949,6 +1016,21 @@ int get_custom_action(int context,int timeout,
     if (action == SYS_USB_CONFIRM)
     {
         gui_usb_confirm_run(button_get_data());
+        return ACTION_REDRAW;
+    }
+#endif
+#ifdef HAVE_USB_PODLINK
+    if (action == ACTION_AGENTS_SWITCH && context != CONTEXT_WPS &&
+        context != CONTEXT_AGENTS)
+    {
+#ifdef IPOD_ACCESSORY_PROTOCOL
+        bool capture = remote_input_active;
+        remote_input_active = false;
+#endif
+        root_menu_agents_shortcut();
+#ifdef IPOD_ACCESSORY_PROTOCOL
+        remote_input_active = capture;
+#endif
         return ACTION_REDRAW;
     }
 #endif

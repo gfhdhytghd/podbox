@@ -5,7 +5,7 @@ cd "$(dirname "$0")/../.."
 test_dir=$(mktemp -d)
 trap 'rm -rf "$test_dir"' EXIT HUP INT TERM
 cc=${CC:-cc}
-for test in podlink_firmware podlink_wire podlink_screen; do
+for test in podlink_firmware podlink_wire podlink_screen podlink_bench; do
     case "$test" in
         podlink_screen) includes='-Itools/tests/podlink_stubs'; codec='' ;;
         *) includes='-Itools/tests/podlink_stubs'

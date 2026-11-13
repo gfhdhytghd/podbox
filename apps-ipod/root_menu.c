@@ -18,6 +18,9 @@
 #include "system/appevents.h"
 #include "widgets/menu.h"
 #include "root_menu.h"
+#ifdef HAVE_USB_PODLINK
+#include "screens/system/agents_screen.h"
+#endif
 #include "lang.h"
 #include "rbpaths.h"
 #include "settings/settings.h"
@@ -741,6 +744,9 @@ static int menu_result(int result)
         case GO_TO_PLAYLIST_VIEWER:
         case GO_TO_WPS:
         case GO_TO_PREVIOUS_MUSIC:
+#ifdef HAVE_USB_PODLINK
+        case GO_TO_AGENTS:
+#endif
             return result;
         default:
             return GO_TO_ROOT;
@@ -956,9 +962,39 @@ static int settings_scrn(void * param)
     return menu_result(do_menu(&main_menu_, &selected, NULL, false));
 }
 
+#ifdef HAVE_USB_PODLINK
+static int agents_scrn(void *param)
+{
+    (void)param;
+    int ret = agents_screen();
+    return ret == AGENTS_SWITCH_WPS ? GO_TO_WPS : GO_TO_PREVIOUS;
+}
+
+/* Other screens remain suspended while this pair owns the UI. WPS and
+ * Agents return normally so their themes, activities and links close. */
+void root_menu_agents_shortcut(void)
+{
+    bool agents = true;
+    bool poweroff = button_get_sw_poweroff_state();
+    while (true)
+    {
+        button_set_sw_poweroff_state(poweroff);
+        int ret = agents ? agents_screen() : wpsscrn(NULL);
+        if ((agents && ret != AGENTS_SWITCH_WPS) ||
+            (!agents && ret != GO_TO_AGENTS))
+            break;
+        agents = !agents;
+    }
+    button_set_sw_poweroff_state(poweroff);
+}
+#endif
+
 static const struct root_items items[] = {
     [GO_TO_FILEBROWSER] =   { browser, (void*)GO_TO_FILEBROWSER, &file_menu},
     [GO_TO_DBBROWSER] =     { browser, (void*)GO_TO_DBBROWSER, &tagcache_menu },
+#ifdef HAVE_USB_PODLINK
+    [GO_TO_AGENTS] = { agents_scrn, NULL, NULL },
+#endif
     [GO_TO_WPS] =           { wpsscrn, NULL, &playback_settings },
     [GO_TO_MAINMENU] =      { settings_scrn, NULL, &manage_settings },
 

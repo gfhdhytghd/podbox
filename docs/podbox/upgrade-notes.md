@@ -1,3 +1,9 @@
+- **SELECT + PLAY switches between Now Playing and Agents.** From another
+  screen it opens Agents. This replaces the configured Select + Play action.
+  Agents waits 150 ms before starting hold-to-talk. Add SELECT during that
+  delay to switch without recording. After recording starts, SELECT does
+  nothing until PLAY is released. SELECT alone keeps its tap and held
+  actions. PLAY joins the combo only before SELECT's held action fires.
 - **Long comments and other tags in FLAC, Ogg, Opus, APE and WavPack files
   are now kept to 500 characters,** as in MP3 and M4A files; until now they
   were cut at about 260, or 127 in APE and WavPack. Files already in the

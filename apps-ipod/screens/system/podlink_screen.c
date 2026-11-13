@@ -23,6 +23,7 @@
 #include "podlink.h"
 #include "kernel.h"
 #include "button.h"
+#include "input/agents_shortcut.h"
 #include "lcd.h"
 #include "powermgmt.h"
 #include "core_alloc.h"
@@ -148,7 +149,7 @@ int podlink_screen(void)
         return 0;
     }
     long draw_at = 0;
-    bool exiting = false;
+    bool exiting = false, shortcut = false;
     received = sent = closes = 0;
     reply_type = 0;
     operation = ECHO;
@@ -216,8 +217,9 @@ int podlink_screen(void)
             lcd_update();
             draw_at = current_tick + HZ / 4;
         }
-        int button = button_get(false);
-        if (button == BUTTON_MENU && !exiting)
+        int button = agents_shortcut_get_button(TIMEOUT_NOBLOCK);
+        if (button == AGENTS_SHORTCUT_BUTTON) shortcut = true;
+        if ((button == BUTTON_MENU || shortcut) && !exiting)
         {
             exiting = true;
             reply_type = 0;
@@ -234,5 +236,8 @@ int podlink_screen(void)
         else
             podlink_wait(1);
     }
+#ifdef HAVE_USB_PODLINK
+    if (shortcut) root_menu_agents_shortcut();
+#endif
     return 0;
 }

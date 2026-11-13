@@ -58,6 +58,7 @@
 #include "database/tagcache.h"
 #include "iap-library.h"
 #include "iap-artwork.h"
+#include "iap/remote_capture.h"
 #include "sound.h"
 #include "action.h"
 #include "powermgmt.h"
@@ -232,7 +233,9 @@ enum fsm_state {
     ST_LENH,    /* receive length high byte (large packet) */
     ST_LENL,    /* receive length low byte (large packet) */
     ST_DATA,    /* receive data */
-    ST_CHECK    /* verify checksum */
+    ST_CHECK,   /* verify checksum */
+    ST_DROP_DATA,
+    ST_DROP_CHECK
 };
 
 static struct state_t {
@@ -240,46 +243,18 @@ static struct state_t {
     unsigned int len;       /* payload data length */
     unsigned int check;     /* running checksum over [len,payload,check] */
     unsigned int count;     /* playload bytes counter */
+    unsigned int drop_flags;
+    bool discard;           /* RX storage is not ready for this frame */
 } frame_state = {
     .state = ST_SYNC
 };
 
 /* What the framer has seen, for Debug > Serial iAP. Written from the serial
  * ISR. */
-#define RX_HISTORY 8
 static struct {
-    unsigned long good;         /* frames that passed their checksum */
-    unsigned long bad_check;    /* frames that failed it */
-    unsigned long bad_len;      /* frames dropped for their length */
-    unsigned long timeouts;     /* frames abandoned mid-way by the gap timer */
+    unsigned long good, bad_check, bad_len, timeouts;
     unsigned int last_bad_len;
-    /* First bytes of the last RX_HISTORY distinct frames, newest at
-     * [next - 1]. A button release and a held button's repeats are left out,
-     * so a press stays on screen after it is let go. */
-    unsigned char last[RX_HISTORY][8];
-    unsigned int last_len[RX_HISTORY];
-    unsigned int next;
 } rx_stats;
-
-static void rx_stats_keep(const unsigned char *frame, unsigned int len)
-{
-    unsigned int n = MIN(len, sizeof(rx_stats.last[0]));
-    unsigned int prev = (rx_stats.next + RX_HISTORY - 1) % RX_HISTORY;
-    unsigned int i;
-
-    /* Simple Remote ContextButtonStatus with no bit set is a release */
-    if (len >= 2 && frame[0] == 0x02 && frame[1] == 0x00) {
-        for (i = 2; i < len && frame[i] == 0; i++);
-        if (i == len)
-            return;
-    }
-    if (rx_stats.last_len[prev] == n && !memcmp(rx_stats.last[prev], frame, n))
-        return;
-
-    memcpy(rx_stats.last[rx_stats.next], frame, n);
-    rx_stats.last_len[rx_stats.next] = n;
-    rx_stats.next = (rx_stats.next + 1) % RX_HISTORY;
-}
 
 enum interface_state interface_state = IST_STANDARD;
 
@@ -1051,6 +1026,10 @@ bool iap_getc(IF_IAP_MP(int port,) const unsigned char x)
     if ((s->state != ST_SYNC) && TIME_AFTER(current_tick, pkt_timeout)) {
         /* Packet timeouts only make sense while not waiting for the
          * sync byte */
+         if (s->state >= ST_LEN)
+             remote_capture_end(&iap_remote_capture, REMOTE_BAD_TIMEOUT |
+                 (s->state >= ST_DROP_DATA ? s->drop_flags : 0),
+                 current_tick);
          s->state = ST_SYNC;
          rx_stats.timeouts++;
          return iap_getc(IF_IAP_MP(port,) x);
@@ -1061,22 +1040,21 @@ bool iap_getc(IF_IAP_MP(int port,) const unsigned char x)
     switch (s->state) {
     case ST_SYNC:
         if (x == 0xFF) {
-            /* The IAP infrastructure is started by the first received sync
-             * byte. It takes a while to spin up, so do not advance the state
-             * machine until it has started.
-             */
+            /* Capture the startup frame too, without using RX storage
+             * before the iAP thread has allocated it. */
+            s->discard = !iap_running;
+            s->drop_flags = 0;
             if (!iap_running)
-            {
                 iap_start();
-                break;
-            }
-            iap_rxnext = iap_rxpayload;
+            if (!s->discard)
+                iap_rxnext = iap_rxpayload;
             s->state = ST_SOF;
         }
         break;
     case ST_SOF:
         if (x == 0x55) {
             /* received a valid sync/SOF pair */
+            remote_capture_begin(&iap_remote_capture, 0);
             s->state = ST_LEN;
         } else {
             s->state = ST_SYNC;
@@ -1096,7 +1074,10 @@ bool iap_getc(IF_IAP_MP(int port,) const unsigned char x)
              * a length only their own CHECKLEN would catch. */
             if (x < 0x02 || x > 0xFC)
             {
-                s->state = ST_SYNC;
+                s->len = x;
+                remote_capture_begin(&iap_remote_capture, s->len);
+                s->state = ST_DROP_DATA;
+                s->drop_flags = REMOTE_BAD_LENGTH;
                 rx_stats.bad_len++;
                 rx_stats.last_bad_len = x;
                 break;
@@ -1106,18 +1087,25 @@ bool iap_getc(IF_IAP_MP(int port,) const unsigned char x)
              * wraps to ~4G once the buffer fills to within one byte, and
              * every packet after that is accepted past the end of it.
              */
-            if ((uint32_t)x + 2 > iap_rxlen)
+            if (!s->discard && (uint32_t)x + 2 > iap_rxlen)
             {
                 /* Packet too long for buffer */
-                s->state = ST_SYNC;
+                s->len = x;
+                remote_capture_begin(&iap_remote_capture, s->len);
+                s->state = ST_DROP_DATA;
+                s->drop_flags = REMOTE_BAD_LENGTH;
                 rx_stats.bad_len++;
                 rx_stats.last_bad_len = x;
                 break;
             }
             s->len = x;
-            s->state = ST_DATA;
-            put_u16(iap_rxnext, s->len);
-            iap_rxnext += 2;
+            remote_capture_begin(&iap_remote_capture, s->len);
+            s->state = s->discard ? ST_DROP_DATA : ST_DATA;
+            if (!s->discard)
+            {
+                put_u16(iap_rxnext, s->len);
+                iap_rxnext += 2;
+            }
         }
         break;
     case ST_LENH:
@@ -1128,24 +1116,41 @@ bool iap_getc(IF_IAP_MP(int port,) const unsigned char x)
     case ST_LENL:
         s->check += x;
         s->len += x;
+        remote_capture_begin(&iap_remote_capture, s->len);
         /* Same underflow as the small-packet check above. A long-form
          * frame shorter than 0xFD should have been sent short-form, but
          * accessories send them, so only the lingo-and-command minimum is
          * enforced. */
         if ((s->len < 0x0002) || (s->len > 0xFFFA)
-            || ((uint32_t)s->len + 2 > iap_rxlen)) {
+            || (!s->discard && (uint32_t)s->len + 2 > iap_rxlen)) {
             /* invalid length */
-            s->state = ST_SYNC;
+            s->state = s->len ? ST_DROP_DATA : ST_DROP_CHECK;
+            s->drop_flags = REMOTE_BAD_LENGTH;
             rx_stats.bad_len++;
             rx_stats.last_bad_len = s->len;
             break;
         } else {
-            s->state = ST_DATA;
-            put_u16(iap_rxnext, s->len);
-            iap_rxnext += 2;
+            s->state = s->discard ? ST_DROP_DATA : ST_DATA;
+            if (!s->discard)
+            {
+                put_u16(iap_rxnext, s->len);
+                iap_rxnext += 2;
+            }
         }
         break;
+    case ST_DROP_DATA:
+        s->check += x;
+        remote_capture_byte(&iap_remote_capture, x);
+        if (++s->count == s->len)
+            s->state = ST_DROP_CHECK;
+        break;
+    case ST_DROP_CHECK:
+        remote_capture_end(&iap_remote_capture, s->drop_flags |
+            (((s->check + x) & 0xff) ? REMOTE_BAD_CHECK : 0), current_tick);
+        s->state = ST_SYNC;
+        break;
     case ST_DATA:
+        remote_capture_byte(&iap_remote_capture, x);
         s->check += x;
         *(iap_rxnext++) = x;
         s->count += 1;
@@ -1155,11 +1160,12 @@ bool iap_getc(IF_IAP_MP(int port,) const unsigned char x)
         break;
     case ST_CHECK:
         s->check += x;
+        remote_capture_end(&iap_remote_capture,
+            (s->check & 0xff) ? REMOTE_BAD_CHECK : 0, current_tick);
         if ((s->check & 0xFF) == 0) {
             /* done, received a valid frame */
             rx_stats.good++;
             last_frame_tick = current_tick ? current_tick : 1;
-            rx_stats_keep(iap_rxnext - s->len, s->len);
             iap_rxlen -= (s->len + 2);
             iap_rxpayload = iap_rxnext;
             queue_post(&iap_queue, IAP_EV_MSG_RCVD, 0);
@@ -2097,16 +2103,25 @@ static int dbg_iap_callback(int action, struct gui_synclist *lists)
     simplelist_addline("bad len: %lu (last %u)", rx_stats.bad_len,
                        rx_stats.last_bad_len);
     simplelist_addline("last frames, newest first:");
-    for (int i = 0; i < RX_HISTORY; i++)
+    static struct remote_frame frame;
+    unsigned long count;
+    int oldlevel = disable_irq_save();
+    count = iap_remote_capture.frames;
+    restore_irq(oldlevel);
+    for (int i = 0; i < 8 && count > (unsigned int)i; i++)
     {
-        unsigned int k = (rx_stats.next + RX_HISTORY - 1 - i) % RX_HISTORY;
-        char line[3 * sizeof(rx_stats.last[0]) + 1];
-        char *p = line;
-
-        *p = '\0';
-        for (unsigned int b = 0; b < rx_stats.last_len[k]; b++)
-            p += snprintf(p, 4, "%02x ", rx_stats.last[k][b]);
-        simplelist_addline("%s", line);
+        oldlevel = disable_irq_save();
+        bool ok = remote_capture_get(&iap_remote_capture, count - i, &frame);
+        restore_irq(oldlevel);
+        if (!ok) continue;
+        char line[25];
+        unsigned int n = MIN(frame.received, 8u);
+        for (unsigned int b = 0; b < n; b++)
+            snprintf(line + b * 3, 4, "%02x ", frame.data[b]);
+        if (!n) line[0] = '\0';
+        simplelist_addline("%s%s%s",
+                           (frame.flags & REMOTE_BAD_MASK) ? "BAD " : "",
+                           (frame.flags & REMOTE_TRUNC) ? "TRUNC " : "", line);
     }
     if (action == ACTION_NONE)
         action = ACTION_REDRAW;

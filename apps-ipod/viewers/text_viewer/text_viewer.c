@@ -20,6 +20,7 @@
  * into the chapter before, then lays out one chapter at most.
  */
 
+#include "input/agents_shortcut.h"
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdlib.h>          /* atoi */
@@ -3692,8 +3693,16 @@ int text_viewer(const char *file)
             goto done;
         if (tv_side)
         {
-            long b = timeout == TIMEOUT_BLOCK ? button_get(true)
-                                              : button_get_w_tmo(timeout);
+            long b = agents_shortcut_get_button(timeout);
+#ifdef HAVE_USB_PODLINK
+            if (b == AGENTS_SHORTCUT_BUTTON)
+            {
+                root_menu_agents_shortcut();
+                tv_setup_screen();
+                tv_draw();
+                continue;
+            }
+#endif
 
             /* Read past the action system, which clicks for the rest */
             keyclick_click(true, b);

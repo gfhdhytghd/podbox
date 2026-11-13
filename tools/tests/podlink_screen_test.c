@@ -24,7 +24,8 @@ static void command(const char *s)
 
 static unsigned int limit, attempts, binary_bytes, invalid_sends;
 static unsigned int turns, stage;
-static bool closed;
+static bool closed, shortcut_requested;
+static int shortcuts;
 bool podlink_open(void)
 {
     return true;
@@ -121,6 +122,22 @@ int button_get(bool block)
            ? BUTTON_MENU : 0;
 }
 
+int agents_shortcut_get_button(int timeout)
+{
+    (void)timeout;
+    if (shortcut_requested)
+    {
+        shortcut_requested = false;
+        return AGENTS_SHORTCUT_BUTTON;
+    }
+    return button_get(false);
+}
+void root_menu_agents_shortcut(void)
+{
+    assert(closed);
+    shortcuts++;
+}
+
 int main(void)
 {
     const char *invalid[] = {
@@ -159,6 +176,12 @@ int main(void)
         assert(stage == 2 && invalid_sends <= 3);
         assert(attempts < 8192 / limit + 10);
     }
+    closed = false;
+    shortcut_requested = true;
+    stage = 2;
+    podlink_screen();
+    assert(shortcuts == 1 && closed);
+    puts("PASS: shortcut closes the echo link before opening Agents");
     puts("PASS: small peer limits recover from INVALID and finish DOWNLOAD");
     puts("PASS: rejected BENCH commands preserve upload/download state");
     return 0;

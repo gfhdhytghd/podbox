@@ -382,6 +382,17 @@ static const struct button_mapping button_context_usb_hid_mode_mouse[] = {
  *    Remote control mappings
  *****************************************************************************/
 
+static const struct button_mapping remote_button_context_agents[] = {
+    { ACTION_LISTTREE_PGUP, BUTTON_RC_VOL_UP, BUTTON_NONE },
+    { ACTION_LISTTREE_PGUP, BUTTON_RC_VOL_UP|BUTTON_REPEAT, BUTTON_NONE },
+    { ACTION_LISTTREE_PGDOWN, BUTTON_RC_VOL_DOWN, BUTTON_NONE },
+    { ACTION_LISTTREE_PGDOWN, BUTTON_RC_VOL_DOWN|BUTTON_REPEAT, BUTTON_NONE },
+    { ACTION_STD_MENU, BUTTON_RC_MENU|BUTTON_REL, BUTTON_NONE },
+    /* The raw-button adapter emits SELECT once at the Menu hold threshold. */
+    { ACTION_STD_OK, BUTTON_RC_SELECT, BUTTON_NONE },
+    LAST_ITEM_IN_LIST__NEXTLIST(CONTEXT_STD)
+};
+
 static const struct button_mapping remote_button_context_standard[]  = {
     { ACTION_STD_PREV,          BUTTON_RC_UP,                 BUTTON_NONE },
     { ACTION_STD_PREVREPEAT,    BUTTON_RC_UP|BUTTON_REPEAT,   BUTTON_NONE },
@@ -496,6 +507,8 @@ static const struct button_mapping* get_context_mapping_remote( int context )
 
     switch (context)
     {
+        case CONTEXT_AGENTS:
+            return remote_button_context_agents;
         case CONTEXT_WPS:
             return remote_button_context_wps;
         case CONTEXT_TREE:

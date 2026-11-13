@@ -108,6 +108,16 @@ int button_get(bool block)
     return 0;
 }
 
+int agents_shortcut_get_button(int timeout)
+{
+    (void)timeout;
+    return button_get(false);
+}
+void root_menu_agents_shortcut(void)
+{
+    assert(0);
+}
+
 int main(void)
 {
     usb_serial_init();

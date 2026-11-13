@@ -20,6 +20,7 @@
 #include "system.h"
 #include "kernel.h"
 #include "button.h"
+#include "input/agents_shortcut.h"
 #include "lcd.h"
 #include "font.h"
 #include "lang.h"
@@ -971,9 +972,16 @@ static int row_session(bool *again)
              * read -- means the queue is polled rather than waited on. */
             bool busy = moving || art_want_at < art_want_n;
             long left = speak_due - current_tick;
-            int btn = busy ? button_get(false)
-                    : speak_due ? button_get_w_tmo(left > 0 ? left : 0)
-                    : button_get(true);
+            int btn = agents_shortcut_get_button(busy ? TIMEOUT_NOBLOCK :
+                      speak_due ? (left > 0 ? left : 0) : TIMEOUT_BLOCK);
+#ifdef HAVE_USB_PODLINK
+            if (btn == AGENTS_SHORTCUT_BUTTON)
+            {
+                root_menu_agents_shortcut();
+                repaint(year);
+                continue;
+            }
+#endif
             int code;
 
             if (btn == BUTTON_NONE)

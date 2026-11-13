@@ -153,6 +153,7 @@ screens/system/bg_task_info.c
 #ifdef HAVE_USB_PODLINK
 screens/system/podlink_screen.c
 screens/system/agents_screen.c
+input/agents_shortcut.c
 screens/system/herdremote_model.c
 #endif
 screens/system/db_search.c
@@ -418,6 +419,11 @@ system/volume.c
 
 #ifdef IPOD_ACCESSORY_PROTOCOL
 iap/iap-core.c
+iap/remote_capture.c
+screens/system/remote_input.c
+#ifdef HAVE_USB_PODLINK
+input/agents_remote.c
+#endif
 iap/iap-artwork.c
 iap/iap-lingo0.c
 iap/iap-lingo2.c

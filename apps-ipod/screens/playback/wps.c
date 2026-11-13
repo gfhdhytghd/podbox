@@ -807,6 +807,11 @@ long gui_wps_show(void)
 
         switch(button)
         {
+#ifdef HAVE_USB_PODLINK
+            case ACTION_AGENTS_SWITCH:
+                gwps_leave_wps(true);
+                return GO_TO_AGENTS;
+#endif
             case ACTION_WPS_BROWSE:
             case ACTION_WPS_HOTKEY:
             {

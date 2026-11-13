@@ -121,6 +121,7 @@
 #endif
 
 #include "iap.h"
+#include "iap/remote_capture.h"
 
 
 #define SCREEN_MAX_CHARS (LCD_WIDTH / SYSFONT_WIDTH)
@@ -2141,6 +2142,7 @@ static const struct {
 #endif
 #ifdef IPOD_ACCESSORY_PROTOCOL
         { "Serial iAP", dbg_iap, false, NULL },
+        { "Remote input", dbg_remote_input, false, NULL },
 #endif
 
 #if (CONFIG_BATTERY_MEASURE != 0) && !defined(SIMULATOR)

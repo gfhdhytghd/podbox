@@ -81,6 +81,7 @@
 #include "font.h"
 #include "podlink.h"
 #include "input/action.h"
+#include "input/agents_shortcut.h"
 #include "draw/viewport.h"
 #include "draw/screen_access.h"
 #include "draw/text_wrap.h"
@@ -181,11 +182,14 @@ static bool was_connected;
 static long usage_next;         /* when to ask next */
 static long usage_at;           /* when the shown figures came */
 static unsigned int usage_serial;
+static int usage_scroll, detail_scroll, detail_scroll_max, detail_page_lines;
 static struct row usage_from;   /* the spaces row to go back to */
 
 /* Hold to talk: the band at the foot of the list, while it is wanted */
 #define TALK_REPLY  (8 * HZ)    /* how long vd and vu wait for their R */
 #define TALK_BAND   30          /* the band's height in pixels */
+static bool talk_pending;
+static unsigned long talk_pending_at;
 static bool talk_held;          /* vd sent and vu not yet */
 static long talk_since;         /* when the recording began, for its count */
 static char talk_req[8];        /* the vd or vu awaiting its result */
@@ -1196,8 +1200,9 @@ static void draw_usage(struct gui_synclist *list)
         int age = usage_age();
         bool stale = t_trouble || !u->ok || age > 3 * USAGE_EVERY / HZ;
         for (int i = 0; i < HR_USAGE_SVCS; i++)
-            draw_service(d, i * USE_BLOCK, vp->width, &u->svc[i], stale);
-        int y = HR_USAGE_SVCS * USE_BLOCK;
+            draw_service(d, i * USE_BLOCK - usage_scroll, vp->width,
+                         &u->svc[i], stale);
+        int y = HR_USAGE_SVCS * USE_BLOCK - usage_scroll;
         d->set_foreground(USE_DIM);
         d->hline(0, vp->width - 1, y);
         y += 3;
@@ -1491,38 +1496,37 @@ static void draw_detail(struct gui_synclist *list)
     /* The message takes the lines it needs, the steps what is left */
     const char *steps[HR_DETAIL_STEPS];
     int nsteps = detail_steps(steps);
-    int avail = (vp->height - y - (nsteps ? DET_GAP : 0)) / USE_LINE;
+    int avail = MAX(0, (vp->height - y) / USE_LINE);
     struct font *pf = font_get(vp->font);
     const char *text = det->say, *end;
     int need = 0;
     font_lock(vp->font, true);
-    for (const char *p = text; *p && need < avail; need++)
+    for (const char *p = text; *p; need++)
         p = text_wrap_next_punct(p, vp->width, pf, &end);
-    int say_lines = need, show_steps = MIN(nsteps, avail - say_lines);
+    detail_page_lines = MAX(1, avail);
+    detail_scroll_max = MAX(0, need + nsteps - avail);
+    detail_scroll = MIN(detail_scroll, detail_scroll_max);
     unsigned colour = t_trouble || fallback ? USE_DIM : USE_TEXT;
-    for (int i = 0; i < say_lines; i++, y += USE_LINE)
+    for (int i = 0; i < need; i++)
     {
         const char *next = text_wrap_next_punct(text, vp->width, pf, &end);
-        snprintf(line, sizeof line, "%.*s", (int)MIN(end - text,
-                                                      (long)sizeof line - 4),
-                 text);
-        if (i == say_lines - 1 && *next)
+        if (i >= detail_scroll && i < detail_scroll + avail)
         {
-            /* The rest does not fit: the line ends in an ellipsis */
-            size_t n = strlen(line);
-            snprintf(line + n, sizeof line - n, "…");
-            fit(line, sizeof line, line, vp->width);
+            snprintf(line, sizeof line, "%.*s", (int)MIN(end - text,
+                                                     (long)sizeof line - 1),
+                     text);
+            text_at(d, 0, y + (i - detail_scroll) * USE_LINE, colour, line);
         }
-        text_at(d, 0, y, colour, line);
         text = next;
     }
     font_lock(vp->font, false);
-    if (show_steps > 0)
-        y += DET_GAP;
-    for (int i = nsteps - show_steps; i < nsteps; i++, y += USE_LINE)
+    for (int i = 0; i < nsteps; i++)
     {
+        int row = need + i - detail_scroll;
+        if (row < 0 || row >= avail) continue;
         snprintf(line, sizeof line, "› %s", steps[i]);
-        text_at(d, 0, y, USE_DIM, fit(line, sizeof line, line, vp->width));
+        text_at(d, 0, y + row * USE_LINE, USE_DIM,
+                fit(line, sizeof line, line, vp->width));
     }
     d->set_foreground(fg);
     d->update_viewport();
@@ -1672,6 +1676,7 @@ static void start_talk(struct gui_synclist *list)
     snprintf(slot, sizeof outbox[0], "vd\t%s\t%s", talk_req, target);
     talk_req_up = false;
     talk_held = true;
+    agents_shortcut_talking(true);
     talk_since = current_tick;
     talk_until = current_tick + TALK_REPLY;
     talk_note[0] = '\0';
@@ -1683,9 +1688,11 @@ static void start_talk(struct gui_synclist *list)
  * was said */
 static void stop_talk(void)
 {
+    talk_pending = false;
     if (!talk_held)
         return;
     talk_held = false;
+    agents_shortcut_talking(false);
     char *slot = podlink_state() == PODLINK_CONNECTED ? outbox_slot() : NULL;
     if (!slot)
     {
@@ -1957,6 +1964,7 @@ static void pop_question(struct gui_synclist *list)
 
 static void open_usage(struct gui_synclist *list)
 {
+    usage_scroll = 0;
     int sel = gui_synclist_get_sel_pos(list);
     usage_from = sel >= 0 && sel < nrows ? rows[sel] : (struct row){0};
     view = VIEW_USAGE;
@@ -2019,6 +2027,7 @@ static void switch_tab(struct gui_synclist *list, int dir)
  * once the computer has shown the pane */
 static void open_detail(struct gui_synclist *list, const struct hr_agent *a)
 {
+    detail_scroll = detail_scroll_max = 0;
     snprintf(detail_pane, sizeof detail_pane, "%s", a->pane);
     detail_agent = *a;
     detail_ready = false;
@@ -2124,6 +2133,7 @@ static bool poll_link(void)
         if (talk_held || talk_req[0])
             talk_result("Link lost", true);
         talk_held = false;
+        agents_shortcut_talking(false);
         talk_req[0] = '\0';
         forget_keys();
         if (connected)
@@ -2214,6 +2224,15 @@ static void take_result(struct gui_synclist *list)
     show_same(list);
 }
 
+static bool agents_play_down(void)
+{
+    int mask = BUTTON_PLAY;
+#ifdef IPOD_ACCESSORY_PROTOCOL
+    mask |= BUTTON_RC_PLAY;
+#endif
+    return (button_status() & mask) != 0;
+}
+
 int agents_screen(void)
 {
     struct gui_synclist list;
@@ -2233,17 +2252,21 @@ int agents_screen(void)
     detail_shown_age = -1;
     task_text[0] = '\0';
     reset_focus();
-    talk_held = talk_shown = false;
+    talk_held = talk_shown = talk_pending = false;
+    agents_shortcut_talking(false);
     talk_req[0] = talk_note[0] = '\0';
     forget_keys();
     nout = 0;
     last_message = current_tick;
     usage_serial = model.usage.serial;
+    usage_scroll = detail_scroll = detail_scroll_max = 0;
+    detail_page_lines = 1;
 
     FOR_NB_SCREENS(i)
         viewportmanager_theme_enable(i, true, NULL);
     push_current_activity(ACTIVITY_AGENTS);
     /* Play is held to talk here, and held long enough it would power off */
+    bool poweroff = button_get_sw_poweroff_state();
     button_set_sw_poweroff_state(false);
     gui_synclist_init(&list, row_name, &list, false, 1, NULL);
     gui_synclist_set_row_callbacks(&list, NULL, row_value, NULL);
@@ -2317,7 +2340,14 @@ int agents_screen(void)
 
         /* A release the keymap did not see still ends the hold. A failure
          * stays in view while Play is held, and for a moment after. */
-        bool play_down = button_status() & BUTTON_PLAY;
+        bool play_down = agents_play_down();
+        if (talk_pending && !play_down) talk_pending = false;
+        if (talk_pending && play_down && !(button_status() & BUTTON_SELECT) &&
+            (unsigned long)current_tick - talk_pending_at >= (3 * HZ + 19) / 20)
+        {
+            talk_pending = false;
+            start_talk(&list);
+        }
         if (talk_held && !play_down)
             stop_talk();
         if (talk_failed && play_down && TIME_BEFORE(current_tick, talk_until))
@@ -2368,6 +2398,27 @@ int agents_screen(void)
             else if (action == ACTION_STD_NEXT ||
                      action == ACTION_STD_NEXTREPEAT)
                 dir = 1;
+            if (action == ACTION_LISTTREE_PGUP ||
+                action == ACTION_LISTTREE_PGDOWN)
+            {
+                int direction = action == ACTION_LISTTREE_PGUP ? -1 : 1;
+                if (view == VIEW_USAGE)
+                {
+                    int height = list.parent[SCREEN_MAIN]->height;
+                    int maximum = MAX(0, HR_USAGE_SVCS * USE_BLOCK +
+                                         USE_LINE + 3 - height);
+                    usage_scroll = MAX(0, MIN(maximum,
+                                      usage_scroll + direction * height));
+                    draw_usage(&list);
+                }
+                else if (view == VIEW_DETAIL)
+                {
+                    detail_scroll = MAX(0, MIN(detail_scroll_max,
+                        detail_scroll + direction * detail_page_lines));
+                    draw_detail(&list);
+                }
+                action = ACTION_NONE;
+            }
             const char *key = dir ? hr_wheel_step(&wheel, current_tick, dir,
                                                   WHEEL_FAST) : NULL;
             if (key)
@@ -2504,7 +2555,15 @@ int agents_screen(void)
             }
             case ACTION_AGENTS_TALK:
                 if (view != VIEW_CONFIRM)
-                    start_talk(&list);
+                {
+                    talk_pending = true;
+                    talk_pending_at = current_tick;
+                }
+                break;
+            case ACTION_AGENTS_SWITCH:
+                talk_pending = false;
+                ret = AGENTS_SWITCH_WPS;
+                done = true;
                 break;
             case ACTION_AGENTS_TALK_END:
                 stop_talk();
@@ -2546,9 +2605,9 @@ int agents_screen(void)
         sleep(1);
     }
     /* Play still held would power off at once: wait for its release */
-    while (button_status() & BUTTON_PLAY)
+    while (ret != AGENTS_SWITCH_WPS && agents_play_down())
         sleep(HZ / 20);
-    button_set_sw_poweroff_state(true);
+    button_set_sw_poweroff_state(poweroff);
     pop_current_activity();
     FOR_NB_SCREENS(i)
         viewportmanager_theme_undo(i, false);

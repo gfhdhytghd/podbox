@@ -26,6 +26,7 @@
 #include "config.h"
 #include "system.h"
 #include "button.h"
+#include "button_chord.h"
 #include "kernel.h"
 #include "thread.h"
 #include "backlight.h"
@@ -230,6 +231,9 @@ static void button_tick(void)
     button_remote_post();
 
     btn = button_read(&data);
+#ifdef HAVE_SW_POWEROFF
+    bool chord_blocks_poweroff = button_chord_blocks_poweroff(btn);
+#endif
 
     check_audio_peripheral_state();
 
@@ -311,6 +315,7 @@ static void button_tick(void)
                            key */
 
                         if (enable_sw_poweroff &&
+                            !chord_blocks_poweroff &&
                             (btn & POWEROFF_BUTTON
 #ifdef RC_POWEROFF_BUTTON
                                     || btn == RC_POWEROFF_BUTTON

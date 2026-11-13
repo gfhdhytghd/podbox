@@ -55,6 +55,7 @@
 #include "kernel.h"          /* HZ, current_tick, TIME_AFTER, sleep, yield */
 #include "logf.h"
 #include "button.h"
+#include "input/agents_shortcut.h"
 #include "lang.h"            /* str(), LANG_* */
 #include "settings/settings.h"        /* global_settings, set_option/int/bool, ID2P */
 #include "speech/talk.h"            /* STR() */
@@ -584,19 +585,28 @@ static int scroll_bmp(struct image_info *info)
                 /* animated content and delay between subsequent frames
                  * is shorter then slideshow delay
                  */
-                button = button_get_w_tmo(info->delay);
+                button = agents_shortcut_get_button(info->delay);
             }
             else
-                button = button_get_w_tmo(iv_settings.ss_timeout * HZ);
+                button = agents_shortcut_get_button(iv_settings.ss_timeout * HZ);
         }
         else
         {
             if (info->frames_count > 1 && info->delay)
-                button = button_get_w_tmo(info->delay);
+                button = agents_shortcut_get_button(info->delay);
             else
-                button = button_get(true);
+                button = agents_shortcut_get_button(TIMEOUT_BLOCK);
         }
 
+#ifdef HAVE_USB_PODLINK
+        if (button == AGENTS_SHORTCUT_BUTTON)
+        {
+            root_menu_agents_shortcut();
+            if (iv_usb_dropped) return PLUGIN_USB_CONNECTED;
+            redraw_image(info);
+            continue;
+        }
+#endif
         iv_buf_idle = false;
 
         /* USB took the buffer while we waited: `info` and everything else

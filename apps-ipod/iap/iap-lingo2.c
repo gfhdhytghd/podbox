@@ -19,6 +19,7 @@
  */
 
 #include "iap-core.h"
+#include "iap/remote_capture.h"
 #include "iap-lingo.h"
 #include "system.h"
 #include "button.h"
@@ -58,7 +59,7 @@ void iap_handlepkt_mode2(const unsigned int len, const unsigned char *buf)
 #if CONFIG_TUNER
     static bool remote_mute = false;
 #endif
-    unsigned int cmd = buf[1];
+    unsigned int cmd = len > 1 ? buf[1] : 0;
 
     /* We expect at least three bytes in the buffer, one for the
      * lingo, one for the command, and one for the first button
@@ -76,6 +77,15 @@ void iap_handlepkt_mode2(const unsigned int len, const unsigned char *buf)
      */
     if ((cmd != 0x00) && !DEVICE_LINGO_SUPPORTED(0x02)) {
         cmd_ack(cmd, IAP_ACK_BAD_PARAM);
+        return;
+    }
+
+    if (remote_input_active && cmd == 0x00)
+    {
+        unsigned long btn = remote_context_buttons(len, buf);
+        if (btn != iap_remotebtn) iap_repeatbtn = 2;
+        iap_remotebtn = btn;
+        iap_timeoutbtn = btn ? 3 : 0;
         return;
     }
 
@@ -97,14 +107,13 @@ void iap_handlepkt_mode2(const unsigned int len, const unsigned char *buf)
          */
         case 0x00:
         {
-            unsigned long btn = BUTTON_NONE;
+            unsigned long btn = remote_context_buttons(len, buf);
 
             if(buf[2] != 0)
             {
+#if CONFIG_TUNER
                 if(buf[2] & 1)
                 {
-                    btn |= BUTTON_RC_PLAY;
-#if CONFIG_TUNER
                     if (radio_present == 1) {
                         if (remote_mute == 0) {
                             /* Not Muted so  radio on*/
@@ -115,20 +124,8 @@ void iap_handlepkt_mode2(const unsigned int len, const unsigned char *buf)
                         }
                         remote_mute = !remote_mute;
                     }
-#endif
                 }
-                if(buf[2] & 2)
-                    btn |= BUTTON_RC_VOL_UP;
-                if(buf[2] & 4)
-                    btn |= BUTTON_RC_VOL_DOWN;
-                if(buf[2] & 8)
-                    btn |= BUTTON_RC_RIGHT;
-                if(buf[2] & 16)
-                    btn |= BUTTON_RC_LEFT;
-                if(buf[2] & 32)
-                    btn |= BUTTON_RC_NEXT_ALBUM;
-                if(buf[2] & 64)
-                    btn |= BUTTON_RC_PREV_ALBUM;
+#endif
                 if(buf[2] & 128) /* stop */
                 {
                     if (!iap_btnstop)
@@ -171,10 +168,6 @@ void iap_handlepkt_mode2(const unsigned int len, const unsigned char *buf)
                         iap_skip_chapter((buf[3] & 8) ? 1 : -1);
                     iap_btnchapter = true;
                 }
-                if(buf[3] & 32) /* next playlist */
-                    btn |= BUTTON_RC_NEXT_PLAYLIST;
-                if(buf[3] & 64) /* previous playlist */
-                    btn |= BUTTON_RC_PREV_PLAYLIST;
                 if(buf[3] & 128) /* Shuffle */
                 {
                     if (!iap_btnshuffle)
@@ -209,22 +202,6 @@ void iap_handlepkt_mode2(const unsigned int len, const unsigned char *buf)
                     if (audio_status() == AUDIO_STATUS_PLAY)
                         btn |= BUTTON_RC_PLAY;
                 }
-
-                if(buf[4] & 16) /* ffwd */
-                    btn |= BUTTON_RC_RIGHT;
-                if(buf[4] & 32) /* frwd */
-                    btn |= BUTTON_RC_LEFT;
-                if(buf[4] & 64) /* menu */
-                    btn |= BUTTON_RC_MENU;
-                if(buf[4] & 128) /* select */
-                    btn |= BUTTON_RC_SELECT;
-            }
-            if(len >= 6 && buf[5] != 0)
-            {
-                if(buf[5] & 1) /* up */
-                    btn |= BUTTON_RC_UP;
-                if (buf[5] & 2) /* down */
-                    btn |= BUTTON_RC_DOWN;
             }
 
             /* Shuffle, Repeat, Stop and the chapter buttons act once a
