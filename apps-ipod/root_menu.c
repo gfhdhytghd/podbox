@@ -15,6 +15,8 @@
 #include <stdint.h>
 #include "string-extra.h"
 #include "config.h"
+#include "input/agents_shortcut.h"
+#include "system/app_buffer.h"
 #include "system/appevents.h"
 #include "widgets/menu.h"
 #include "root_menu.h"
@@ -640,12 +642,15 @@ static int plugins_browser_removed(void* param)
 }
 
 static bool wps_return_agents;
+static bool wps_menu_covers;
 
 static int wpsscrn(void* param)
 {
     int ret_val = GO_TO_PREVIOUS;
     bool return_agents = wps_return_agents;
     wps_return_agents = false;
+    bool menu_covers = wps_menu_covers;
+    wps_menu_covers = false;
     int audstatus = audio_status();
     (void)param;
 
@@ -666,7 +671,7 @@ static int wpsscrn(void* param)
     if (audstatus)
     {
         talk_shutup();
-        ret_val = gui_wps_show(return_agents);
+        ret_val = gui_wps_show(return_agents, menu_covers);
     }
     else if (global_status.resume_index != -1)
     {
@@ -680,7 +685,7 @@ static int wpsscrn(void* param)
                 global_status.resume_crc32,
                 global_status.resume_elapsed,
                 global_status.resume_offset);
-            ret_val = gui_wps_show(return_agents);
+            ret_val = gui_wps_show(return_agents, menu_covers);
         }
     }
     else if (!file_exists(PLAYLIST_CONTROL_FILE))
@@ -689,7 +694,7 @@ static int wpsscrn(void* param)
              playlist_resume() != -1)
     {
         playlist_start(0, 0, 0);
-        ret_val = gui_wps_show(return_agents);
+        ret_val = gui_wps_show(return_agents, menu_covers);
     }
 
     if (ret_val == GO_TO_PLAYLIST_VIEWER
@@ -977,47 +982,58 @@ static int agents_scrn(void *param)
         if (destination != GO_TO_PREVIOUS) return destination;
         /* A triple inside the carousel resumes the cached Agents client. */
     }
-    wps_return_agents = ret == AGENTS_SWITCH_WPS;
-    return ret == AGENTS_SWITCH_WPS ? GO_TO_WPS : GO_TO_PREVIOUS;
+    wps_return_agents = ret == AGENTS_SWITCH_WPS || ret == AGENTS_SWITCH_REMOTE_WPS;
+    wps_menu_covers = ret == AGENTS_SWITCH_REMOTE_WPS;
+    return wps_return_agents ? GO_TO_WPS : GO_TO_PREVIOUS;
 }
 
-/* Other screens remain suspended while this pair owns the UI. WPS and
- * Agents return normally so their themes, activities and links close. */
-void root_menu_agents_shortcut(void)
+/* One controller, with no recursive controller/screen entry. While a
+ * screen or app-buffer owner is alive, remember intent and cancel children
+ * until its normal teardown has returned. */
+static void run_screen_shortcut(int screen)
 {
-    bool agents = true;
+    if (agents_nav_active() || app_buffer_is_claimed()) return;
     bool poweroff = button_get_sw_poweroff_state();
-    while (true)
+    for (;;)
     {
         button_set_sw_poweroff_state(poweroff);
-        int ret = agents ? agents_scrn(NULL) : wpsscrn(NULL);
-        if ((agents && ret != GO_TO_WPS) ||
-            (!agents && ret != GO_TO_AGENTS))
+        agents_nav_take(screen == GO_TO_AGENTS ? AGENTS_NAV_AGENTS :
+                        screen == GO_TO_WPS ? AGENTS_NAV_WPS : AGENTS_NAV_COVERS);
+        int ret = screen == GO_TO_AGENTS ? agents_scrn(NULL) :
+                  screen == GO_TO_WPS ? wpsscrn(NULL) : album_covers_scrn(NULL);
+        enum agents_nav_screen nav = agents_nav_pending();
+        if (nav != AGENTS_NAV_NONE && nav != AGENTS_NAV_BACK)
+            ret = nav == AGENTS_NAV_AGENTS ? GO_TO_AGENTS :
+                  nav == AGENTS_NAV_WPS ? GO_TO_WPS : GO_TO_ALBUM_COVERS;
+        if (ret != GO_TO_AGENTS && ret != GO_TO_WPS && ret != GO_TO_ALBUM_COVERS)
             break;
-        if (agents)
-            wps_return_agents = true;
-        agents = !agents;
+        screen = ret;
     }
+    wps_return_agents = wps_menu_covers = false;
     button_set_sw_poweroff_state(poweroff);
+}
+
+void root_menu_agents_shortcut(void)
+{
+    if (agents_nav_pending() == AGENTS_NAV_NONE)
+        agents_nav_request(AGENTS_NAV_AGENTS, false);
+    run_screen_shortcut(GO_TO_AGENTS);
 }
 
 void root_menu_wps_shortcut(void)
 {
-    wps_return_agents = false;
-    bool poweroff = button_get_sw_poweroff_state();
-    button_set_sw_poweroff_state(true);
-    if (wpsscrn(NULL) == GO_TO_AGENTS)
-        root_menu_agents_shortcut();
-    button_set_sw_poweroff_state(poweroff);
+    if (agents_nav_pending() == AGENTS_NAV_NONE)
+        agents_nav_request(AGENTS_NAV_WPS, false);
+    wps_return_agents = wps_menu_covers = false;
+    run_screen_shortcut(GO_TO_WPS);
 }
 
 void root_menu_cover_shortcut(void)
 {
-    bool poweroff = button_get_sw_poweroff_state();
-    int ret = album_covers_scrn(NULL);
-    if (ret == GO_TO_WPS) root_menu_wps_shortcut();
-    else if (ret == GO_TO_AGENTS) root_menu_agents_shortcut();
-    button_set_sw_poweroff_state(poweroff);
+    if (agents_nav_pending() == AGENTS_NAV_NONE)
+        agents_nav_request(agents_nav_has(AGENTS_NAV_COVERS) ?
+                           AGENTS_NAV_BACK : AGENTS_NAV_COVERS, false);
+    run_screen_shortcut(GO_TO_ALBUM_COVERS);
 }
 #endif
 
@@ -2006,7 +2022,23 @@ static inline int load_screen(int screen)
     if (activity != ACTIVITY_UNKNOWN)
         push_current_activity(activity);
 
+#ifdef HAVE_USB_PODLINK
+    if (screen == GO_TO_AGENTS) agents_nav_take(AGENTS_NAV_AGENTS);
+    else if (screen == GO_TO_WPS) agents_nav_take(AGENTS_NAV_WPS);
+    else if (screen == GO_TO_ALBUM_COVERS) agents_nav_take(AGENTS_NAV_COVERS);
+#endif
     ret_val = items[screen].function(items[screen].param);
+#ifdef HAVE_USB_PODLINK
+    /* A scratch-buffer owner has now unwound. Honor a deferred shortcut at
+     * the dispatcher, never from inside that owner's input callback. */
+    if (agents_nav_pending() != AGENTS_NAV_NONE && !app_buffer_is_claimed())
+    {
+        enum agents_nav_screen nav = agents_nav_pending();
+        if (nav == AGENTS_NAV_BACK) { agents_nav_take(nav); ret_val = GO_TO_PREVIOUS; }
+        else ret_val = nav == AGENTS_NAV_AGENTS ? GO_TO_AGENTS :
+                       nav == AGENTS_NAV_WPS ? GO_TO_WPS : GO_TO_ALBUM_COVERS;
+    }
+#endif
 
     if (activity != ACTIVITY_UNKNOWN)
     {

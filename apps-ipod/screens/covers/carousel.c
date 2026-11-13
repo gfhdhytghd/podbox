@@ -76,6 +76,7 @@
 #include "file.h"
 #include "widgets/yesno.h"            /* gui_syncyesno_run */
 #include "root_menu.h"
+#include "input/agents_shortcut.h"
 #include "screens/browse/browser.h"
 #include "screens/browse/browser_db.h"
 #include "screens/playback/track_info.h"          /* browse_id3 */
@@ -4532,8 +4533,25 @@ static int album_covers_loop(void)
                 full_repaint_owed = true;
         }
 
+        enum agents_nav_screen nav = agents_nav_pending();
+        if (nav == AGENTS_NAV_COVERS) agents_nav_take(nav);
+        else if (nav == AGENTS_NAV_BACK)
+        {
+            bool remote = agents_nav_remote();
+            agents_nav_take(nav);
+            return remote ? CAROUSEL_REMOTE_RETURN : GO_TO_PREVIOUS;
+        }
+        else if (nav == AGENTS_NAV_AGENTS) return GO_TO_AGENTS;
+        else if (nav == AGENTS_NAV_WPS) return GO_TO_WPS;
         switch (button) {
 #ifdef HAVE_USB_PODLINK
+        case ACTION_AGENTS_REMOTE_SWITCH:
+        case ACTION_AGENTS_SWITCH:
+            return GO_TO_AGENTS;
+        case ACTION_REMOTE_WPS:
+            return GO_TO_WPS;
+        case ACTION_AGENTS_REMOTE_COVERS:
+            return CAROUSEL_REMOTE_RETURN;
         case ACTION_AGENTS_COVERS:
             return GO_TO_PREVIOUS;
 #endif
@@ -4634,7 +4652,26 @@ static int album_covers_loop(void)
 
 /* Run the coverflow carousel over the given model. Both public entry points
  * (album_covers / artist_portraits) are thin wrappers that select the model. */
+static int carousel_body(const struct carousel_model *m, const char *selected_file);
 int carousel_run(const struct carousel_model *m, const char *selected_file)
+{
+    if (!agents_nav_enter(AGENTS_NAV_COVERS)) return GO_TO_PREVIOUS;
+    int result = carousel_body(m, selected_file);
+    enum agents_nav_screen nav = agents_nav_pending();
+    if (nav == AGENTS_NAV_BACK)
+    {
+        bool remote = agents_nav_remote();
+        agents_nav_take(nav);
+        result = remote ? CAROUSEL_REMOTE_RETURN : GO_TO_PREVIOUS;
+    }
+    else if (nav == AGENTS_NAV_AGENTS) result = GO_TO_AGENTS;
+    else if (nav == AGENTS_NAV_WPS) result = GO_TO_WPS;
+    else if (nav == AGENTS_NAV_COVERS) agents_nav_take(nav);
+    agents_nav_leave(AGENTS_NAV_COVERS);
+    return result;
+}
+
+static int carousel_body(const struct carousel_model *m, const char *selected_file)
 {
     int ret;
 

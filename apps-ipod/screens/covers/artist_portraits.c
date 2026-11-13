@@ -364,5 +364,5 @@ int artist_portraits(const char *selected_file)
             break;
         }
     }
-    return ret;
+    return ret == CAROUSEL_REMOTE_RETURN ? GO_TO_PREVIOUS : ret;
 }

@@ -123,7 +123,7 @@ int main(void)
  assert(prompts==old_prompts&&serial()=='2'&&podlink_requested);
  assert(attached==old_attach&&detached==old_detach);
  old_prompts=prompts;agents_usb_exit(AGENTS_SWITCH_WPS);drain();
- agents_usb_exit(AGENTS_SWITCH_WPS);agents_usb_exit(3);drain();assert(prompts==old_prompts);
+ agents_usb_exit(AGENTS_SWITCH_WPS);agents_usb_exit(3);agents_usb_exit(4);drain();assert(prompts==old_prompts);
  agents_usb_exit(0);drain();answer=usb_consent.epoch;
  assert(confirm_action(&dialog,ACTION_STD_OK,&answer)==DIALOG_ACCEPT);drain();
  assert(enabled[USB_DRIVER_MASS_STORAGE]&&!podlink_requested&&serial()=='1');

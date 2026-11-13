@@ -92,6 +92,8 @@ enum pf_scroll_line_type {
  * let go of the app buffer the menu's rows need. The model's own entry point
  * shows it and opens the carousel again. Below root_menu.h's values too. */
 #define CAROUSEL_CONTEXT       (-21)
+/* Internal result; public carousel wrappers translate it to GO_TO_PREVIOUS. */
+#define CAROUSEL_REMOTE_RETURN (-22)
 
 /* The seam between the generic coverflow engine and the data it shows. */
 struct carousel_model {

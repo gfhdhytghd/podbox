@@ -41,5 +41,6 @@ void* app_get_buffer(size_t *buffer_size, const char *owner);
 void* app_claim_buffer(size_t *buffer_size, const char *owner);
 void* app_try_claim_buffer(size_t *buffer_size, const char *owner);
 void app_release_buffer(const char *owner);
+int app_buffer_is_claimed(void);
 
 #endif /* _APP_BUFFER_H_ */

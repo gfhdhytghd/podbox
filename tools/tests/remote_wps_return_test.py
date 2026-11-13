@@ -23,6 +23,8 @@ source = r'''
 #define WPS_MENU_PREVIOUS 5
 static struct {int wps_menu_action;}global_settings;
 static void gwps_leave_wps(bool on){assert(on);}
+static bool menu_covers=false,theme_enabled,restore;
+static bool show_album_covers(long*go,bool*flag){(void)go;(void)flag;return false;}
 static int menu(bool return_agents) {
  (void)return_agents;
  switch(ACTION_WPS_MENU) {
@@ -46,5 +48,5 @@ subprocess.run([str(O/'return')],check=True)
 # The flag is consumed before any no-audio/USB-audio early return.
 wrapper = root[root.index('static int wpsscrn('):root.index('static int wpsscrn(')+1300]
 assert wrapper.index('wps_return_agents = false') < wrapper.index('if (usb_audio_get_active')
-assert root.count('gui_wps_show(return_agents)') == 3
-assert 'gui_wps_show(bool return_agents)' in wps
+assert root.count('gui_wps_show(return_agents, menu_covers)') == 3
+assert 'gui_wps_show(bool return_agents, bool menu_covers)' in wps

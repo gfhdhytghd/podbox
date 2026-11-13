@@ -61,9 +61,12 @@ pre = r'''
 #define ACTION_AGENTS_DISCARD 12
 #define ACTION_AGENTS_SWITCH 13
 #define ACTION_AGENTS_COVERS 15
+#define ACTION_AGENTS_REMOTE_SWITCH 16
+#define ACTION_AGENTS_REMOTE_COVERS 17
 #define ACTION_AGENTS_TALK_END 14
 #define AGENTS_SWITCH_WPS 2
 #define AGENTS_SWITCH_COVERS 3
+#define AGENTS_SWITCH_REMOTE_WPS 4
 static unsigned long current_tick,shortcut_talking_at;
 static bool shortcut_talking,talk_held,talk_remote,talk_discarded,talk_req_up,talk_failed;
 static long talk_since,talk_until;

@@ -842,3 +842,53 @@ This is replay evidence, not physical acceptance of a rebooted FU16 image.
 No host runtime or wire-protocol update is required. Continue using the
 matching FU16 bridge and HerdRemote files. This firmware-only package omits
 unchanged host runtimes and includes this updated protocol/control document.
+
+## Remote-entry WPS MENU (Follow-up 18)
+
+Now Playing reached by a remote Play double-tap from Agents makes MENU open
+Cover Flow. Returning to an existing WPS by remote Play triple-tap inside
+Cover Flow also arms this behavior. Wheel and forwarded remote MENU use the
+same ACTION_WPS_MENU arm. Cover Flow remains modal over that WPS: ordinary
+exit or triple returns to the same playing screen. Its MENU flag persists
+while that WPS invocation remains active, and disappears on any actual WPS
+exit. Pending entry provenance is consumed before USB-audio/no-audio refusal.
+
+Remote double/triple actions are distinct from native SELECT+PLAY and
+SELECT+MENU actions. Only the remote double entry and explicit remote-triple
+child return arm the new flag. Normal menus/native PLAY keep their previous
+WPS MENU setting. SELECT+PLAY from Agents keeps its previous MENU-to-Agents
+behavior, rather than gaining the remote-only Cover Flow override. A native
+SELECT+MENU return from Cover Flow does not arm an ordinary WPS. All existing
+silent Agents music exits and the explicit Agents MENU USB popup remain.
+
+MENU hold still opens QuickScreen, or Shortcuts when configured. The host
+IR bridge's existing Menu-hold-to-Select classification is unchanged. The
+new override applies only to MENU tap. The ordinary album carousel API
+still returns GO_TO_PREVIOUS for all callers; a separate per-call output
+carries remote-triple provenance to WPS, without a global child-return latch.
+
+Host code and protocol are unchanged. The package restores the complete
+.rockbox/tools host tree (including HerdRemote, bridge, tests/fixtures and
+podlink.py), preserving the previous full package's tool paths for fast_swap.
+No installation or fast_swap operation is executed by this build-only task.
+
+## Nonrecursive screen shortcuts (Follow-up 18 V2)
+
+Shortcut routing no longer calls a new Agents/WPS/Carousel controller from
+inside an existing screen. Public screen wrappers register live instances;
+only one instance of each screen is admitted. A deferred target is retained
+while child menus receive Cancel (native-only raw readers receive MENU).
+The screen owner then runs its ordinary cleanup before the next screen can
+open. A scratch-buffer owner outside these three screens also unwinds to the
+root dispatcher before the pending target runs. No buffer is stolen, copied,
+or silently shared; the existing ownership assertions remain intact.
+
+Cover Flow now handles double/native SELECT+PLAY by returning Agents, and
+remote Play hold by returning WPS, after releasing its buffer. Its triple
+and native SELECT+MENU return to the origin. If WPS is the existing caller,
+its carousel helper resumes that WPS instead of entering another instance;
+an Agents destination propagates through the WPS cleanup first. The modal
+shortcut controller is one loop over the destinations, not mutually recursive
+screen calls. V1 MENU uses the same safe WPS-owned carousel path. Existing
+cached Agents selection, silent music exits and explicit MENU USB consent
+remain. Software navigation state is bounded independently of input length.

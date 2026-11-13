@@ -76,7 +76,12 @@ int main(void){
 cmd=['cc','-std=gnu11','-Wall','-Wextra','-Werror','-fsanitize=address,undefined','-fno-pie','-no-pie','-I'+str(O),'-I'+str(R)]
 subprocess.run(cmd+[str(O/'gestures.c'),'-o',str(O/'gestures')],check=True)
 subprocess.run([str(O/'gestures')],check=True)
-root=(R/'apps-ipod/root_menu.c').read_text();wps=(R/'apps-ipod/screens/playback/wps.c').read_text();covers=(R/'apps-ipod/screens/covers/carousel.c').read_text()
+root=(R/'apps-ipod/root_menu.c').read_text()
+nav_h=(R/'apps-ipod/input/agents_shortcut.h').read_text()
+nav_c=(R/'apps-ipod/input/agents_shortcut.c').read_text()
+nav_production=nav_c[nav_c.index('static unsigned int nav_live;'):nav_c.index('int agents_shortcut_button(')]
+nav_production=nav_h[nav_h.index('enum agents_nav_screen'):nav_h.rfind('#endif')]+nav_production
+wps=(R/'apps-ipod/screens/playback/wps.c').read_text();covers=(R/'apps-ipod/screens/covers/carousel.c').read_text()
 nav=r'''
 #include <assert.h>
 #include <stdbool.h>
@@ -84,20 +89,24 @@ nav=r'''
 #include <stdio.h>
 #define AGENTS_SWITCH_WPS 2
 #define AGENTS_SWITCH_COVERS 3
+#define AGENTS_SWITCH_REMOTE_WPS 4
 #define GO_TO_PREVIOUS -1
 #define GO_TO_WPS 10
+#define GO_TO_ALBUM_COVERS 14
 #define GO_TO_AGENTS 11
 #define GO_TO_ROOT 12
-static bool wps_return_agents,poweroff=true;
+static bool wps_return_agents,wps_menu_covers,poweroff=true;
 static int a_calls,calls,covers_result=GO_TO_PREVIOUS;
 static int agents_screen(void){return ++a_calls==1?AGENTS_SWITCH_COVERS:0;}
 static int album_covers_scrn(void*p){(void)p;calls++;return covers_result;}
 static bool button_get_sw_poweroff_state(void){return poweroff;}
 static void button_set_sw_poweroff_state(bool on){poweroff=on;}
-static void root_menu_wps_shortcut(void){assert(0);}
-static void root_menu_agents_shortcut(void){assert(0);}
+static int wpsscrn(void*p){(void)p;return GO_TO_PREVIOUS;}
+static int app_buffer_is_claimed(void){return 0;}
+
 '''
-nav+=function(root,'agents_scrn')+function(root,'root_menu_cover_shortcut')+r'''
+nav='#include <stdbool.h>\n'+nav_production+nav
+nav+=function(root,'agents_scrn')+function(root,'run_screen_shortcut')+function(root,'root_menu_cover_shortcut')+r'''
 int main(void){assert(agents_scrn(NULL)==GO_TO_PREVIOUS);assert(a_calls==2&&calls==1);
  root_menu_cover_shortcut();assert(calls==2&&poweroff);
  a_calls=0;covers_result=GO_TO_ROOT;assert(agents_scrn(NULL)==GO_TO_ROOT);
@@ -111,5 +120,5 @@ assert re.search(r'case ACTION_WPS_STOP:\s*#ifdef HAVE_USB_PODLINK\s*case ACTION
 assert 'case ACTION_AGENTS_COVERS:\n            return GO_TO_PREVIOUS;' in covers
 assert 'case ACTION_AGENTS_SWITCH:\n                gwps_leave_wps(true);\n                return GO_TO_AGENTS;' in wps
 assert 'action == ACTION_AGENTS_COVERS' in (R/'apps-ipod/input/action.c').read_text()
-assert 'get_current_activity() != ACTIVITY_ALBUMCOVERS' in (R/'apps-ipod/input/action.c').read_text()
+assert 'shortcut_screen_context(context)' in (R/'apps-ipod/input/action.c').read_text()
 print('WPS existing album modal origin; Cover triple returns caller; double remains Agents; custom action bypasses nested dispatch PASS')

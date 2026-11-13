@@ -67,6 +67,7 @@
 #include "metadata/cuesheet.h"
 #include "ata_idle_notify.h"
 #include "root_menu.h"
+#include "input/agents_shortcut.h"
 #include "screens/covers/album_covers.h"
 #include "speech/announce.h"
 #include "skin/backdrop.h"
@@ -640,9 +641,6 @@ static long do_party_mode(long action)
             case ACTION_WPS_NEXT_ALBUM:
             case ACTION_WPS_PREV_ALBUM:
             case ACTION_WPS_STOP:
-#ifdef HAVE_USB_PODLINK
-            case ACTION_AGENTS_COVERS:
-#endif
                 return ACTION_NONE;
                 break;
             default:
@@ -654,13 +652,16 @@ static long do_party_mode(long action)
 
 /* Album covers over the WPS, entered with the theme off. True when the WPS
  * is to be left, for the screen in *go_to. */
-static bool show_album_covers(long *go_to)
+static bool show_album_covers(long *go_to, bool *menu_covers)
 {
     int ret;
 
     gwps_leave_wps(false);
-    ret = album_covers(NULL);
-    if (ret == GO_TO_ALBUM_COVERS_TRACKS || ret == GO_TO_ROOT)
+    bool remote_return;
+    ret = album_covers_return(NULL, &remote_return);
+    if (remote_return) *menu_covers = true;
+    if (ret == GO_TO_ALBUM_COVERS_TRACKS || ret == GO_TO_ROOT ||
+        ret == GO_TO_AGENTS)
         *go_to = ret;
     /* audio stopped in Album covers; return to WPS
        via wpsscrn() which handles playlist resume */
@@ -728,7 +729,16 @@ static inline int action_wpsab_single(long button)
  * In either way, call gwps_leave_wps(true), in order to restore the correct
  * "main screen" backdrops and statusbars
  */
-long gui_wps_show(bool return_agents)
+static long wps_run(bool return_agents, bool menu_covers);
+long gui_wps_show(bool return_agents, bool menu_covers)
+{
+    if (!agents_nav_enter(AGENTS_NAV_WPS)) return GO_TO_PREVIOUS;
+    long result = wps_run(return_agents, menu_covers);
+    agents_nav_leave(AGENTS_NAV_WPS);
+    return result;
+}
+
+static long wps_run(bool return_agents, bool menu_covers)
 {
     long button = 0;
     bool restore = true;
@@ -743,6 +753,21 @@ long gui_wps_show(bool return_agents)
     wps_state_init();
     while ( 1 )
     {
+        enum agents_nav_screen nav = agents_nav_pending();
+        if (nav == AGENTS_NAV_WPS) agents_nav_take(nav);
+        else if (nav == AGENTS_NAV_AGENTS)
+        {
+            gwps_leave_wps(true);
+            return GO_TO_AGENTS;
+        }
+        else if (nav == AGENTS_NAV_COVERS || nav == AGENTS_NAV_BACK)
+        {
+            agents_nav_take(nav);
+            long go_to;
+            theme_enabled = false;
+            if (show_album_covers(&go_to, &menu_covers)) return go_to;
+            restore = true;
+        }
         bool audio_paused = (audio_status() & AUDIO_STATUS_PAUSE)?true:false;
         /* did someone else (i.e power thread) change audio pause mode? */
         if (state->paused != audio_paused) {
@@ -811,6 +836,7 @@ long gui_wps_show(bool return_agents)
         switch(button)
         {
 #ifdef HAVE_USB_PODLINK
+            case ACTION_AGENTS_REMOTE_SWITCH:
             case ACTION_AGENTS_SWITCH:
                 gwps_leave_wps(true);
                 return GO_TO_AGENTS;
@@ -825,6 +851,13 @@ long gui_wps_show(bool return_agents)
 
                 if (act == HOTKEY_OFF)
                     break;
+                if (act == HOTKEY_ALBUM_COVERS)
+                {
+                    theme_enabled = false;
+                    if (show_album_covers(&go_to, &menu_covers)) return go_to;
+                    restore = true;
+                    break;
+                }
                 /* A NOSBS action's screen owns the display and turns the
                  * theme off itself, so leave without re-enabling it */
                 theme_enabled = !(get_hotkey(act)->flags & HOTKEY_FLAG_NOSBS);
@@ -996,6 +1029,14 @@ long gui_wps_show(bool return_agents)
                 break;
             /* menu key functions */
             case ACTION_WPS_MENU:
+                if (menu_covers)
+                {
+                    long go_to;
+                    theme_enabled = false;
+                    if (show_album_covers(&go_to, &menu_covers)) return go_to;
+                    restore = true;
+                    break;
+                }
                 gwps_leave_wps(true);
                 if (return_agents)
                     return GO_TO_AGENTS;
@@ -1041,10 +1082,14 @@ long gui_wps_show(bool return_agents)
 
                 /* iPod Classic 6G custom: open Album covers instead of stopping */
             case ACTION_WPS_STOP:
+#ifdef HAVE_USB_PODLINK
+            case ACTION_AGENTS_COVERS:
+            case ACTION_AGENTS_REMOTE_COVERS:
+#endif
                 {
                     long go_to;
                     theme_enabled = false;
-                    if (show_album_covers(&go_to))
+                    if (show_album_covers(&go_to, &menu_covers))
                         return go_to;
                     restore = true;
                 }

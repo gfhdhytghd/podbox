@@ -41,6 +41,7 @@ extern unsigned char pluginbuf[];
 
 /* Which long-lived screen holds the buffer, or NULL if none does. */
 static const char *buffer_owner;
+int app_buffer_is_claimed(void) { return buffer_owner != NULL; }
 
 /* Transient use: finished before returning to the UI loop, so no release. */
 void* app_get_buffer(size_t *buffer_size, const char *owner)

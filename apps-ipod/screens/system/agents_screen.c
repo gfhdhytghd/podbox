@@ -2411,7 +2411,16 @@ static void agents_usb_exit(int result)
 #endif
 }
 
+static int agents_run(void);
 int agents_screen(void)
+{
+    if (!agents_nav_enter(AGENTS_NAV_AGENTS)) return AGENTS_EXIT_DEFERRED;
+    int result = agents_run();
+    agents_nav_leave(AGENTS_NAV_AGENTS);
+    return result;
+}
+
+static int agents_run(void)
 {
     struct gui_synclist list;
     int action, ret = AGENTS_EXIT_MENU;
@@ -2481,6 +2490,14 @@ int agents_screen(void)
     bool done = false;
     while (!done)
     {
+        enum agents_nav_screen nav = agents_nav_pending();
+        if (nav == AGENTS_NAV_AGENTS) agents_nav_take(nav);
+        else if (nav != AGENTS_NAV_NONE)
+        {
+            finish_talk(true);
+            ret = nav == AGENTS_NAV_WPS ? AGENTS_SWITCH_WPS : AGENTS_SWITCH_COVERS;
+            break;
+        }
         bool changed = poll_link();
         pump_keys();
         take_result(&list);
@@ -2786,10 +2803,17 @@ int agents_screen(void)
             case ACTION_AGENTS_DISCARD:
                 finish_talk(true);
                 break;
+            case ACTION_AGENTS_REMOTE_COVERS:
             case ACTION_AGENTS_COVERS:
                 native_play_pending = false;
                 finish_talk(true);
                 ret = AGENTS_SWITCH_COVERS;
+                done = true;
+                break;
+            case ACTION_AGENTS_REMOTE_SWITCH:
+                native_play_pending = false;
+                finish_talk(true);
+                ret = AGENTS_SWITCH_REMOTE_WPS;
                 done = true;
                 break;
             case ACTION_AGENTS_SWITCH:
@@ -2852,7 +2876,8 @@ int agents_screen(void)
     cache_generation = podlink_generation();
     podlink_close();
     /* Play still held would power off at once: wait for its release */
-    while (ret != AGENTS_SWITCH_WPS && agents_play_down())
+    while (ret != AGENTS_SWITCH_WPS && ret != AGENTS_SWITCH_REMOTE_WPS &&
+           agents_play_down())
         sleep(HZ / 20);
     button_set_sw_poweroff_state(poweroff);
     pop_current_activity();

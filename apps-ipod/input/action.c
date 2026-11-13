@@ -332,6 +332,7 @@ static int remote_poll(int timeout, int context)
 #ifdef HAVE_USB_PODLINK
 int agents_shortcut_get_button(int timeout)
 {
+    if (agents_nav_pending() != AGENTS_NAV_NONE) return BUTTON_MENU;
     int activity = get_current_activity();
 #ifdef IPOD_ACCESSORY_PROTOCOL
     int context = activity == ACTIVITY_AGENTS ? REMOTE_AGENTS :
@@ -419,7 +420,7 @@ static inline bool action_poll_button(action_last_t *last, action_cur_t *cur)
         last->button = BUTTON_REL;
         last->action = ACTION_NONE;
         last->wait_for_release = false;
-        *button = ACTION_AGENTS_SWITCH;
+        *button = ACTION_AGENTS_REMOTE_SWITCH;
         return true;
     }
     if (*button == REMOTE_COVERS_BUTTON)
@@ -427,7 +428,7 @@ static inline bool action_poll_button(action_last_t *last, action_cur_t *cur)
         last->button = BUTTON_REL;
         last->action = ACTION_NONE;
         last->wait_for_release = false;
-        *button = ACTION_AGENTS_COVERS;
+        *button = ACTION_AGENTS_REMOTE_COVERS;
         return true;
     }
 #endif
@@ -977,8 +978,49 @@ void action_wait_for_release(void)
     button_clear_pressed();
 }
 
+static bool shortcut_screen_context(int context)
+{
+    return context == CONTEXT_WPS || context == CONTEXT_AGENTS ||
+        (context == CONTEXT_PLUGIN &&
+         get_current_activity() == ACTIVITY_ALBUMCOVERS);
+}
+
+static int route_screen_shortcut(int action, int context)
+{
+#ifdef HAVE_USB_PODLINK
+    bool covers = action == ACTION_AGENTS_COVERS ||
+                  action == ACTION_AGENTS_REMOTE_COVERS;
+    bool agents = action == ACTION_AGENTS_SWITCH ||
+                  action == ACTION_AGENTS_REMOTE_SWITCH;
+    if ((!covers && !agents && action != ACTION_REMOTE_WPS) ||
+        shortcut_screen_context(context)) return action;
+#ifdef IPOD_ACCESSORY_PROTOCOL
+    bool capture = remote_input_active;
+    remote_input_active = false;
+#endif
+    enum agents_nav_screen target = covers ?
+        (agents_nav_has(AGENTS_NAV_COVERS) ? AGENTS_NAV_BACK : AGENTS_NAV_COVERS) :
+        agents ? AGENTS_NAV_AGENTS : AGENTS_NAV_WPS;
+    agents_nav_request(target, action == ACTION_AGENTS_REMOTE_COVERS);
+    if (covers) root_menu_cover_shortcut();
+    else if (agents) root_menu_agents_shortcut();
+    else root_menu_wps_shortcut();
+#ifdef IPOD_ACCESSORY_PROTOCOL
+    remote_input_active = capture;
+#endif
+    return agents_nav_pending() != AGENTS_NAV_NONE ? ACTION_STD_CANCEL : ACTION_REDRAW;
+#else
+    (void)context;
+    return action;
+#endif
+}
+
 int get_action(int context, int timeout)
 {
+#ifdef HAVE_USB_PODLINK
+    if (agents_nav_pending() != AGENTS_NAV_NONE && !shortcut_screen_context(context))
+        return ACTION_STD_CANCEL;
+#endif
     action_cur_t current;
     init_act_cur(&current, context, timeout, NULL);
 
@@ -994,27 +1036,7 @@ int get_action(int context, int timeout)
         return ACTION_REDRAW;
     }
 #endif
-#ifdef HAVE_USB_PODLINK
-    if (action == ACTION_REMOTE_WPS ||
-        (action == ACTION_AGENTS_SWITCH && context != CONTEXT_WPS &&
-         context != CONTEXT_AGENTS) ||
-        (action == ACTION_AGENTS_COVERS && context != CONTEXT_WPS &&
-         context != CONTEXT_AGENTS &&
-         get_current_activity() != ACTIVITY_ALBUMCOVERS))
-    {
-#ifdef IPOD_ACCESSORY_PROTOCOL
-        bool capture = remote_input_active;
-        remote_input_active = false;
-#endif
-        if (action == ACTION_REMOTE_WPS) root_menu_wps_shortcut();
-        else if (action == ACTION_AGENTS_COVERS) root_menu_cover_shortcut();
-        else root_menu_agents_shortcut();
-#ifdef IPOD_ACCESSORY_PROTOCOL
-        remote_input_active = capture;
-#endif
-        return ACTION_REDRAW;
-    }
-#endif
+    action = route_screen_shortcut(action, context);
     return action;
 }
 
@@ -1107,6 +1129,10 @@ int action_set_keymap_handle(int handle, int count)
 int get_custom_action(int context,int timeout,
                       const struct button_mapping* (*get_context_map)(int))
 {
+#ifdef HAVE_USB_PODLINK
+    if (agents_nav_pending() != AGENTS_NAV_NONE && !shortcut_screen_context(context))
+        return ACTION_STD_CANCEL;
+#endif
     action_cur_t current;
     init_act_cur(&current, context, timeout, get_context_map);
 
@@ -1121,27 +1147,7 @@ int get_custom_action(int context,int timeout,
         return ACTION_REDRAW;
     }
 #endif
-#ifdef HAVE_USB_PODLINK
-    if (action == ACTION_REMOTE_WPS ||
-        (action == ACTION_AGENTS_SWITCH && context != CONTEXT_WPS &&
-         context != CONTEXT_AGENTS) ||
-        (action == ACTION_AGENTS_COVERS && context != CONTEXT_WPS &&
-         context != CONTEXT_AGENTS &&
-         get_current_activity() != ACTIVITY_ALBUMCOVERS))
-    {
-#ifdef IPOD_ACCESSORY_PROTOCOL
-        bool capture = remote_input_active;
-        remote_input_active = false;
-#endif
-        if (action == ACTION_REMOTE_WPS) root_menu_wps_shortcut();
-        else if (action == ACTION_AGENTS_COVERS) root_menu_cover_shortcut();
-        else root_menu_agents_shortcut();
-#ifdef IPOD_ACCESSORY_PROTOCOL
-        remote_input_active = capture;
-#endif
-        return ACTION_REDRAW;
-    }
-#endif
+    action = route_screen_shortcut(action, context);
     return action;
 }
 

@@ -28,4 +28,16 @@ int agents_cover_chord_button(struct agents_cover_chord_state *s, int button,
 int agents_shortcut_button(struct agents_shortcut_state *s, int button,
                            int held, bool talking, bool *fire);
 void agents_shortcut_talking(bool talking);
+/* Cooperative navigation: children cancel/unwind; only their owner opens
+ * another screen after its cleanup. Three bits bound live screen instances. */
+enum agents_nav_screen { AGENTS_NAV_NONE, AGENTS_NAV_AGENTS, AGENTS_NAV_WPS,
+                         AGENTS_NAV_COVERS, AGENTS_NAV_BACK };
+void agents_nav_request(enum agents_nav_screen screen, bool remote);
+enum agents_nav_screen agents_nav_pending(void);
+bool agents_nav_remote(void);
+bool agents_nav_active(void);
+bool agents_nav_has(enum agents_nav_screen screen);
+bool agents_nav_enter(enum agents_nav_screen screen);
+void agents_nav_leave(enum agents_nav_screen screen);
+bool agents_nav_take(enum agents_nav_screen screen);
 #endif

@@ -980,7 +980,13 @@ void album_covers_cancel_resume(void)
 
 int album_covers(const char *selected_file)
 {
+    return album_covers_return(selected_file, NULL);
+}
+
+int album_covers_return(const char *selected_file, bool *remote_return)
+{
     int ret;
+    if (remote_return) *remote_return = false;
 
     while (1)
     {
@@ -1009,5 +1015,10 @@ int album_covers(const char *selected_file)
         selected_file = NULL;
     }
 
+    if (ret == CAROUSEL_REMOTE_RETURN)
+    {
+        if (remote_return) *remote_return = true;
+        ret = GO_TO_PREVIOUS;
+    }
     return ret;
 }

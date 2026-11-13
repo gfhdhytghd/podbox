@@ -7,6 +7,33 @@
 
 volatile bool button_agents_chord_latched;
 
+static unsigned int nav_live;
+static enum agents_nav_screen nav_pending;
+static bool nav_remote;
+void agents_nav_request(enum agents_nav_screen screen, bool remote)
+{ nav_pending = screen; nav_remote = remote; }
+enum agents_nav_screen agents_nav_pending(void) { return nav_pending; }
+bool agents_nav_remote(void) { return nav_remote; }
+bool agents_nav_active(void) { return nav_live != 0; }
+bool agents_nav_has(enum agents_nav_screen screen)
+{ return (nav_live & (1u << screen)) != 0; }
+bool agents_nav_take(enum agents_nav_screen screen)
+{
+    if (nav_pending != screen) return false;
+    nav_pending = AGENTS_NAV_NONE; nav_remote = false;
+    return true;
+}
+bool agents_nav_enter(enum agents_nav_screen screen)
+{
+    if (agents_nav_has(screen))
+    { agents_nav_request(screen, false); return false; }
+    nav_live |= 1u << screen;
+    agents_nav_take(screen);
+    return true;
+}
+void agents_nav_leave(enum agents_nav_screen screen)
+{ nav_live &= ~(1u << screen); }
+
 int agents_shortcut_button(struct agents_shortcut_state *s, int button,
                            int held, bool talking, bool *fire)
 {

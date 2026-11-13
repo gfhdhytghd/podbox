@@ -445,19 +445,26 @@ for name in re.findall(r'static const struct button_mapping (remote_button_conte
     assert re.search(pattern,baseline,re.S).group()==re.search(pattern,candidate,re.S).group(),name
 print('outside Agents: every pre-existing remote keymap array identical to db11c0fb1e PASS')
 root=(R/'apps-ipod/root_menu.c').read_text()
+nav_h=(R/'apps-ipod/input/agents_shortcut.h').read_text()
+nav_c=(R/'apps-ipod/input/agents_shortcut.c').read_text()
+nav_production=nav_c[nav_c.index('static unsigned int nav_live;'):nav_c.index('int agents_shortcut_button(')]
+
 navpre='''
 #define GO_TO_PLUGIN 1
 #define GO_TO_PLAYLIST_VIEWER 2
 #define GO_TO_WPS 3
+#define GO_TO_ALBUM_COVERS 14
 #define GO_TO_PREVIOUS_MUSIC 4
 #define GO_TO_AGENTS 5
 #define GO_TO_ROOT -1
 #define GO_TO_PREVIOUS -2
 #define AGENTS_SWITCH_WPS 2
 #define AGENTS_SWITCH_COVERS 3
+#define AGENTS_SWITCH_REMOTE_WPS 4
 static int agents_return, a_calls, w_calls;
-static bool wps_return_agents,was_agents;
+static bool wps_return_agents,wps_menu_covers,was_agents;
 static bool poweroff=true;
+static int app_buffer_is_claimed(void){return 0;}
 static bool button_get_sw_poweroff_state(void) {return poweroff;}
 static void button_set_sw_poweroff_state(bool on) {poweroff=on;}
 static int album_covers_scrn(void *p) {(void)p;return GO_TO_PREVIOUS;}
@@ -477,7 +484,7 @@ int main(void) {
     puts("navigation: System entry/Agents-to-WPS/modal alternation/remote WPS jump/normal cleanup PASS");
 }
 '''
-(O/'navigation.c').write_text(pre+navpre+function(root,'menu_result')+function(root,'agents_scrn')+function(root,'root_menu_agents_shortcut')+function(root,'root_menu_wps_shortcut')+navtest)
+(O/'navigation.c').write_text(pre+nav_production+navpre+function(root,'menu_result')+function(root,'agents_scrn')+function(root,'run_screen_shortcut')+function(root,'root_menu_agents_shortcut')+function(root,'root_menu_wps_shortcut')+navtest)
 subprocess.run(['cc','-std=gnu11','-Wall','-Wextra','-Werror','-g','-fsanitize=address,undefined','-fno-pie','-no-pie','-I'+str(O),'-I'+str(R),'-I'+str(R/'apps-ipod'),str(O/'navigation.c'),'-o',str(O/'navigation')],check=True)
 subprocess.run([str(O/'navigation')],check=True)
 # Compile the actual polling hook too, to check adapter/chord ordering and
@@ -487,6 +494,8 @@ hookpre='''
 #define ACTION_NONE 0
 #define ACTION_REDRAW 1
 #define ACTION_AGENTS_SWITCH 400
+#define ACTION_AGENTS_REMOTE_SWITCH 403
+#define ACTION_AGENTS_REMOTE_COVERS 404
 #define ACTION_AGENTS_COVERS 402
 #define CONTEXT_AGENTS 1
 #define CONTEXT_WPS 2
@@ -553,7 +562,7 @@ int main(void) {
     current_tick=131;queued_button=BUTTON_RC_PLAY|BUTTON_REL;held_button=0;
     assert(action_poll_button(&last,&cur)&&!cur.button);
     current_tick=152;queued_button=held_button=0;
-    assert(action_poll_button(&last,&cur)&&cur.button==ACTION_AGENTS_SWITCH);
+    assert(action_poll_button(&last,&cur)&&cur.button==ACTION_AGENTS_REMOTE_SWITCH);
     assert(last.button==BUTTON_REL&&last.action==ACTION_NONE&&!last.wait_for_release);
     /* Cover Flow's custom context uses its activity, not CONTEXT_WPS. */
     remote=(struct agents_remote_state){0};activity=ACTIVITY_ALBUMCOVERS;cur.context=99;
@@ -570,7 +579,7 @@ int main(void) {
       assert(action_poll_button(&last,&cur)&&!cur.button);
       current_tick+=13;queued_button=BUTTON_RC_PLAY|BUTTON_REL;held_button=0;
       assert(action_poll_button(&last,&cur));
-      assert(cur.button==(tap==2?ACTION_AGENTS_COVERS:BUTTON_NONE));
+      assert(cur.button==(tap==2?ACTION_AGENTS_REMOTE_COVERS:BUTTON_NONE));
     }
     remote=(struct agents_remote_state){.tap_pending=true,.taps=2,.released=100};
     current_tick=120;queued_button=held_button=0;remote_poll(50,REMOTE_WPS);assert(waited==1);
@@ -593,6 +602,8 @@ int main(void) {
       queued_button=BUTTON_MENU|BUTTON_SELECT|BUTTON_REL;held_button=0;
       assert(!agents_shortcut_get_button(5));
     }
+    agents_nav_request(AGENTS_NAV_WPS,false);
+    assert(agents_shortcut_get_button(0)==BUTTON_MENU);agents_nav_take(AGENTS_NAV_WPS);
     puts("input polling hook: native-only chord/remote PLAY isolation/native SELECT timing PASS");
 }
 '''

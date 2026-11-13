@@ -74,6 +74,8 @@ enum carousel_background_values {
  * paths (main menu, WPS shortcuts) -- falls back to the currently playing
  * track's album, or wherever was last viewed. */
 int album_covers(const char *selected_file);
+/* Same UI, with per-invocation remote-triple return provenance for WPS. */
+int album_covers_return(const char *selected_file, bool *remote_return);
 
 /* Drop the "come back to the album whose track list you just opened" signal
  * album_enter() arms. For whoever ends that track list somewhere other than
