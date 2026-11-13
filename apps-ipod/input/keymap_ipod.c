@@ -386,10 +386,11 @@ static const struct button_mapping remote_button_context_agents[] = {
     { ACTION_AGENTS_REMOTE_TALK, BUTTON_RC_PLAY, BUTTON_NONE },
     { ACTION_AGENTS_DISCARD, BUTTON_RC_PLAY|BUTTON_REL|BUTTON_REPEAT,
       BUTTON_NONE },
-    /* A classified volume press supplies one completed page gesture. */
-    { ACTION_LISTTREE_PGUP, BUTTON_RC_VOL_UP|BUTTON_REL|BUTTON_REPEAT,
+    /* One volume step moves an Agents list by one item; detail and Usage
+     * turn it back into their page step (agents_screen.c). */
+    { ACTION_STD_PREV, BUTTON_RC_VOL_UP|BUTTON_REL|BUTTON_REPEAT,
       BUTTON_NONE },
-    { ACTION_LISTTREE_PGDOWN, BUTTON_RC_VOL_DOWN|BUTTON_REL|BUTTON_REPEAT,
+    { ACTION_STD_NEXT, BUTTON_RC_VOL_DOWN|BUTTON_REL|BUTTON_REPEAT,
       BUTTON_NONE },
     { ACTION_LISTTREE_PGUP, BUTTON_RC_VOL_UP, BUTTON_NONE },
     { ACTION_LISTTREE_PGUP, BUTTON_RC_VOL_UP|BUTTON_REPEAT, BUTTON_NONE },

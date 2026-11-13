@@ -2563,6 +2563,17 @@ int agents_screen(void)
             /* No list to scroll: the wheel is the arrow keys, or in the
              * confirm view nothing */
             action = get_action(CONTEXT_AGENTS, ANIM_TICKS);
+#ifdef IPOD_ACCESSORY_PROTOCOL
+            if (action == ACTION_STD_PREV || action == ACTION_STD_NEXT)
+            {
+                /* A remote volume step pages here, unlike a wheel step */
+                int raw_button;
+                get_action_statuscode(&raw_button);
+                if (raw_button & (BUTTON_RC_VOL_UP | BUTTON_RC_VOL_DOWN))
+                    action = action == ACTION_STD_PREV ?
+                             ACTION_LISTTREE_PGUP : ACTION_LISTTREE_PGDOWN;
+            }
+#endif
             int dir = 0;
             if (view == VIEW_CONFIRM)
                 ;
