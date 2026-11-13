@@ -42,6 +42,7 @@ preamble = r'''
 #define BUTTON_NONE 0
 #define BUTTON_REL 0x02000000
 #define BUTTON_REPEAT 0x04000000
+#define BUTTON_REDRAW 0x20000000
 #define HZ 100
 #define REPEAT_START 30
 #define REPEAT_INTERVAL_START 16
@@ -82,6 +83,47 @@ static void request(int type,int id,int down,int len,int expected) {
     response=0; usb_core_control_request_handler(&r,NULL,0);
     assert(response==expected);
 }
+static struct agents_remote_state remote;
+static int cursor, mapped[50], mapped_count;
+static void collect(int context, int button, unsigned long t) {
+    int result=agents_remote_button(&remote,context,button,lastbtn,t);
+    if(result) { assert(mapped_count<50);mapped[mapped_count++]=result; }
+    while(remote.replay) {
+        result=agents_remote_button(&remote,context,0,lastbtn,t);
+        assert(result && mapped_count<50);mapped[mapped_count++]=result;
+    }
+}
+static void poll_tick(int context,unsigned long t) {
+    tick(t);
+    if(cursor==used) collect(context,0,t);
+    else while(cursor<used) collect(context,posted[cursor++],t);
+}
+static void gesture(int context,unsigned long start,int held) {
+    remote=(struct agents_remote_state){0};cursor=used;mapped_count=0;
+    current_tick=start;request(0x40,1,1,0,USB_CONTROL_ACK);
+    for(int i=1;i<=held;i++) {
+        if(i%10==0) request(0x40,1,1,0,USB_CONTROL_ACK);
+        poll_tick(context,start+i);
+        if(context==REMOTE_AGENTS && i<62) assert(!mapped_count);
+        if(context==REMOTE_AGENTS && i>=62) {
+            assert(mapped_count==2 && mapped[0]==BUTTON_SELECT);
+            assert(mapped[1]==(BUTTON_SELECT|BUTTON_REL));
+        }
+    }
+    request(0x40,1,0,0,USB_CONTROL_ACK);
+    poll_tick(context,start+held+1);poll_tick(context,start+held+2);
+    if(context==REMOTE_AGENTS) {
+        int expected=held>=60?BUTTON_SELECT:BUTTON_MENU;
+        assert(mapped_count==2 && mapped[0]==expected);
+        assert(mapped[1]==(expected|BUTTON_REL));
+    } else {
+        assert(mapped[0]==BUTTON_RC_MENU);
+        assert(mapped[mapped_count-1]==(BUTTON_RC_MENU|BUTTON_REL));
+        for(int i=1;i<mapped_count-1;i++)
+            assert(mapped[i]==(BUTTON_RC_MENU|BUTTON_REPEAT));
+    }
+    assert(!lastbtn && !agents_remote_pending(&remote));
+}
 int main(void) {
     for(int type=0;type<256;type++) if(type!=0x40)
         request(type,1,1,0,USB_CONTROL_STALL);
@@ -106,30 +148,22 @@ int main(void) {
     current_tick=ULONG_MAX-50;request(0x40,1,1,0,USB_CONTROL_ACK);
     tick(ULONG_MAX-49);tick(ULONG_MAX-48);tick(48);assert(lastbtn);
     tick(49);tick(50);assert(!lastbtn);
-    struct agents_remote_state state={0};
-    current_tick=400;request(0x40,1,1,0,USB_CONTROL_ACK);
-    int first=used;tick(401);tick(402);
-    assert(!agents_remote_button(&state,true,posted[first],lastbtn,402));
-    for(int t=403;t<462;t++) {
-        if(t%20==0) request(0x40,1,1,0,USB_CONTROL_ACK);
-        tick(t);assert(!agents_remote_button(&state,true,0,lastbtn,t));
-    }
-    tick(462);
-    assert(agents_remote_button(&state,true,0,lastbtn,462)==BUTTON_RC_SELECT);
-    request(0x40,1,0,0,USB_CONTROL_ACK);tick(463);tick(464);
-    assert(!agents_remote_button(&state,true,posted[used-1],lastbtn,464));
-    current_tick=500;request(0x40,1,1,0,USB_CONTROL_ACK);
-    first=used;tick(501);tick(502);
-    assert(!agents_remote_button(&state,true,posted[first],lastbtn,502));
-    current_tick=520;request(0x40,1,0,0,USB_CONTROL_ACK);tick(521);tick(522);
-    assert(agents_remote_button(&state,true,posted[used-1],lastbtn,522)==
-           (BUTTON_RC_MENU|BUTTON_REL));
     current_tick=600;request(0x40,1,1,0,USB_CONTROL_ACK);tick(601);tick(602);
     current_tick=699;request(0x40,1,1,0,USB_CONTROL_ACK);
     tick(700);assert(lastbtn);
     current_tick=798;request(0x40,2,1,0,USB_CONTROL_STALL);
     tick(798);assert(lastbtn);tick(799);tick(800);assert(!lastbtn);
-    puts("0.6s production remote hold consumer + short tap + renewed watchdog PASS");
+    gesture(REMOTE_AGENTS,1000,20); /* Short tap: complete native MENU. */
+    gesture(REMOTE_AGENTS,1200,59); /* Released before the threshold. */
+    gesture(REMOTE_AGENTS,1400,60); /* Release reaches the 600 ms boundary. */
+    gesture(REMOTE_AGENTS,1600,90); /* Timer fires once while still held. */
+    gesture(REMOTE_AGENTS,1800,220); /* Keepalives sustain a long hold. */
+    gesture(REMOTE_OTHER,2200,20);
+    gesture(REMOTE_OTHER,2400,90);
+    gesture(REMOTE_WPS,2600,20);
+    gesture(REMOTE_WPS,2800,90);
+    puts("EP0 -> real button queue -> Agents MENU tap / 600ms SELECT once PASS");
+    puts("Outside Agents/WPS remote Menu press/repeat/release unchanged PASS");
     puts("EP0 strict parsing + real button queue press/repeat/release + 1s safety/wrap PASS");
 }
 '''
