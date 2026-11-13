@@ -28,9 +28,11 @@ independent of HerdRemote and does not change it.
 
 The bridge automatically finds the receiver's `/dev/serial/by-id/` entry.
 It accepts only VID `05ac`, PID `1261`, and serial
-`1AA0000000000360` or `9AA0000000000360`. It retries after absence, USB
-reset, unplug or disk mode. It never selects a USB configuration, claims an
-interface, detaches a driver, or sends a key saved while disconnected.
+`1AA0000000000360`, `2AA0000000000360` (the PodLink profile used by Agents),
+or `9AA0000000000360`. The udev rule covers all three serials. It retries
+after absence, USB reset, unplug or disk mode. It never selects a USB
+configuration, claims an interface, detaches a driver, or sends a key saved
+while disconnected.
 Disk mode and firmware without this request receive no working Menu input.
 
 A full Menu frame presses Menu. NEC repeats and repeated full Menu frames

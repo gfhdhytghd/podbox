@@ -189,23 +189,32 @@ class USBTests(unittest.TestCase):
                                      for state in (1, 0)])
 
     def test_exact_identity_and_configured_only(self):
-        bad = [Device('2AA0000000000360'), Device('9AA1111111110360'),
-               Device('1AA0000000000360', configured=False)]
-        good = Device('9AA0000000000360')
-        self.devices = bad+[good]
-        self.assertTrue(self.usb.send(True, 1))
-        self.assertEqual(self.disposed, bad)
-        self.assertTrue(all(not d.calls for d in bad))
-        self.assertEqual(len(good.calls), 1)
+        for prefix in ('1AA', '2AA', '9AA'):
+            with self.subTest(prefix=prefix):
+                self.setUp()
+                bad = [Device('3AA0000000000360'),
+                       Device('2AA1111111110360'),
+                       Device('9AA1111111110360')]
+                bad += [Device(p+'0000000000360', configured=False)
+                        for p in ('1AA', '2AA', '9AA')]
+                good = Device(prefix+'0000000000360')
+                self.devices = bad+[good]
+                self.assertTrue(self.usb.send(True, 1))
+                self.assertTrue(self.usb.send(False, 1.1))
+                self.assertEqual(self.disposed, bad)
+                self.assertTrue(all(not d.calls for d in bad))
+                self.assertEqual(good.calls,
+                                 [((0x40, 0x5b, 1, state, b''),
+                                   dict(timeout=100)) for state in (1, 0)])
 
-    def test_disconnect_stall_diskmode_recovery(self):
+    def test_disconnect_stall_profile_recovery(self):
         old = Device('1AA0000000000360', fail=True)
         self.devices = [old]
         self.assertFalse(self.usb.send(True, 0))
         self.assertIn(old, self.disposed)
-        self.devices = [Device('2AA0000000000360')]
+        self.devices = [Device('2AA0000000000360', configured=False)]
         self.assertFalse(self.usb.send(True, .6))
-        new = Device('9AA0000000000360')
+        new = Device('2AA0000000000360')
         self.devices = [new]
         self.assertTrue(self.usb.send(True, 1.2))
         self.assertEqual(len(new.calls), 1)

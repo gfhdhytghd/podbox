@@ -14,7 +14,7 @@ LOG = logging.getLogger('podbox-usbkey')
 REQUEST = 0x5B
 MENU = 1
 RECEIVER_SERIAL = '2543030725032a2a'
-IPOD_SERIAL = re.compile(r'(?:1AA|9AA)0000000000360\Z')
+IPOD_SERIAL = re.compile(r'(?:1AA|2AA|9AA)0000000000360\Z')
 RELEASE_SECONDS = 0.150
 
 

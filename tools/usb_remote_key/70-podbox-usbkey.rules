@@ -1,5 +1,6 @@
 # USB EP0 access for the logged-in local user. No interface/driver changes.
 SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="05ac", ATTR{idProduct}=="1261", ATTR{serial}=="1AA0000000000360", TAG+="uaccess"
+SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="05ac", ATTR{idProduct}=="1261", ATTR{serial}=="2AA0000000000360", TAG+="uaccess"
 SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="05ac", ATTR{idProduct}=="1261", ATTR{serial}=="9AA0000000000360", TAG+="uaccess"
 # Receiver access; the bridge opens this endpoint O_RDONLY.
 SUBSYSTEM=="tty", ATTRS{serial}=="2543030725032a2a", TAG+="uaccess"
