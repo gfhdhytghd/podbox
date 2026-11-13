@@ -313,7 +313,7 @@ enum battery_trap_limits {
     BATTERY_VSYSOK_MIN_MV = 3200,
     BATTERY_VSYSOK_3200 = 0xA,
     BATTERY_TRICKLE_LIMIT_MA = 100,
-    BATTERY_FAST_LIMIT_MA = 1000,
+    BATTERY_FAST_LIMIT_MA = 500,
 };
 
 static void battery_trap(void)

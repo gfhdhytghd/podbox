@@ -82,19 +82,19 @@ int main(void) {
         printf("power=%d adc=%d result=%d limit=%d enabled=%d waits=%d/%d vsys=%d\n",
                power,mv,result,limit_ma,charge_enabled,charge_waits,countdown_waits,writes);
         if(mv>=3400){CHECK(result==BOOT);CHECK(!charge_waits&&!countdown_waits);CHECK(!verbose);}
-        else if(power){CHECK(result==WAIT);CHECK(charge_waits==1);CHECK(limit_ma==(mv<3250?100:1000));CHECK(charge_enabled);}
+        else if(power){CHECK(result==WAIT);CHECK(charge_waits==1);CHECK(limit_ma==(mv<3250?100:500));CHECK(charge_enabled);}
         else{CHECK(result==OFF);CHECK(countdown_waits==10);CHECK(writes==(mv<3200));if(writes)CHECK(value_written==0xA);}
     }
     reset(3249,true);yield_charge=false;nsamples=3;samples[1]=3250;samples[2]=3400;
-    CHECK(run()==BOOT);CHECK(charge_waits==2);CHECK(limits[nlimits-2]==100&&limits[nlimits-1]==1000);
+    CHECK(run()==BOOT);CHECK(charge_waits==2);CHECK(limits[nlimits-2]==100&&limits[nlimits-1]==500);
     /* Literal ADC policy: 3200mV cell + 200mV charging uplift reads 3400.
      * This deliberately documents the lack of an unloaded confirmation. */
     reset(3200+200,true);CHECK(run()==BOOT);CHECK(!charge_waits);
     reset(3250,true);yield_charge=false;nsamples=3;samples[1]=3399;samples[2]=3400;
-    CHECK(run()==BOOT);CHECK(charge_waits==2&&limit_ma==1000);
+    CHECK(run()==BOOT);CHECK(charge_waits==2&&limit_ma==500);
     reset(3250,false);yield_charge=false;attach_after=2;
     nsamples=5;samples[1]=3250;samples[2]=3250;samples[3]=3399;samples[4]=3400;
-    CHECK(run()==BOOT);CHECK(countdown_waits==2&&charge_waits==1&&limit_ma==1000);
+    CHECK(run()==BOOT);CHECK(countdown_waits==2&&charge_waits==1&&limit_ma==500);
     reset(3399,true);yield_charge=false;drop_after=1;
     CHECK(run()==OFF);CHECK(charge_waits==1&&countdown_waits==10&&limit_ma==100);
     reset(3399,false);yield_charge=false;recover_after=2;
