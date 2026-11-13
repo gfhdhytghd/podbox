@@ -6,6 +6,7 @@ and a fake iPod on a pty.
 """
 import json
 import os
+from pathlib import Path
 import pty
 import socket
 import struct
@@ -842,6 +843,25 @@ class EndToEnd(unittest.TestCase):
         ipod.send("a\t3\t%s\t1" % qid)
         self.assertEqual(ipod.wait_for("R")[0][2], "err")
         self.assertEqual(ipod.wait_for("T")[0][2], "1")
+
+    def test_remote_log_on_existing_tty_before_hr(self):
+        path = os.path.join(self.tmp.name, "remote-live.log")
+        self.daemon.remote_log.path = Path(path)
+        self.ipod.pump(0.4)
+        self.assertFalse(os.path.exists(path))
+        self.ipod.send("LOG EP0 tick=123 MENU down")
+        self.ipod.send("LOG LOST 7")
+        self.ipod.pump(0.3)
+        with open(path) as stream:
+            lines = stream.readlines()
+        self.assertEqual(len(lines), 2)
+        self.assertIn("mono=", lines[0])
+        self.assertTrue(lines[0].endswith("LOG EP0 tick=123 MENU down\n"))
+        self.assertTrue(lines[1].endswith("LOG LOST 7\n"))
+        self.assertFalse(any(call[0] in ("pane.send_keys", "pane.focus")
+                             for call in self.herdr.calls))
+        self.ipod.send("hr\t1")
+        self.assertEqual(self.ipod.wait_for("W")[0], ["W", "2"])
 
     def test_reconnect_after_unplug(self):
         self.ipod.pump(1.0)

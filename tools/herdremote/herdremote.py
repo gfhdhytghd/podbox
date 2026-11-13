@@ -36,6 +36,7 @@ import hrvoice  # noqa: E402
 import hrkeys  # noqa: E402
 import hrsession  # noqa: E402
 import hrappserver  # noqa: E402
+import hrremotelog  # noqa: E402
 
 VERSION = "herdremote-1"
 DEVICE = dict(vid=0x05AC, pid=0x1261, manufacturer="PodBox",
@@ -151,6 +152,7 @@ class Daemon:
         self.next_refresh = 0.0
         self.sessions = hrsession.Sessions()
         self.appserver = hrappserver.Reader()
+        self.remote_log = hrremotelog.Writer()
         self.reset_session()
 
     def reset_session(self):
@@ -477,6 +479,8 @@ class Daemon:
             self.next_tick = now + TICK_SECONDS
 
     def command(self, payload):
+        if self.remote_log.submit(payload):
+            return
         parsed = hrproto.parse_command(payload)
         if not parsed:
             log.info("ignored message from player: %r", payload[:40])
@@ -585,6 +589,7 @@ class Daemon:
             self.run_loop()
         finally:
             self.stopping.set()
+            self.remote_log.close()
             self.keys.reset()
             self.voice.stop()
             if self.link:

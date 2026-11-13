@@ -21,6 +21,8 @@ pre='''#include <assert.h>
 #include <stddef.h>
 #include <string.h>
 #include <stdbool.h>
+#define REMOTE_LOG_DISABLE
+#include "firmware/export/remote_log.h"
 #define IPOD_ACCESSORY_PROTOCOL
 #define HAVE_USB_PODLINK
 #include "firmware/target/arm/ipod/button-target.h"

@@ -8,7 +8,7 @@ cc=${CC:-cc}
 for test in podlink_firmware podlink_wire podlink_screen podlink_bench podlink_resident; do
     case "$test" in
         podlink_resident) includes='-Itools/tests/podlink_stubs -Iapps-ipod/screens/system'
-           codec='firmware/usbstack/podlink_wire.c apps-ipod/screens/system/herdremote_model.c' ;;
+           codec='firmware/usbstack/podlink_wire.c firmware/usbstack/remote_log.c apps-ipod/screens/system/herdremote_model.c' ;;
         podlink_screen) includes='-Itools/tests/podlink_stubs'; codec='' ;;
         *) includes='-Itools/tests/podlink_stubs'
            codec='firmware/usbstack/podlink_wire.c' ;;

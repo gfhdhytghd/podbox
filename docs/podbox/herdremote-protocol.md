@@ -611,3 +611,37 @@ reflowing closed lines. A scrolled-up view freezes that snapshot and its
 body geometry until the reader reaches the bottom. Tools occupy spare rows
 and never contribute to message scroll maximum. Cached return still needs
 zero host round trips for its first frame.
+
+## Out-of-band remote log (Follow-up 13)
+
+An optional device-to-host TEXT payload starts with the four bytes `LOG `.
+The remaining bytes are one diagnostic line, without a terminal LF/NUL.
+The maximum line is 767 bytes including the prefix. This is not an HR
+application command and has no application reply or acknowledgement.
+There is no version/handshake change. It can arrive with foreground 0, 1 or
+2, including before any HR greeting. The resident cable owner sends it;
+enabling logging does not acquire/release a client or reconnect.
+
+Examples: `LOG 42 tick=123 +0.12s flags=0 L2/00 len=4 rx=4 stored=4
+02 00 01 00  PLAY` (one payload), `LOG VOL 9 tick=123 previous=03
+target=06 dir=1 decision=P`, `LOG HELD tick=123 PLAY`,
+`LOG PLAY tick=153 hold context=1`, `LOG EP0 tick=123 SELECT down`,
+`LOG PAGE tick=123 up button=06010000`, and `LOG LOST 7`.
+Play context values are 0=other, 1=Agents, 2=Now Playing. VOL decisions
+retain their existing S/P/R/E meanings (suppressed/press/repeat/emitted).
+
+The Debug switch defaults OFF in RAM. Its bounded, allocation-free producer
+ring drops new records and saturates the loss counter. LOST notices alternate
+with retained records under continuous overflow, so neither starves. Only
+the resident worker formats records and attempts nonblocking TEXT sends.
+Peers negotiating below a complete line receive `LOG LOST 1` instead; below
+10 bytes the worker retains the bounded queue until it can send a notice.
+Disconnects are best-effort, not lossless delivery. Existing file logging
+has its own history/counters and is unchanged.
+
+HerdRemote recognizes this prefix before HR parsing. Its bounded disk worker
+appends UTC wall and monotonic receipt times to
+`~/.local/state/podbox/remote-live.log`, rotating at 4 MiB with one `.1`
+backup. Payload control characters are escaped. Old hosts safely ignore
+unknown TEXT with no action/reply; old firmware emits none. Deploy the
+matching `hrremotelog.py` with `herdremote.py` and the existing runtime files.

@@ -59,6 +59,7 @@
 #include "iap-library.h"
 #include "iap-artwork.h"
 #include "iap/remote_capture.h"
+#include "remote_log.h"
 #ifdef HAVE_USB_PODLINK
 #include "iap/agents_volume.h"
 #endif
@@ -1989,6 +1990,13 @@ void iap_handlepkt(void)
 int remote_control_rx(void)
 {
     int btn = iap_remotebtn;
+    static int logged = -1;
+    if (!remote_log_enabled()) logged = -1;
+    else if (btn != logged)
+    {
+        remote_log_event(REMOTE_LOG_HELD, current_tick, btn, 0, NULL, 0);
+        logged = btn;
+    }
     if(iap_repeatbtn)
         iap_repeatbtn--;
 

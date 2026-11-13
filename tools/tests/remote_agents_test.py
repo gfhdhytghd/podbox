@@ -9,6 +9,8 @@ text=text[text.index('static const struct button_mapping'):]
 ids=sorted(set(re.findall(r'\b(?:ACTION_|CONTEXT_)[A-Z_0-9]+\b',text)))
 preamble='''#include <assert.h>
 #include <stdbool.h>
+#define REMOTE_LOG_DISABLE
+#include "firmware/export/remote_log.h"
 #include <stdio.h>
 #define IPOD_ACCESSORY_PROTOCOL
 #include "firmware/target/arm/ipod/button-target.h"

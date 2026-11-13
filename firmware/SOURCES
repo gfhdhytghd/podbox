@@ -2230,4 +2230,5 @@ kernel/timeout.c
 usbstack/podlink_wire.c
 usbstack/podlink.c
 usbstack/podlink_service.c
+usbstack/remote_log.c
 #endif

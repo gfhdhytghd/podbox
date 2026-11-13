@@ -9,6 +9,7 @@
 #include "iap/remote_capture.h"
 #include "settings/settings.h"
 #include "system/activity.h"
+#include "remote_log.h"
 
 static struct {
     bool enabled, mute;
@@ -37,7 +38,7 @@ bool iap_agents_volume(unsigned char requested, bool mute)
                   get_current_activity() == ACTIVITY_AGENTS;
     /* Debug runs outside Agents. Decode a shadow stream there too, while
      * lingo 3 continues to set the real volume and reports the real value. */
-    if (!active && !remote_input_active)
+    if (!active && !remote_input_active && !remote_log_enabled())
         return false;
     unsigned char previous = volume_keys.volume;
     unsigned char upper = iap_volume_to_byte(global_settings.volume_limit);

@@ -4,6 +4,7 @@
 #include "system.h"
 #include "kernel.h"
 #include "usb_ch9.h"
+#include "remote_log.h"
 
 static int remote_button;
 static unsigned long pressed_at;
@@ -19,6 +20,8 @@ bool button_usb_remote_request(const struct usb_ctrlrequest *req)
         return false;
 
     int level = disable_irq_save();
+    remote_log_event(REMOTE_LOG_EP0, current_tick, req->wValue, req->wIndex,
+                     NULL, 0);
     int key = req->wValue == USB_REMOTE_KEY_MENU ? BUTTON_RC_MENU :
                                                   BUTTON_RC_SELECT;
     if (req->wIndex)

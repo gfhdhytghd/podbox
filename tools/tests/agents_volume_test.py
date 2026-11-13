@@ -41,6 +41,10 @@ notify=core[a:b]
 pre=r'''
 #include <assert.h>
 #include <stdbool.h>
+#define REMOTE_LOG_DISABLE
+#include "firmware/export/remote_log.h"
+static bool streaming;
+#define remote_log_enabled() streaming
 #include <stdio.h>
 #include <stdint.h>
 #include <limits.h>
@@ -169,9 +173,21 @@ int main(int argc,char **argv) {
  current_tick=ULONG_MAX-10;step(100);assert(iap_agents_volume_take()==PAGE_UP);
  current_tick=9;step(100);assert(!iap_agents_volume_take());
  current_tick=49;step(100);assert(iap_agents_volume_take()==PAGE_UP);
- puts("single-message decode/readback/6 up + 8 down/gap/hold/clamps/reversal/Usage/Debug PASS");
+ /* Resident streaming observes volume outside Debug/Agents without paging
+  * or changing the normal audio-volume setter's result. */
+ activity=0;remote_input_active=false;global_status.volume=12;
+ iap_agents_volume_enable(false);streaming=true;changes=0;
+ before=remote_volume_count();current_tick=5000;step(15);
+ assert(global_status.volume==15&&changes==1&&!iap_agents_volume_take());
+ assert(remote_volume_count()==before+1);
+ assert(remote_volume_get(remote_volume_count(),&trace_row));
+ assert(trace_row.direction==1&&trace_row.decision=='P');
+ streaming=false;before=remote_volume_count();step(18);
+ assert(global_status.volume==18&&changes==2);
+ assert(remote_volume_count()==before);
+ puts("single-message decode/readback/6 up + 8 down/gap/hold/clamps/reversal/Usage/Debug/resident stream outside Agents PASS");
 }
 '''
 (O/'volume.c').write_text(pre+setter+handle+reported+tests)
-subprocess.run(['cc','-std=gnu11','-Wall','-Wextra','-Werror','-g','-fsanitize=address,undefined','-fno-sanitize-recover=all','-fno-pie','-no-pie',str(O/'volume.c'),'-o',str(O/'volume')],check=True)
+subprocess.run(['cc','-std=gnu11','-Wall','-Wextra','-Werror','-g','-fsanitize=address,undefined','-fno-sanitize-recover=all','-fno-pie','-no-pie','-I'+str(R),str(O/'volume.c'),'-o',str(O/'volume')],check=True)
 subprocess.run([str(O/'volume')],check=True)

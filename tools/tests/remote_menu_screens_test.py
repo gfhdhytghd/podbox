@@ -29,6 +29,8 @@ keys = keys[:keys.index('\n};') + 3]
 pre = r'''
 #include <assert.h>
 #include <stdbool.h>
+#define REMOTE_LOG_DISABLE
+#include "firmware/export/remote_log.h"
 #include <stdio.h>
 #define IPOD_ACCESSORY_PROTOCOL
 #define HAVE_USB_PODLINK

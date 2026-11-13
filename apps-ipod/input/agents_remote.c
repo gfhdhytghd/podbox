@@ -3,6 +3,7 @@
 #include "button.h"
 #include "kernel.h"
 #include "input/agents_remote.h"
+#include "remote_log.h"
 
 bool agents_remote_pending(const struct agents_remote_state *s)
 {
@@ -25,8 +26,9 @@ static int take(struct agents_remote_state *s)
     return button;
 }
 
-static void play_tap(struct agents_remote_state *s)
+static void play_tap(struct agents_remote_state *s, unsigned long now)
 {
+    remote_log_event(REMOTE_LOG_TAP, now, s->play_context, 0, NULL, 0);
     /* Agents already discarded the short recording on physical release. */
     if (s->play_context == REMOTE_AGENTS)
     {
@@ -56,7 +58,7 @@ static bool play_button(struct agents_remote_state *s, int context, int button,
         if (h->down) h->fired = true;
     }
     if (s->tap_pending && !s->second && now - s->released > window)
-        play_tap(s);
+        play_tap(s, now);
     if (!h->down && event && !release)
     {
         h->down = true;
@@ -72,7 +74,8 @@ static bool play_button(struct agents_remote_state *s, int context, int button,
         bool ended = release || !(held & BUTTON_RC_PLAY);
         if (!h->fired && now - h->at >= threshold)
         {
-            if (s->tap_pending) play_tap(s);
+            if (s->tap_pending) play_tap(s, now);
+            remote_log_event(REMOTE_LOG_HOLD, now, context, 0, NULL, 0);
             s->second = false;
             h->fired = true;
             if (context == REMOTE_OTHER)
@@ -92,6 +95,8 @@ static bool play_button(struct agents_remote_state *s, int context, int button,
                     emit(s, BUTTON_RC_PLAY | BUTTON_REL | BUTTON_REPEAT);
                 if (s->second)
                 {
+                    remote_log_event(REMOTE_LOG_DOUBLE, now, context, 0,
+                                     NULL, 0);
                     s->tap_pending = s->second = false;
                     emit(s, REMOTE_SWITCH_BUTTON);
                 }
@@ -121,6 +126,13 @@ int agents_remote_button(struct agents_remote_state *s, int context,
 {
     if (s->queued) return take(s);
     if (play_button(s, context, button, held, now)) return take(s);
+    if (context == REMOTE_AGENTS &&
+        ((button & BUTTON_REMOTE) == BUTTON_RC_VOL_UP ||
+         (button & BUTTON_REMOTE) == BUTTON_RC_VOL_DOWN) &&
+        (!(button & BUTTON_REL) || (button & BUTTON_REPEAT)))
+        remote_log_event(REMOTE_LOG_PAGE, now,
+                         (button & BUTTON_REMOTE) == BUTTON_RC_VOL_UP,
+                         (unsigned int)button, NULL, 0);
     /* Menu/Select are already classified by the host IR bridge. Direction
      * keys retain their normal press/repeat/release meanings everywhere. */
     if (context == REMOTE_AGENTS &&

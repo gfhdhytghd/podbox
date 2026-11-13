@@ -20,6 +20,11 @@ static void sleep(int ticks) { current_tick += ticks; }
 
 static struct hr_model cached;
 static int updates, losses;
+static unsigned int log_format(const struct remote_log_record *r, char *out,
+                                unsigned int size)
+{
+    return snprintf(out, size, "LOG TEST %lu", r->a);
+}
 static void background(const struct podlink_message *m)
 {
     if (m->type == PODLINK_CLOSE) losses++;
@@ -67,6 +72,76 @@ int main(void)
     }
     assert(podlink_open());assert(!podlink_open_agents(background));work();
     assert(podlink_session_revision()==revision);podlink_close();work();
+    /* Same wire owner in menus/WPS (0), Agents (1), and another client (2).
+     * Enable/toggle does not attach, reconnect or alter the foreground. */
+    for (int foreground=0; foreground<=2; foreground++)
+    {
+        if (foreground==1) assert(podlink_open_agents(background));
+        if (foreground==2) assert(podlink_open());
+        work();clear_output();
+        remote_log_enable(true,log_format);
+        remote_log_event(REMOTE_LOG_TAP,1,42,0,NULL,0);
+        work();
+        struct podlink_parser parser={0};struct podlink_message frame;
+        int logs=0;
+        for(int j=0;j<output_size;j++)
+            if(podlink_decode(&parser,output[j],&frame)==1)
+            {
+                if(frame.type==PODLINK_TEXT && frame.length==11 &&
+                   !memcmp(frame.data,"LOG TEST 42",11)) logs++;
+                assert(frame.type!=PODLINK_HELLO && frame.type!=PODLINK_OPEN &&
+                       frame.type!=PODLINK_CLOSE);
+            }
+        assert(logs==1 && client==foreground);
+        assert(podlink_session_revision()==revision);
+        remote_log_enable(false,log_format);
+        clear_output();remote_log_event(REMOTE_LOG_TAP,1,43,0,NULL,0);
+        work();
+        memset(&parser,0,sizeof(parser));
+        for(int j=0;j<output_size;j++)
+            if(podlink_decode(&parser,output[j],&frame)==1)
+                assert(frame.type!=PODLINK_TEXT);
+        podlink_close();work();
+    }
+    /* Fill the real TX queue and freeze its serial sink for one step. */
+    while(podlink_session_send(PODLINK_TEXT,"busy",4)==PODLINK_SENT) {}
+    int saved_tx_count=tx_count;tx_count=BUFFER_SIZE;
+    remote_log_enable(true,log_format);
+    remote_log_event(REMOTE_LOG_TAP,1,44,0,NULL,0);
+    service_step();assert(log_length==11);
+    assert(!memcmp(log_line,"LOG TEST 44",11));
+    remote_log_enable(false,log_format);
+    service_step();assert(!log_length);
+    tx_count=saved_tx_count;work();
+    /* A second busy line survives until the transport accepts it. */
+    while(podlink_session_send(PODLINK_TEXT,"busy",4)==PODLINK_SENT) {}
+    saved_tx_count=tx_count;tx_count=BUFFER_SIZE;
+    remote_log_enable(true,log_format);
+    remote_log_event(REMOTE_LOG_TAP,1,45,0,NULL,0);
+    service_step();assert(log_length==11);
+    tx_count=saved_tx_count;clear_output();work();
+    assert(!log_length);
+    struct podlink_parser log_parser={0};struct podlink_message log_frame;
+    bool retried=false;
+    for(int j=0;j<output_size;j++)
+        if(podlink_decode(&log_parser,output[j],&log_frame)==1 &&
+           log_frame.type==PODLINK_TEXT && log_frame.length==11 &&
+           !memcmp(log_frame.data,"LOG TEST 45",11)) retried=true;
+    assert(retried);remote_log_enable(false,log_format);work();
+    /* A small peer gets an explicit loss notice, never an INVALID loop. */
+    uint32_t saved_peer_max=peer_max;peer_max=10;
+    remote_log_enable(true,log_format);clear_output();
+    remote_log_event(REMOTE_LOG_TAP,1,12345678,0,NULL,0);work();
+    memset(&log_parser,0,sizeof(log_parser));bool small_notice=false;
+    for(int j=0;j<output_size;j++)
+        if(podlink_decode(&log_parser,output[j],&log_frame)==1 &&
+           log_frame.type==PODLINK_TEXT && log_frame.length==10 &&
+           !memcmp(log_frame.data,"LOG LOST 1",10)) small_notice=true;
+    assert(small_notice && !log_length);
+    peer_max=9;remote_log_event(REMOTE_LOG_TAP,1,46,0,NULL,0);work();
+    assert(remote_log_read(log_line,sizeof(log_line))==11);
+    assert(!memcmp(log_line,"LOG TEST 46",11));
+    peer_max=saved_peer_max;remote_log_enable(false,log_format);work();
     /* Payload lifetime survives later worker polls until the next client poll. */
     assert(podlink_open_agents(background));
     struct podlink_message replay;while(podlink_poll(&replay)){}
@@ -84,4 +159,5 @@ int main(void)
     assert(greeting_after_pressure);podlink_close();work();
     lease=false;work();assert(losses>0&&!started);
     puts("resident real wire: 500 attach/switch/MENU exits; no OPEN/CLOSE/HELLO; cached first frame zero round trips; background list; client exclusion; payload lifetime; unplug PASS");
+    puts("remote log real wire: prefixed TEXT in foreground 0/1/2; default/off no TEXT; no reconnect/client ownership change PASS");
 }

@@ -519,6 +519,7 @@ focus/keys, opens a player, starts voice, or controls the deployed service.
 | `hrproto.py` | The messages; `docs/podbox/herdremote-protocol.md` describes them |
 | `hrvoice.py` | Session-bus voice calls, hold ownership and independent stop watchdog |
 | `hrkeys.py` | Whitelisted desktop key taps, counted batches and bounded outstanding work |
+| `hrremotelog.py` | Bounded background writer for the player's remote diagnostics |
 | `tests/` | `python3 -m unittest discover -s tools/herdremote/tests` |
 
 ## Detail stability and diagnostics
@@ -534,3 +535,48 @@ field names, never message/input text. INFO is limited to one line per
 second, with a suppressed count for fast input frames. `--debug` emits
 metadata for every D frame. The app-server stays read-only and fallback
 herdr reads stay within the visible viewport.
+
+## Live remote input log
+
+In Debug, select **Stream remote log over PodLink** to toggle the stream.
+The ON/OFF splash confirms the new value. It defaults OFF at each firmware
+start and remains active when leaving Debug, including in Agents and Now
+Playing. The existing Remote input screen's SELECT file logger is unchanged.
+Enable the PodLink USB profile and use the existing HerdRemote tty owner.
+Opening Agents is not required to stream. Do not open a second tty reader.
+
+Deploy the matching `herdremote.py` **and `hrremotelog.py`** from the package's
+`.rockbox/tools/herdremote/` with the other existing host files. This package
+does not install or restart a service. A running old process keeps its old
+code until its owner deploys/restarts it. Once the matching host is running,
+read the regular file live (no disk mode or additional device access):
+
+```sh
+tail -F ~/.local/state/podbox/remote-live.log
+```
+
+Each received `LOG ` TEXT frame becomes one line with UTC wall time and host
+monotonic receipt time. Firmware ticks remain in the payload. Raw frames
+retain their sequence, delta, BAD/TRUNC, stored bytes and decoded names.
+VOL decisions, held-state changes, Play tap/double/hold, accepted Menu/Select
+EP0 requests and Agents volume page emits are included. EP0 events reflect
+the bridge's classified key; they cannot expose the original IR repeat
+stream. The file rotates at 4 MiB to `remote-live.log.1` (one backup).
+Newlines/control characters in payloads are escaped to prevent forged rows.
+
+The firmware has 32 fixed records and drops new events on overflow, reporting
+`LOG LOST n`; input never waits for USB or file I/O. The resident worker sends
+at most one line per 20 ms step after control traffic, independent of which
+screen owns the foreground. A busy transmitter retains one pending line.
+The host disk worker has 256 bounded entries and reports `LOG HOST LOST n`
+on its next accepted entry if its queue overflows. Both are best-effort;
+cable/session loss, process exit or file write errors can also lose logs.
+Disabling the stream clears unsent diagnostic records. Already queued USB
+frames can still arrive. No history is replayed when enabling the switch.
+
+Compatibility: new host + old firmware creates no log file/worker unless a
+LOG frame arrives. New firmware + old host remains protocol v1: the old
+host's unknown-TEXT parser ignores LOG frames without executing commands or
+replying. LOG frames never enter HerdRemote's application command parser,
+subscriptions, detail display or voice path. They do not change Agents' cached
+return behavior or the foreground lease.

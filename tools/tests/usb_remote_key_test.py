@@ -33,6 +33,8 @@ preamble = r'''
 #include <stdint.h>
 #include <stddef.h>
 #include <stdbool.h>
+#define REMOTE_LOG_DISABLE
+#include "firmware/export/remote_log.h"
 #include <stdio.h>
 #include <limits.h>
 #define IPOD_6G

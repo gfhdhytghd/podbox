@@ -4,6 +4,8 @@
 #include <string.h>
 #include <stdio.h>
 #include "iap/remote_capture.h"
+#include "remote_log.h"
+#include "kernel.h"
 
 struct remote_capture iap_remote_capture;
 static struct remote_volume_trace volume_trace[REMOTE_VOLUME_HISTORY];
@@ -16,6 +18,9 @@ void remote_volume_log(unsigned long tick, unsigned char echo,
     volume_trace[(seq - 1) % REMOTE_VOLUME_HISTORY] =
         (struct remote_volume_trace){seq, tick, echo, target,
                                      direction, decision};
+    remote_log_event(REMOTE_LOG_VOL, tick, 0, 0,
+                    &volume_trace[(seq - 1) % REMOTE_VOLUME_HISTORY],
+                    sizeof(struct remote_volume_trace));
 }
 
 unsigned long remote_volume_count(void)
@@ -58,6 +63,9 @@ void remote_capture_end(struct remote_capture *r, unsigned int flags,
     r->previous_tick = tick;
     r->bad += (flags & REMOTE_BAD_MASK) != 0;
     r->frames++;
+    remote_log_event(REMOTE_LOG_RAW, tick, 0, 0, p,
+                    offsetof(struct remote_frame, data) +
+                    remote_frame_stored(p));
 }
 
 bool remote_capture_get(const struct remote_capture *r, unsigned long sequence,
@@ -168,4 +176,66 @@ void remote_frame_names(const struct remote_frame *f, char *out, size_t size)
     for (unsigned int i = 6; i < len; i++)
         if (b[i]) { add_name(out, size, "?"); break; }
     if (!out[0]) snprintf(out, size, "(release)");
+}
+
+_Static_assert(sizeof(struct remote_frame) <= REMOTE_LOG_DATA,
+               "remote frame fits diagnostic record");
+_Static_assert(sizeof(struct remote_volume_trace) <= REMOTE_LOG_DATA,
+               "volume trace fits diagnostic record");
+
+/* Called only by the resident worker, never by an ISR or the UI. */
+unsigned int remote_log_format(const struct remote_log_record *r,
+                                char *out, unsigned int size)
+{
+    char names[160];
+    int n;
+    if (size < REMOTE_LOG_LINE) return 0;
+    if (r->kind == REMOTE_LOG_RAW)
+    {
+        /* The byte array has no struct alignment guarantee. */
+        struct remote_frame f;
+        memcpy(&f, r->data, sizeof(f));
+        remote_frame_names(&f, names, sizeof(names));
+        unsigned int cmd = f.received < 2 ? 0 :
+            f.data[0] == 4 && f.received > 2 ?
+            f.data[1] * 256 + f.data[2] : f.data[1];
+        n = snprintf(out, size,
+            "LOG %lu tick=%lu +%lu.%02lus %s%u L%X/%02X "
+            "len=%u rx=%u stored=%u %s",
+            f.sequence, f.tick, f.delta / HZ, f.delta % HZ * 100 / HZ,
+            (f.flags & REMOTE_BAD_MASK) ? "BAD:" : "flags=", f.flags,
+            f.received ? f.data[0] : 0, cmd, f.length, f.received,
+            remote_frame_stored(&f),
+            (f.flags & REMOTE_TRUNC) ? "TRUNC " : "");
+        for (unsigned int i = 0; i < remote_frame_stored(&f); i++)
+            n += snprintf(out + n, size - n, "%02X ", f.data[i]);
+        n += snprintf(out + n, size - n, " %s", names);
+    }
+    else if (r->kind == REMOTE_LOG_VOL)
+    {
+        struct remote_volume_trace v;
+        memcpy(&v, r->data, sizeof(v));
+        n = snprintf(out, size,
+            "LOG VOL %lu tick=%lu previous=%02X target=%02X dir=%d "
+            "decision=%c", v.sequence, v.tick, v.echo, v.target,
+            v.direction, v.decision);
+    }
+    else if (r->kind == REMOTE_LOG_LOST)
+        n = snprintf(out, size, "LOG LOST %lu", r->a);
+    else if (r->kind == REMOTE_LOG_HELD)
+    {
+        remote_button_names(r->a, names, sizeof(names));
+        n = snprintf(out, size, "LOG HELD tick=%lu %s", r->tick, names);
+    }
+    else if (r->kind == REMOTE_LOG_EP0)
+        n = snprintf(out, size, "LOG EP0 tick=%lu %s %s", r->tick,
+                     r->a == 1 ? "MENU" : "SELECT", r->b ? "down" : "up");
+    else if (r->kind == REMOTE_LOG_PAGE)
+        n = snprintf(out, size, "LOG PAGE tick=%lu %s button=%08lX",
+                     r->tick, r->a ? "up" : "down", r->b);
+    else
+        n = snprintf(out, size, "LOG PLAY tick=%lu %s context=%lu", r->tick,
+                     r->kind == REMOTE_LOG_TAP ? "tap" :
+                     r->kind == REMOTE_LOG_DOUBLE ? "double" : "hold", r->a);
+    return n > 0 && (unsigned int)n < size ? (unsigned int)n : 0;
 }

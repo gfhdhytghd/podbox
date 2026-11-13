@@ -35,6 +35,8 @@ pre = r'''
 #include <assert.h>
 #include <stdio.h>
 #include <stdbool.h>
+#define REMOTE_LOG_DISABLE
+#include "firmware/export/remote_log.h"
 #include <string.h>
 #include <stdint.h>
 #define IPOD_ACCESSORY_PROTOCOL

@@ -122,9 +122,23 @@
 
 #include "iap.h"
 #include "iap/remote_capture.h"
+#include "iap/agents_volume.h"
+#include "remote_log.h"
 
 
 #define SCREEN_MAX_CHARS (LCD_WIDTH / SYSFONT_WIDTH)
+
+#if defined(HAVE_USB_PODLINK) && defined(IPOD_ACCESSORY_PROTOCOL)
+static bool dbg_stream_remote_log(void)
+{
+    bool on = !remote_log_enabled();
+    /* Debug is outside Agents: seed the shadow decoder from real volume. */
+    iap_agents_volume_enable(false);
+    remote_log_enable(on, remote_log_format);
+    splash(HZ, on ? "Remote log stream ON" : "Remote log stream OFF");
+    return false;
+}
+#endif
 
 static const char* threads_getname(int selected_item, void *data,
                                    char *buffer, size_t buffer_len)
@@ -2145,6 +2159,10 @@ static const struct {
 #ifdef IPOD_ACCESSORY_PROTOCOL
         { "Serial iAP", dbg_iap, false, NULL },
         { "Remote input", dbg_remote_input, false, NULL },
+#ifdef HAVE_USB_PODLINK
+        { "Stream remote log over PodLink", dbg_stream_remote_log, false,
+          NULL },
+#endif
 #endif
 
 #if (CONFIG_BATTERY_MEASURE != 0) && !defined(SIMULATOR)

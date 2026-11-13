@@ -37,6 +37,8 @@ source = re.sub(r'^#include .*$', '', (R/'apps-ipod/input/agents_remote.c').read
 pre = r'''
 #include <assert.h>
 #include <stdbool.h>
+#define REMOTE_LOG_DISABLE
+#include "firmware/export/remote_log.h"
 #include <stdio.h>
 #include <limits.h>
 #define IPOD_ACCESSORY_PROTOCOL
