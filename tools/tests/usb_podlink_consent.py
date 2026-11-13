@@ -8,7 +8,10 @@ api=s[s.index('bool usb_confirm_blocked(void)'):s.index('#endif\n#ifdef USB_ENAB
 profiles=s[s.index('static inline void usb_configure_drivers(int for_state)'):s.index('static inline void usb_slave_mode',s.index('static inline void usb_configure_drivers(int for_state)'))]
 confirm=s[s.index('        case USB_CONFIRM_READY:'):s.index('#endif\n\n#ifdef HAVE_USB_PODLINK',s.index('        case USB_CONFIRM_READY:'))]
 open_event=s[s.index('        case USB_PODLINK_OPEN:'):s.index('        case USB_PODLINK_CLOSE:')] if '        case USB_PODLINK_OPEN:' in s else ''
-open_api=s[s.index('bool usb_podlink_open(void)'):s.index('void usb_podlink_close(void)')]
+open_api=s[s.index('bool usb_podlink_open(void)'):s.index('bool usb_podlink_active(void)')]
+charge_api = '' if 'void usb_podlink_charge_on_close(void)' in s else 'static void usb_podlink_charge_on_close(void) {}'
+ui=(S/'apps-ipod/screens/system/agents_screen.c').read_text()
+cleanup=ui[ui.index('    /* Close cleanly:'):ui.index('    long deadline =',ui.index('    /* Close cleanly:'))]
 close=s[s.index('        case USB_PODLINK_CLOSE:'):s.index('#endif\n        case USB_INSERTED:',s.index('        case USB_PODLINK_CLOSE:'))]
 pre=r'''
 #include <assert.h>
@@ -40,6 +43,7 @@ static struct usb_consent usb_consent;
 static bool usb_confirm_has_config,usb_host_present,cable,car,unplug_during_sleep;
 static bool podlink_requested,usb_power_only,usb_drive_only_now;
 static uint32_t podlink_epoch;
+static uint32_t podlink_charge_epoch __attribute__((unused));
 static bool exclusive_storage_enabled,exclusive_storage_requested,usb_host_probe_on;
 static inline int disable_irq_save(void){return 0;}
 static inline void restore_irq(int n){(void)n;}
@@ -79,6 +83,12 @@ static void drain(void){while(head<tail){struct event ev=pending[head++];switch(
 EVENTS
  default:assert(0);}}head=tail=0;}
 OPEN_API
+CHARGE_API
+#define AGENTS_SWITCH_WPS 2
+static void podlink_close(void) { usb_podlink_close(); }
+static void agents_close(int ret) { (void)ret;
+CLEANUP
+}
 static uint32_t begin(int mode)
 {
  head=tail=prompts=attached=detached=0;car=unplug_during_sleep=false;
@@ -93,6 +103,32 @@ static uint32_t begin(int mode)
 }
 int main(void)
 {
+ /* Both shortcut sources return AGENTS_SWITCH_WPS through this cleanup. */
+ for(int mode=0;mode<3;mode++)for(int probe=0;probe<2;probe++) {
+  uint32_t old=begin(mode);agents_close(AGENTS_SWITCH_WPS);drain();
+  assert(!podlink_requested && usb_consent.epoch!=old);
+  usb_confirm_configured(true,false,probe);
+  if(usb_confirm_tmo.active)usb_confirm_tmo_cb(&usb_confirm_tmo);
+  event(USB_CONFIRM_READY,old);event(USB_CONFIRM_CONNECT,old);drain();
+  assert(!prompts && !enabled[USB_DRIVER_MASS_STORAGE]);
+  assert(mode==USB_MODE_CHARGE || usb_consent.state==USB_CONSENT_CHARGE);
+  assert(enabled[USB_DRIVER_CHARGING_ONLY]);
+  assert(usb_podlink_open());drain();
+  assert(enabled[USB_DRIVER_SERIAL]&&!enabled[USB_DRIVER_MASS_STORAGE]);
+  agents_close(0);drain();usb_confirm_configured(true,false,false);drain();
+  assert(prompts==(mode==USB_MODE_CHARGE?0:1));
+ }
+ /* Unplug/replug resets consent; stale lease intent cannot silence a close. */
+ begin(0);usb_podlink_charge_on_close();unplug_during_sleep=true;
+ agents_close(AGENTS_SWITCH_WPS);drain();assert(!prompts&&usb_state==USB_EXTRACTED);
+ begin(0);podlink_requested=false;assert(usb_podlink_open());drain();
+ agents_close(0);drain();usb_confirm_configured(true,false,false);drain();assert(prompts==1);
+ begin(0);usb_podlink_charge_on_close();podlink_epoch++;
+ agents_close(0);drain();usb_confirm_configured(true,false,false);drain();assert(prompts==1);
+ /* Fresh insertion keeps the original prompt. */
+ begin(0);podlink_requested=false;usb_consent_begin(&usb_consent,false,false);
+ usb_confirm_configured(true,false,false);drain();assert(prompts==1);
+ puts("Agents switch: silent CHARGE/reopen/MENU exit/fresh plug/stale intent/unplug PASS");
  for(int mode=0;mode<3;mode++)for(int connect=0;connect<2;connect++)for(int probe=0;probe<2;probe++){
   uint32_t prior=begin(mode);
   event(USB_PODLINK_CLOSE,podlink_epoch);drain();
@@ -148,7 +184,7 @@ int main(void)
  puts("lease release: disk hidden/fresh epoch/SELECT/MENU/Charge/Drive-only/stale close+choice/unplug PASS");
 }
 '''.replace('EVENTS',confirm+'\n'+open_event+'\n'+close)
-post=post.replace('OPEN_API',open_api)
+post=post.replace('OPEN_API',open_api).replace('CHARGE_API',charge_api).replace('CLEANUP',cleanup)
 f=O/'lease.c';f.write_text(pre+api+profiles+post)
 cmd=['cc','-std=gnu11','-Wall','-Wextra','-Werror','-g','-fsanitize=address,undefined','-fno-sanitize-recover=all','-fno-pie','-no-pie','-I'+str(R/'firmware/export'),str(f),'-o',str(O/'lease')]
 subprocess.run(cmd,check=True);subprocess.run([str(O/'lease')],check=True)

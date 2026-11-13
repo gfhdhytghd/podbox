@@ -44,6 +44,7 @@
 #include "action.h"
 #ifdef HAVE_USB_PODLINK
 #include "input/agents_shortcut.h"
+#include "input/remote_menu.h"
 #include "root_menu.h"
 #include "kernel.h"
 static struct agents_shortcut_state shortcut;
@@ -340,8 +341,9 @@ int agents_shortcut_get_button(int timeout)
     if (!remote_input_active)
         button = agents_remote_button(&remote, context, button, button_status(),
                                        current_tick);
+    if (remote_input_active) return button;
 #endif
-    return button;
+    return remote_menu_button(button);
 }
 #endif
 

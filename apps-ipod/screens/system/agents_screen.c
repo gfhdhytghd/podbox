@@ -80,6 +80,7 @@
 #include "button.h"
 #include "font.h"
 #include "podlink.h"
+#include "usb.h"
 #include "input/action.h"
 #include "input/agents_shortcut.h"
 #ifdef IPOD_ACCESSORY_PROTOCOL
@@ -2617,6 +2618,8 @@ int agents_screen(void)
     finish_talk(false);
     flush_outbox();
     /* Close cleanly: the transport finishes its CLOSE only while polled */
+    if (ret == AGENTS_SWITCH_WPS)
+        usb_podlink_charge_on_close();
     podlink_close();
     long deadline = current_tick + 2 * HZ;
     while (podlink_state() != PODLINK_CLOSED &&

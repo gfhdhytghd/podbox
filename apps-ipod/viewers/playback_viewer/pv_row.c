@@ -21,6 +21,7 @@
 #include "kernel.h"
 #include "button.h"
 #include "input/agents_shortcut.h"
+#include "input/remote_menu.h"
 #include "lcd.h"
 #include "font.h"
 #include "lang.h"
@@ -1125,7 +1126,8 @@ static int row_session(bool *again)
                     /* Asking the keypad rather than assuming: the list
                      * usually eats the release as well, and a stuck 'held'
                      * would swallow the next press to leave. */
-                    held = (button_status() & BUTTON_MENU) != 0;
+                    held = (remote_menu_button(button_status()) &
+                            BUTTON_MENU) != 0;
 
                     if (y2 == PV_YEAR_REBUILD)
                     {

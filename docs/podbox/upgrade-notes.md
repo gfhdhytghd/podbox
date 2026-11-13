@@ -1,3 +1,4 @@
+- Switching from Agents to Now Playing keeps the computer cable in charge-only mode without a USB popup. Leaving Agents through its MENU exit still asks before connecting the disk. Remote MENU also works in the USB popup and screens that read wheel buttons directly.
 - **Double-tap remote Play to switch between Agents and Now Playing.**
   Start the second press within 200 ms of releasing the first. A single
   tap waits for that window. In Agents, recording starts on press: remote

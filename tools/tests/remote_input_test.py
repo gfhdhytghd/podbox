@@ -533,6 +533,6 @@ int main(void) {
     puts("input polling hook: native-only chord/remote PLAY isolation/native SELECT timing PASS");
 }
 '''
-(O/'hook.c').write_text(pre+'\n#include "apps-ipod/input/agents_remote.h"\n'+hookpre+body('apps-ipod/input/agents_shortcut.c')+body('apps-ipod/input/agents_remote.c')+function(action_source,'remote_poll')+function(action_source,'agents_shortcut_get_button')+function(action_source,'action_poll_button')+hooktest)
+(O/'hook.c').write_text(pre+'\n#include "apps-ipod/input/agents_remote.h"\n'+hookpre+body('apps-ipod/input/remote_menu.h')+body('apps-ipod/input/agents_shortcut.c')+body('apps-ipod/input/agents_remote.c')+function(action_source,'remote_poll')+function(action_source,'agents_shortcut_get_button')+function(action_source,'action_poll_button')+hooktest)
 subprocess.run(['cc','-std=gnu11','-Wall','-Wextra','-Werror','-g','-fsanitize=address,undefined','-fno-pie','-no-pie','-I'+str(O),'-I'+str(R),'-I'+str(R/'apps-ipod'),str(O/'hook.c'),'-o',str(O/'hook')],check=True)
 subprocess.run([str(O/'hook')],check=True)

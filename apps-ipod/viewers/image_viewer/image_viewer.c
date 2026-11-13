@@ -56,6 +56,7 @@
 #include "logf.h"
 #include "button.h"
 #include "input/agents_shortcut.h"
+#include "input/remote_menu.h"
 #include "lang.h"            /* str(), LANG_* */
 #include "settings/settings.h"        /* global_settings, set_option/int/bool, ID2P */
 #include "speech/talk.h"            /* STR() */
@@ -451,7 +452,7 @@ bool iv_decode_row(int done, int rows)
     button = button_get(false);
     if (button == SYS_USB_CONNECTED)
         iv_decode_stop = PLUGIN_USB_CONNECTED;
-    else if (button == BUTTON_MENU)
+    else if (remote_menu_button(button) == BUTTON_MENU)
         iv_decode_stop = PLUGIN_ABORT;
     else if (button & SYS_EVENT)
         default_event_handler(button);
@@ -469,7 +470,7 @@ static int iv_decode_stopped(void)
         default_event_handler(SYS_USB_CONNECTED);
         return PLUGIN_USB_CONNECTED;
     }
-    while (button_status() & BUTTON_MENU)
+    while (remote_menu_button(button_status()) & BUTTON_MENU)
         sleep(HZ/50);
     button_clear_queue();
     return PLUGIN_ABORT;
@@ -951,7 +952,7 @@ static int load_and_show(char *filename, struct image_info *info,
     if (button & SYS_EVENT)
         default_event_handler(button);
 
-    if (button == IMGVIEW_MENU)
+    if (remote_menu_button(button) == IMGVIEW_MENU)
         status = PLUGIN_ABORT;
     else
         status = imgdec->load_image(filename, info, buf, &remaining, offset, filesize);

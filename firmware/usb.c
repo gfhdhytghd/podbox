@@ -200,6 +200,7 @@ static bool usb_serial = false;
 #ifdef HAVE_USB_PODLINK
 static volatile bool podlink_requested;
 static volatile uint32_t podlink_epoch;
+static volatile uint32_t podlink_charge_epoch;
 #endif
 #endif
 #ifdef USB_ENABLE_AUDIO
@@ -1023,6 +1024,9 @@ static void NORETURN_ATTR usb_thread(void)
                     usb_drive_only_now = usb_mode_drive_only() &&
                                          !usb_power_only;
                     usb_consent_begin(&usb_consent, usb_power_only, false);
+                    if (!usb_power_only &&
+                        podlink_charge_epoch == (uint32_t)ev.data)
+                        usb_consent.state = USB_CONSENT_CHARGE;
                     usb_confirm_has_config = false;
                 }
 #endif
@@ -1726,12 +1730,19 @@ bool usb_podlink_open(void)
     }
     ++podlink_epoch;
     if (!podlink_epoch) ++podlink_epoch;
+    podlink_charge_epoch = 0;
     podlink_requested = true;
     uint32_t epoch = podlink_epoch;
     restore_irq(level);
     if (usb_detect() == USB_INSERTED)
         queue_post(&usb_queue, USB_PODLINK_OPEN, epoch);
     return true;
+}
+
+void usb_podlink_charge_on_close(void)
+{
+    if (podlink_requested)
+        podlink_charge_epoch = podlink_epoch;
 }
 
 void usb_podlink_close(void)

@@ -262,6 +262,13 @@ int main(void)
     assert(keys[0].button == BUTTON_SELECT && keys[0].action == ACTION_STD_OK);
     assert(keys[1].button == BUTTON_MENU && keys[1].action == ACTION_STD_CANCEL);
     assert(keys[2].button == (BUTTON_PLAY | BUTTON_REL));
+    assert(key_action(BUTTON_RC_MENU, BUTTON_NONE) == ACTION_STD_CANCEL);
+    assert(key_action(BUTTON_RC_MENU | BUTTON_REL, BUTTON_RC_MENU) == 0);
+    d.backlight_on = true;
+    assert(confirm_action(&d, key_action(BUTTON_RC_MENU, BUTTON_NONE), &epoch)
+           == DIALOG_ACCEPT);
+    assert(reply_count == 1 && !connect);
+    reply_count = 0; d.backlight_on = false;
     /* Serial frames arriving during the actual popup must not abort it. */
     serial_iap = true;
     assert(usb_confirm_pending(epoch));
@@ -302,7 +309,7 @@ int main(void)
         assert(confirm_action(&d, action, &epoch) == DIALOG_CONTINUE);
     }
     assert(remote_events == 8 && !reply_count && usb_confirm_pending(epoch));
-    assert(!key_action(BUTTON_RC_MENU, BUTTON_NONE));
+    assert(key_action(BUTTON_RC_MENU, BUTTON_NONE) == ACTION_STD_CANCEL);
     assert(!key_action(BUTTON_RC_SELECT, BUTTON_NONE));
     d.backlight_on = true;
     assert(confirm_action(&d, ACTION_STD_CANCEL, &epoch) == DIALOG_ACCEPT);

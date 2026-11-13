@@ -30,6 +30,7 @@
 #include "lcd.h"
 #include "font.h"
 #include "button.h"
+#include "input/remote_menu.h"
 #include "backlight.h"
 #include "powermgmt.h"        /* reset_poweroff_timer */
 #include "file.h"
@@ -464,6 +465,7 @@ static const struct arcade_beat beat_host = {
 /* A button going down, stamped with the track time it arrived at */
 static void beat_stamp(struct vm *vm, long b)
 {
+    b = remote_menu_button(b);
     int i = b == BUTTON_LEFT ? 0 : b == BUTTON_RIGHT ? 1 :
             b == BUTTON_MENU && arcade_menu_is_game(vm) ? 2 :
             b == BUTTON_PLAY ? 3 : b == BUTTON_SELECT ? 4 : -1;
@@ -787,6 +789,7 @@ static long menu_since;
 /* True once a claimed MENU has been held for a second: the pause menu. */
 static bool menu_held_long(int status)
 {
+    status = remote_menu_button(status);
     if (!(status & BUTTON_MENU))
         return false;
     if (!menu_down) {
@@ -802,6 +805,7 @@ static bool menu_held_long(int status)
 
 static unsigned buttons(struct vm *vm, int status)
 {
+    status = remote_menu_button(status);
     unsigned held = 0;
     if (status & BUTTON_LEFT)   held |= ARCADE_PREV;
     if (status & BUTTON_RIGHT)  held |= ARCADE_NEXT;
@@ -952,7 +956,7 @@ static int host_frame(void *ctx, unsigned *held, int *wheel)
         dialog_touched = current_tick;
         call_began = current_tick;
     }
-    int status = button_status(), pos = wheel_position();
+    int status = remote_menu_button(button_status()), pos = wheel_position();
     unsigned h = 0;
     if (status & BUTTON_LEFT)   h |= ARCADE_PREV;
     if (status & BUTTON_RIGHT)  h |= ARCADE_NEXT;
@@ -1223,7 +1227,8 @@ static int drain(struct vm *vm, bool *menu_pressed)
             remote_key(vm, b);
         } else {
             beat_stamp(vm, b);
-            if (b == BUTTON_MENU && !arcade_menu_is_game(vm))
+            if (remote_menu_button(b) == BUTTON_MENU &&
+                !arcade_menu_is_game(vm))
                 *menu_pressed = true;
         }
     }
@@ -1327,7 +1332,8 @@ static int run(const char *path, void *mem, size_t size)
                 continue;
             }
             beat_stamp(vm, b);
-            if (b == BUTTON_MENU && !arcade_menu_is_game(vm))
+            if (remote_menu_button(b) == BUTTON_MENU &&
+                !arcade_menu_is_game(vm))
                 menu_pressed = true;
             if (TIME_BEFORE(current_tick, due) && !menu_pressed)
                 continue;

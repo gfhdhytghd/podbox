@@ -138,6 +138,10 @@ const struct button_mapping pf_context_buttons[] =
 {
     {PF_MENU,         BUTTON_MENU|BUTTON_REPEAT,  BUTTON_MENU},
     {PF_QUIT,         BUTTON_MENU|BUTTON_REL,     BUTTON_MENU},
+#ifdef IPOD_ACCESSORY_PROTOCOL
+    {PF_MENU,         BUTTON_RC_MENU|BUTTON_REPEAT, BUTTON_RC_MENU},
+    {PF_QUIT,         BUTTON_RC_MENU|BUTTON_REL,    BUTTON_RC_MENU},
+#endif
     {PF_SORTING_NEXT, BUTTON_SELECT|BUTTON_MENU,  BUTTON_NONE},
     {PF_SORTING_PREV, BUTTON_SELECT|BUTTON_PLAY,  BUTTON_NONE},
     /* Once per hold: later repeats carry a REPEAT prebutton, so they fall
