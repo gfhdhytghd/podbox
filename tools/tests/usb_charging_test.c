@@ -385,14 +385,11 @@ static void run_guard_traces(void)
     insert(USB_CHARGING_ENABLE);
     descriptor(USB_DT_CONFIG, 250);
     configure(1);
-    pulses(8, 10*HZ);
-    assert(!chrg_backoff && chrg_triggers == 1);
-    assert(chrg_input_applied == 500 && chrg_input_ceiling == 500);
     unsigned int schedule[] = {60, 120, 240, 480, 960, 1800, 1800};
     for (unsigned int n = 0; n < ARRAYLEN(schedule); ++n)
     {
         pulses(8, 10*HZ);
-        assert(chrg_backoff && chrg_triggers == n + 2);
+        assert(chrg_backoff && chrg_triggers == n + 1);
         struct usb_charge_guard_status status;
         usb_charging_guard_get_status(&status);
         assert(status.dropouts == 8);
@@ -404,11 +401,11 @@ static void run_guard_traces(void)
         long retry_at = chrg_retry_at;
         trace(true, schedule[n]*HZ - 1);
         assert(TIME_BEFORE(current_tick, retry_at));
-        assert(chrg_backoff && chrg_triggers == n + 2);
+        assert(chrg_backoff && chrg_triggers == n + 1);
         trace(true, 1);
         power_input_status();
         assert(!chrg_backoff && chrg_monitor_tmo.active);
-        assert(chrg_triggers == n + 2 && chrg_count == 0);
+        assert(chrg_triggers == n + 1 && chrg_count == 0);
         expect_current(500);
     }
     /* Recovery restores the first delay only after sustained low !CHRG. */
@@ -421,7 +418,7 @@ static void run_guard_traces(void)
     usb_charging_enable(USB_CHARGING_ENABLE);
     assert(!chrg_backoff && !chrg_count && !chrg_triggers);
     expect_current(500);
-    pulses(16, 5*HZ);
+    pulses(8, 5*HZ);
     assert(chrg_backoff);
     usb_core_bus_suspend(true);
     expect_current(0);

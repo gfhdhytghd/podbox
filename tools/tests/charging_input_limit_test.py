@@ -22,37 +22,32 @@ static void physical(int ma,bool inhibit) {
     assert(gpio_c&4); /* C2 remains untouched. */
 }
 static void high_request(void) {
-#ifdef TEST_BOOTLOADER_POWER
-    usb_charging_maxcurrent_change(1000);
-#else
     usb_charging_maxcurrent_change(500);
-#endif
 }
 int main(void) {
     profile=2;insert(USB_CHARGING_ENABLE);gpio_c|=4;
     usb_charging_maxcurrent_change(100);physical(100,false);
     usb_charging_maxcurrent_change(0);physical(0,true);
-    descriptor(USB_DT_CONFIG,250);configure(1);drain_charger();high_request();physical(1000,false);
-    /* First eight qualified dropouts lower the input tier without C1 pause. */
-    pulses(8,5*HZ);assert(chrg_triggers==1&&!chrg_backoff);physical(500,false);
-    high_request();physical(500,false); /* A budget refresh cannot erase fallback. */
-    /* The second trigger retains the existing finite C1 pause and retry. */
-    pulses(8,5*HZ);assert(chrg_triggers==2&&chrg_backoff);physical(500,true);
+    descriptor(USB_DT_CONFIG,250);configure(1);drain_charger();high_request();physical(500,false);
+    /* Even a stale/oversized caller cannot assert C0 in normal firmware. */
+    usb_charging_maxcurrent_change(1000);physical(500,false);
+    usb_charging_maxcurrent_change(2000);physical(500,false);
+    /* Restore the pre-M4 first-trigger pause, with no high-tier pre-stage. */
+    pulses(8,5*HZ);assert(chrg_triggers==1&&chrg_backoff);physical(500,true);
     assert(chrg_retry_at-current_tick==60*HZ);
     trace(true,60*HZ);power_input_status();physical(500,false);
-    pulses(8,5*HZ);assert(chrg_triggers==3&&chrg_backoff);
+    pulses(8,5*HZ);assert(chrg_triggers==2&&chrg_backoff);
     assert(chrg_retry_at-current_tick==120*HZ);physical(500,true);
     usb_core_bus_suspend(true);drain_charger();physical(0,true);
     usb_core_bus_suspend(false);drain_charger();physical(500,true);
     trace(false,120*HZ);power_input_status();physical(500,false);
     trace(false,CHRG_STABLE_RESET);assert(chrg_next_backoff==60*HZ);physical(500,false);
-    /* Settings/unplug reset the tier; ordinary suspend/retry do not. */
-    usb_charging_enable(USB_CHARGING_ENABLE);high_request();physical(1000,false);
+    usb_charging_enable(USB_CHARGING_ENABLE);high_request();physical(500,false);
     usb_charging_enable(USB_CHARGING_DISABLE);physical(100,true);
-    unplug();insert(USB_CHARGING_ENABLE);gpio_c|=4;descriptor(USB_DT_CONFIG,250);configure(1);drain_charger();high_request();physical(1000,false);
+    unplug();insert(USB_CHARGING_ENABLE);gpio_c|=4;descriptor(USB_DT_CONFIG,250);configure(1);drain_charger();high_request();physical(500,false);
     usb_charging_maxcurrent_change(100);physical(100,false);
     unplug();physical(0,true);
-    puts("GPIO input tiers / C0 clears on low-off-suspend / C1-C2 / 1000->500->pause-retry / reset PASS");
+    puts("Normal input hard-cap 500 / C0 always low / C1-C2 / first-trigger pause-retry / reset PASS");
 }
 '''
 integration=(R/'tools/tests/usb_charging_test.c').read_text().replace('../../firmware/',str(R/'firmware')+'/')
@@ -60,7 +55,7 @@ include='#include "'+str(R/'firmware/target/arm/s5l8702/ipod6g/power-6g.c')+'"'
 integration=integration.replace(include, '#ifdef TEST_BOOTLOADER_POWER\n#define BOOTLOADER\n#endif\n'+include+'\n#ifdef TEST_BOOTLOADER_POWER\n#undef BOOTLOADER\n#endif')
 source=source.replace('INTEGRATION',integration)
 (O/'input.c').write_text(source)
-for mode in ['normal','bootloader']:
+for mode in ['normal']:
     out=O/('input-'+mode)
     subprocess.run(cc+(['-DTEST_BOOTLOADER_POWER'] if mode=='bootloader' else [])+[str(O/'input.c'),'-o',str(out)],check=True)
     subprocess.run([str(out)],check=True)

@@ -126,9 +126,14 @@ enum {
     CHRG_INPUT_FALLBACK_MA = 500,
     CHRG_INPUT_HIGH_MA = 1000,
 };
+#ifdef BOOTLOADER
+#define CHRG_INPUT_DEFAULT_MA CHRG_INPUT_HIGH_MA
+#else
+#define CHRG_INPUT_DEFAULT_MA CHRG_INPUT_FALLBACK_MA
+#endif
 static volatile int chrg_input_requested = CHRG_INPUT_LOW_MA;
 static volatile int chrg_input_applied = CHRG_INPUT_LOW_MA;
-static volatile int chrg_input_ceiling = CHRG_INPUT_HIGH_MA;
+static volatile int chrg_input_ceiling = CHRG_INPUT_DEFAULT_MA;
 
 /* Clear the double-current bit before changing HPWR, so lowering a tier
  * never passes through the unintended 200 mA combination. IRQs are masked. */
@@ -138,8 +143,10 @@ static void chrg_apply_input(int requested)
     GPIOCMD = 0xb070e | (limit < CHRG_INPUT_LOW_MA ? 1 : 0);
     GPIOCMD = 0xc000e;
     GPIOCMD = 0xb060e | (limit >= CHRG_INPUT_FALLBACK_MA ? 1 : 0);
+#ifdef BOOTLOADER
     if (limit >= CHRG_INPUT_HIGH_MA)
         GPIOCMD = 0xc000f;
+#endif
     chrg_input_applied = limit;
 }
 
@@ -173,7 +180,7 @@ void usb_charging_guard_reset(void)
     chrg_stop_monitor();
     chrg_clear_trace();
     chrg_backoff = false;
-    chrg_input_ceiling = CHRG_INPUT_HIGH_MA;
+    chrg_input_ceiling = CHRG_INPUT_DEFAULT_MA;
     chrg_triggers = 0;
     chrg_last_trigger = chrg_retry_at = 0;
     chrg_next_backoff = CHRG_BACKOFF_FIRST;
@@ -230,6 +237,7 @@ static int chrg_monitor_cb(struct timeout *tmo)
             {
                 chrg_last_trigger = now;
                 ++chrg_triggers;
+#ifdef BOOTLOADER
                 if (chrg_input_applied == CHRG_INPUT_HIGH_MA)
                 {
                     /* First reduce load without inhibiting battery charge.
@@ -239,6 +247,7 @@ static int chrg_monitor_cb(struct timeout *tmo)
                     chrg_clear_trace();
                     return 1;
                 }
+#endif
                 chrg_backoff = true;
                 chrg_retry_at = now + chrg_next_backoff;
                 chrg_next_backoff = MIN(chrg_next_backoff * 2,
@@ -316,10 +325,8 @@ void usb_charging_maxcurrent_change(int maxcurrent)
 {
     int oldlevel = disable_irq_save();
 #ifndef BOOTLOADER
-    /* Keep the USB descriptor/grant unchanged. The target input setting
-     * doubles the former 500 mA tier; the weak-source ceiling can lower it. */
-    if (maxcurrent >= CHRG_INPUT_FALLBACK_MA)
-        maxcurrent = CHRG_INPUT_HIGH_MA;
+    /* Normal firmware never enables the double-current input bit. */
+    maxcurrent = MIN(maxcurrent, CHRG_INPUT_FALLBACK_MA);
 #endif
     chrg_input_requested = maxcurrent < CHRG_INPUT_LOW_MA ? 0 :
         maxcurrent >= CHRG_INPUT_HIGH_MA ? CHRG_INPUT_HIGH_MA :
