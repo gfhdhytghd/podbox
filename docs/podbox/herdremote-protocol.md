@@ -260,8 +260,10 @@ det -
 D <pane> <age> <task> <now> <say> <step1> <step2> <step3> <input> <cursor>
 ```
 
-`D` is exactly one record with **eleven tab-separated fields**, including
-empty fields. All fields are present. `cursor` is `0` for empty input.
+`D` is one record with eleven legacy tab-separated fields, including empty
+fields. Resident firmware additionally accepts a twelfth field, `revision`
+(1–16 lowercase hexadecimal characters). Send it only after receiving the
+resident `PLFG` notice below. `cursor` is `0` for empty input.
 
 | Field | Unicode code points | UTF-8 bytes as sent |
 |---|---:|---:|
@@ -342,7 +344,8 @@ is a daemon bug, not a player-side shortening rule.
 
 Compatibility: a nine-field-only player rejects this eleven-field record.
 Ship the matching firmware and daemon. The player rejects field counts
-other than eleven and invalid age/cursor values. Other v1 messages retain
+other than eleven (or twelve with a valid resident revision), and invalid
+age/cursor values. Without `PLFG`, the daemon sends the legacy eleven fields. Other v1 messages retain
 their existing shape. The daemon can still serve a 4096-byte negotiated
 link using its smaller input budget.
 
@@ -556,3 +559,33 @@ it does not recognise. No protocol version change is required.
 `qid` that is no longer on screen fails with `R <req> err`, and no key
 reaches the agent. A success comes only after the computer has seen the
 pane change, which takes up to 5 seconds.
+
+## Resident foreground notice and content revisions (Follow-up 8)
+
+An ordinary PodLink PING payload is `PLFG` plus one byte: `0` background,
+`1` Agents, `2` another foreground client. The receiver still replies with
+an ordinary PONG. Old hosts ignore the payload and keep their existing
+behavior. New hosts learn resident/revision capability from the notice;
+old firmware sends no notice and continues to receive eleven-field D.
+
+A foreground change does not send OPEN, HELLO, CLOSE, `hr`, `sub` or `det`.
+The resident session, subscriptions and sent-content fingerprints survive.
+Background Agents receives changed list/status/question frames and heartbeat
+only. Another foreground client suppresses Agents pushes. Detail queries
+and D frames resume only for foreground Agents, with only changed content.
+The optional D revision identifies the rendered message/item state, not
+elapsed seconds. Identical content and age-only updates do not redraw the
+player. Scrolled-up content retains its offset; the bottom follows new
+content. A link generation change uses the existing fresh-fetch path.
+
+Codex uses read-only `thread/items/list` on the existing app-server daemon,
+limited to five recent items by `agent_session` UUID. It sends the latest
+message's last five lines, not a history. Claude uses its read-only transcript.
+No thread resume, turn, lifecycle or input method is called. Unavailable
+sources fall back to one visible-viewport herdr read with no line count.
+The adapter refuses scrollback and line-count requests before socket I/O.
+
+Deploy the matching `herdremote.py`, `hrappserver.py`, `hrsession.py`,
+`hrherdr.py`, `hrproto.py`, sibling `tools/podlink.py` and Python dependencies.
+This extension supersedes the older source/window and full-refresh-on-return
+rules while retaining the v1 voice, focus, key and result semantics.

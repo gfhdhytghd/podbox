@@ -164,7 +164,9 @@ def detail(pane, fields, max_message=MAX_MESSAGE):
                     detail_text(fields.get("now", ""), DETAIL_TEXT_CHARS, DETAIL_TEXT_BYTES),
                     detail_text(fields.get("say", ""), DETAIL_SAY_CHARS, DETAIL_SAY_BYTES)] +
                    [detail_text(s, DETAIL_TEXT_CHARS, DETAIL_TEXT_BYTES) for s in steps] +
-                   [typed_input, str(cursor)]], max_message=max_message)
+                   [typed_input, str(cursor)] +
+                   ([clean(fields["revision"], 16)] if fields.get("revision") else [])],
+                  max_message=max_message)
 
 
 def question(q):

@@ -2229,4 +2229,5 @@ kernel/timeout.c
 #ifdef HAVE_USB_PODLINK
 usbstack/podlink_wire.c
 usbstack/podlink.c
+usbstack/podlink_service.c
 #endif

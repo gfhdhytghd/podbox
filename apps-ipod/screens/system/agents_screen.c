@@ -180,6 +180,12 @@ static long focus_until;
 static bool focus_for_detail;   /* that request is the detail view's fp */
 static long last_message;
 static bool was_connected;
+_Static_assert(sizeof(struct hr_model) <= 32 * 1024, "Agents model cache budget");
+static bool cache_valid;
+static uint32_t cache_generation;
+static struct row cache_row;
+static int cache_top;
+
 
 /* The usage view asks again this often while it is open */
 #define USAGE_EVERY (20 * HZ)
@@ -210,6 +216,51 @@ static struct hr_keys key_runs; /* the taps waiting */
 /* Wheel steps this close together are fast and jump words */
 #define WHEEL_FAST  (HZ / 20)
 static struct hr_wheel wheel;
+
+static void talk_result(const char *text, bool failed);
+
+static void background_link(const struct podlink_message *m)
+{
+    if (m->type == PODLINK_CLOSE)
+    {
+        cache_valid = false;
+        return;
+    }
+    if (!cache_valid || m->type != PODLINK_TEXT || !m->length ||
+        m->data[0] == 'D')
+        return;
+    int type = hr_model_apply(&model, (const char *)m->data, m->length);
+    if (type) last_message = current_tick;
+    if (type == 'U') usage_at = current_tick;
+    if (type == 'V' && talk_discarded && !talk_failed)
+        model.voice = 0;
+    if (type == 'R')
+    {
+        if (talk_req[0] && !strcmp(model.result_req, talk_req))
+        {
+            talk_req[0] = '\0';
+            if (!model.result_ok || talk_req_up)
+                talk_result(model.result_text, !model.result_ok);
+        }
+        else if (focus_req[0] && !strcmp(model.result_req, focus_req))
+        {
+            focus_req[0] = '\0';
+            if (focus_for_detail) detail_ready = model.result_ok;
+            focus_for_detail = false;
+            if (!model.result_ok) talk_result(model.result_text, true);
+        }
+        else if (key_req[0] && !strcmp(model.result_req, key_req))
+            key_req[0] = '\0';
+        else if (pending_req[0] && !strcmp(model.result_req, pending_req))
+        {
+            pending_req[0] = '\0';
+            pending_answer = false;
+            if (!model.result_ok) talk_result(model.result_text, true);
+        }
+        model.result_new = false;
+    }
+}
+
 
 /* A free outbox slot, or NULL while the link is wedged (the user can press
  * again) */
@@ -1507,8 +1558,9 @@ static void draw_detail(struct gui_synclist *list)
     for (const char *p = text; *p; need++)
         p = text_wrap_next_punct(p, vp->width, pf, &end);
     detail_page_lines = MAX(1, avail);
-    detail_scroll_max = MAX(0, need + nsteps - avail);
-    detail_scroll = MIN(detail_scroll, detail_scroll_max);
+    int maximum = MAX(0, need + nsteps - avail);
+    detail_scroll = hr_detail_scroll(detail_scroll, detail_scroll_max, maximum);
+    detail_scroll_max = maximum;
     unsigned colour = t_trouble || fallback ? USE_DIM : USE_TEXT;
     for (int i = 0; i < need; i++)
     {
@@ -1575,8 +1627,12 @@ static void draw_mic(struct screen *d, int x, int y, unsigned colour)
 
 /* Whether the band has anything to say: a hold, a recording the computer
  * reports, a request awaiting its result, or a result still shown */
+static bool talk_is_short(void);
+
 static bool talk_wanted(void)
 {
+    if (talk_held && talk_is_short())
+        return false;
     if (talk_discarded && !talk_failed)
         return false;
     return talk_held || model.voice == 't' || talk_req[0] ||
@@ -2141,6 +2197,13 @@ static bool poll_link(void)
 {
     bool changed = false;
     bool connected = podlink_state() == PODLINK_CONNECTED;
+    uint32_t generation = podlink_generation();
+    if (generation != cache_generation)
+    {
+        cache_valid = false;
+        was_connected = false;
+        cache_generation = generation;
+    }
     if (connected != was_connected)
     {
         was_connected = connected;
@@ -2260,11 +2323,15 @@ int agents_screen(void)
     int action, ret = 0;
     char buf[48];
 
-    if (!podlink_open())
+    if (!podlink_open_agents(background_link))
     {
         splash(HZ * 3, "Unplug USB, then open Agents");
         return 0;
     }
+    bool resume = cache_valid && cache_generation == podlink_generation() &&
+                  podlink_state() == PODLINK_CONNECTED;
+    if (!resume)
+    {
     hr_model_reset(&model);
     view = VIEW_SPACES;
     space_id[0] = space_tab[0] = detail_pane[0] = '\0';
@@ -2282,6 +2349,8 @@ int agents_screen(void)
     usage_serial = model.usage.serial;
     usage_scroll = detail_scroll = detail_scroll_max = 0;
     detail_page_lines = 1;
+    }
+    cache_generation = podlink_generation();
 
     FOR_NB_SCREENS(i)
         viewportmanager_theme_enable(i, true, NULL);
@@ -2297,7 +2366,16 @@ int agents_screen(void)
     gui_synclist_set_description_callback(&list, row_description);
     gui_synclist_set_voice_callback(&list, speak_row);
     gui_synclist_set_status_callback(&list, draw_dot);
-    show(&list, 0);
+    if (resume)
+    {
+        show_row(&list, &cache_row);
+        gui_synclist_set_top_item(&list, cache_top);
+        if (view == VIEW_USAGE) draw_usage(&list);
+        else if (view == VIEW_DETAIL) draw_detail(&list);
+        else gui_synclist_draw(&list);
+    }
+    else
+        show(&list, 0);
 
     long frame_at = current_tick;
     long redraw_at = current_tick + HZ;
@@ -2617,18 +2695,29 @@ int agents_screen(void)
     /* A hold ends with the screen */
     finish_talk(false);
     flush_outbox();
-    /* Close cleanly: the transport finishes its CLOSE only while polled */
-    if (ret == AGENTS_SWITCH_WPS)
-        usb_podlink_charge_on_close();
-    podlink_close();
+    /* The resident service owns the connection; exit keeps the cached view. */
     long deadline = current_tick + 2 * HZ;
-    while (podlink_state() != PODLINK_CLOSED &&
+    while (nout && podlink_state() == PODLINK_CONNECTED &&
            TIME_BEFORE(current_tick, deadline))
     {
-        struct podlink_message m;
-        podlink_poll(&m);
+        poll_link();
+        flush_outbox();
         sleep(1);
     }
+    if (view == VIEW_CONFIRM)
+    {
+        view = confirm_from;
+        show_row(&list, &confirm_from_row);
+    }
+    forget_keys();
+    focus_want[0] = '\0';
+    int selected = gui_synclist_get_sel_pos(&list);
+    cache_row = selected >= 0 && selected < nrows ? rows[selected] :
+                                                   (struct row){0};
+    cache_top = list.start_item[SCREEN_MAIN];
+    cache_valid = was_connected && model.hello && !nout;
+    cache_generation = podlink_generation();
+    podlink_close();
     /* Play still held would power off at once: wait for its release */
     while (ret != AGENTS_SWITCH_WPS && agents_play_down())
         sleep(HZ / 20);

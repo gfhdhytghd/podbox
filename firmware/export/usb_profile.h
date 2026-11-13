@@ -30,7 +30,8 @@ static inline char usb_profile_serial_prefix(unsigned int enabled_mask)
 static inline unsigned int
 usb_profile_config_count(unsigned int total, bool drive_only, bool podlink)
 {
-    return drive_only || podlink ? 1 : total;
+    (void)podlink;
+    return drive_only ? 1 : total;
 }
 static inline bool usb_profile_close_matches(bool leased, uint32_t current,
                                              uint32_t queued)

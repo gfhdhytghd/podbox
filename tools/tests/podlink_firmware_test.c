@@ -4,6 +4,13 @@
 #include <string.h>
 #include <stdio.h>
 #include "../../firmware/usbstack/usb_serial.c"
+#define podlink_open podlink_session_open
+#define podlink_state podlink_session_state
+#define podlink_max_message podlink_session_max_message
+#define podlink_send podlink_session_send
+#define podlink_close podlink_session_close
+#define podlink_poll podlink_session_poll
+#define podlink_wait podlink_session_wait
 #include "../../firmware/usbstack/podlink.c"
 
 long current_tick;
@@ -20,6 +27,9 @@ static unsigned char output[3 * PODLINK_FRAME_MAX];
 static int output_size;
 bool usb_podlink_open(void)
 {
+#ifdef PODLINK_SERVICE_TEST
+    return true;
+#endif
     if (lease || plugged)
         return false;
     lease = true;

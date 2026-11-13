@@ -1,3 +1,14 @@
+- **PodLink stays connected while Agents is in the background.** Switching
+  to Now Playing and leaving Agents through MENU keep USB connected.
+  Returning shows the cached page immediately. Disk consent on the first
+  plug and pure USB Mode Charge remain available. Deploy the matching
+  HerdRemote files and dependencies before using the new foreground notice
+  and structured Codex detail source. Codex needs its existing app-server
+  daemon; the visible-only fallback does not scroll the computer's pane.
+- **Remote volume taps page once.** Repeated dock pairs within 350 ms form
+  one press; holding past 600 ms repeats at no more than four pages/s.
+  PLAY starts audio capture immediately but hides the recording band until
+  the native 150 ms or remote 300 ms hold threshold.
 - Switching from Agents to Now Playing keeps the computer cable in charge-only mode without a USB popup. Leaving Agents through its MENU exit still asks before connecting the disk. Remote MENU also works in the USB popup and screens that read wheel buttons directly.
 - **Double-tap remote Play to switch between Agents and Now Playing.**
   Start the second press within 200 ms of releasing the first. A single

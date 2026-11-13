@@ -58,12 +58,13 @@ struct podlink_message
     const unsigned char *data;
 };
 
-/* Single screen/UI-thread owner. No disk I/O, allocation, sleeps or USB waits.
- * Poll frequently (at least once per second), including while closing.
- * A received CLOSE ends the message session, not the USB lease: a new OPEN
- * can reconnect. Unplug reports CLOSE 1006 once; replug works in the same
- * screen. close() requests clean CLOSE, then releases the lease on ACK or after
- * 1 s. Send copies payload; BUSY means retry later, with no bytes accepted. */
+/* One foreground client attaches to a cable-owned resident transport.
+ * close() detaches only. Payload remains valid until the client's next poll.
+ * Background callback runs on the resident thread and must not call this API. */
+void podlink_init(void);
+void podlink_shutdown(void);
+bool podlink_open_agents(void (*background)(const struct podlink_message *));
+uint32_t podlink_generation(void);
 bool podlink_open(void);
 int podlink_send(unsigned int type, const void *data, unsigned int length);
 int podlink_poll(struct podlink_message *message);

@@ -115,6 +115,7 @@ bool dbg_remote_input(void)
     int fd = -1;
     long observed_tick = -1;
     unsigned long cursor = 0, lost = 0, bad, total;
+    unsigned long volume_cursor = remote_volume_count() + 1;
     bool log_error = false, usb = false;
     char line[320], hex[40], names[160], decoded[160] = "(none)";
     const char *made = "ACTION_NONE";
@@ -142,6 +143,28 @@ bool dbg_remote_input(void)
             for (; cursor <= end && !log_error; cursor++)
                 if (snapshot(cursor)) log_error = !log_frame(fd);
                 else { lost++; log_error = true; }
+            unsigned long volume_end = remote_volume_count();
+            if (volume_end >= volume_cursor &&
+                volume_end - volume_cursor >= REMOTE_VOLUME_HISTORY)
+            {
+                snprintf(line, sizeof(line), "VOL LOST %lu\n",
+                         volume_end - volume_cursor - REMOTE_VOLUME_HISTORY + 1);
+                log_error |= !put_log(fd, line);
+                volume_cursor = volume_end - REMOTE_VOLUME_HISTORY + 1;
+            }
+            for (; volume_cursor <= volume_end && !log_error; volume_cursor++)
+            {
+                struct remote_volume_trace v;
+                int level = disable_irq_save();
+                bool have = remote_volume_get(volume_cursor, &v);
+                restore_irq(level);
+                if (!have) continue;
+                snprintf(line, sizeof(line),
+                         "VOL %lu tick=%lu echo=%02X target=%02X dir=%d "
+                         "decision=%c\n", v.sequence, v.tick, v.echo, v.target,
+                         v.direction, v.decision);
+                log_error = !put_log(fd, line);
+            }
             if (log_error) { close(fd); fd = -1; }
         }
         lcd_clear_display();
@@ -208,6 +231,7 @@ bool dbg_remote_input(void)
                           O_WRONLY | O_CREAT | O_APPEND, 0666);
                 log_error = fd < 0;
                 cursor = counts(&bad) + 1;
+                volume_cursor = remote_volume_count() + 1;
             }
         }
         if (action & SYS_EVENT)

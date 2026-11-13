@@ -27,6 +27,9 @@
 #include "storage.h"
 #include "usb_core.h"       /* usb_core_host_wrote_storage */
 #include "usb.h"
+#ifdef HAVE_USB_PODLINK
+#include "podlink.h"
+#endif
 #include "widgets/usb_confirm.h"
 #include "iap-usb.h"        /* iap_on_power_off */
 #include "ata_idle_notify.h"
@@ -128,6 +131,9 @@ static bool clean_shutdown(enum shutdown_type sd_type,
         /* A USB dock is told now, while the saves below give the USB
          * thread time to send it */
         iap_on_power_off();
+#ifdef HAVE_USB_PODLINK
+        podlink_shutdown();
+#endif
 
         if (batt_safe) /* do not save on critical battery */
         {

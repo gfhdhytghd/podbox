@@ -40,4 +40,15 @@ unsigned long remote_context_buttons(unsigned int len, const unsigned char *buf)
 void remote_button_names(unsigned long buttons, char *out, size_t size);
 void remote_frame_names(const struct remote_frame *f, char *out, size_t size);
 bool dbg_remote_input(void);
+#define REMOTE_VOLUME_HISTORY 32
+struct remote_volume_trace {
+    unsigned long sequence, tick;
+    unsigned char echo, target;
+    signed char direction;
+    char decision;
+};
+void remote_volume_log(unsigned long tick, unsigned char echo,
+                       unsigned char target, int direction, char decision);
+unsigned long remote_volume_count(void);
+bool remote_volume_get(unsigned long sequence, struct remote_volume_trace *out);
 #endif

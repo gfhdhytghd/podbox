@@ -49,7 +49,8 @@ firmware ignores new tab/detail frames. Typed detail ships with the matching ele
 [DETAIL-DESIGN.md](../../../ipod/DETAIL-DESIGN.md). A nine-field-only player
 rejects the eleven-field record; other v1 messages keep their shape.
 
-It talks only to herdr's local socket. It never reaches another machine.
+It uses local herdr and Codex app-server sockets, and read-only Claude
+transcript files. It never reaches another machine through these readers.
 
 On connection and after a herdr reconnect, HerdRemote checks `ping`'s
 `capabilities.client_targeted_focus`. It checks again before each focus
@@ -70,8 +71,8 @@ or focus request reports a failure rather than retrying with these calls.
 
 ## Requirements
 
-- Python 3.9 or later, and pyserial (`pip install pyserial`, or your
-  distribution's `python-pyserial`).
+- Python 3.9 or later, pyserial and websockets (`pip install -r
+  tools/herdremote/requirements.txt`).
 - herdr running on this computer.
 - Read and write access to the player's tty. A desktop session usually has
   it; if the log says `Permission denied`, add yourself to the group that
@@ -320,6 +321,41 @@ A row at the top says when something is missing:
 
 The navigation table above defines MENU and LEFT for each view.
 
+## Resident link and cached return
+
+On resident firmware, the first computer connection still asks for disk
+consent. MENU keeps a stable `2AA0000000000360` CDC profile. Agents, Now
+Playing and the PodLink demo attach or detach locally; opening, switching
+and MENU exit do not reconnect USB or close the host session. SELECT grants
+the disk exclusive access without CDC. USB Mode Charge is pure charge and
+does not run the resident link. The first non-disk profile already includes
+CDC while the consent popup is waiting. Existing USB charging negotiation
+and the optional accessory configuration stay in use.
+
+The `PLFG` notice rides in an ordinary PodLink PING: byte 0 means background,
+1 means Agents, 2 means another foreground client. PONG handling stays
+unchanged. In the background the daemon sends only changed list/state
+frames and cheap heartbeats; detail reads and pushes stop. Returning to
+Agents keeps subscriptions and sent-content revisions, so unchanged frames
+are not resent. The firmware retains the current list, selection, detail,
+usage and scrolling state and draws it before a host round trip. A session
+generation change invalidates the cache and uses the normal fetch path.
+The model is bounded to 32 KiB; resident mailbox/worker storage is bounded
+to 64 KiB, with no heap allocation in the device transport.
+
+An old host ignores the PING payload safely, but may keep sending detail in
+the background. The device drops those detail pushes while keeping its
+cached page. A new host with old firmware sees no `PLFG` capability and
+retains its legacy screen-owned connection and eleven-field detail shape.
+Only resident firmware gets the optional twelfth D field, a content
+revision. No wire-version bump or host serial-matcher change is needed.
+
+PLAY still sends `vd` immediately. The recording band stays hidden before
+remote 300 ms or native 150 ms, even if a host recording reply arrives.
+Short release sends `vc` silently; a confirmed hold shows the band and ends
+with `vu`. Leaving the foreground finishes its outstanding hold before the
+notice changes. No runtime service is installed or restarted by packaging.
+
 ## Navigation v2 wire contract
 
 [The protocol](../../docs/podbox/herdremote-protocol.md#navigation-v2--protocol-ready)
@@ -365,26 +401,32 @@ python3 -m unittest discover -s tools/herdremote/tests -v
 These host tests do not establish on-device UI behavior or deployed-service
 acceptance. Deployment and iPod installation are separate from Part B.
 
-## Detail parser
+## Detail sources
 
-`hrdetail.py` reads a bounded recent pane window (`pane.read source=recent_unwrapped`,
-240 rendered rows) on the background read worker. It separates the current task,
-working line, latest agent message and up to three tool steps. It removes
-ANSI sequences, prompts and wrapped input, tool output, borders, model bars,
-shortcut hints and warning footers. Text remains plain; the iPod wraps SAY
-and gives it priority over the steps. The wheel continues to type keys.
+Codex detail uses the existing app-server daemon's Unix WebSocket. The
+reader sends only initialization and `thread/items/list` requests keyed by
+herdr's `agent_session` UUID. It asks for at most five recent items and
+keeps the latest message's last five lines. It never resumes a thread,
+starts a turn, subscribes to the TUI or reads Codex rollout files. Working
+state comes from herdr's `agent_status`. `PODBOX_CODEX_SOCKET` can name a
+nondefault local control socket. This program never starts the daemon.
 
-Claude black bullets and Codex white bullets distinguish messages from tools.
-Claude summary steps and Codex command steps retain only the first line.
-Claude's `done 1:47` means 107 seconds since completion; `Cogitated for 29m`
-alone is a completed work duration and never becomes a done age. Without an
-explicit elapsed time, the daemon reports age only after it observes a state
-transition. It does not invent an age on first observation.
+Claude detail tails its session transcript under `~/.claude/projects/`,
+read only. Both sources provide a stable content revision and compact tool
+steps. New message/item content or completion changes that revision;
+terminal spinners, wrapping and timer counters do not.
+
+If a structured source is unavailable, `hrdetail.py` parses a single
+`pane.read source=visible` reply, with no `lines` parameter. The herdr
+adapter rejects scrollback sources and explicit line counts before any
+socket I/O. Only the last five message lines go to the player. Optional
+cursor metadata from this same visible reply describes the input block;
+there is no second or extended read. This keeps the computer's pane still.
 
 agy's captured layout uses black message/tool bullets and braille working
-spinners. Its captured recent window contains tools and a working line but
+spinners. Its historical captured window contains tools and a working line but
 no assistant message start; SAY stays empty rather than showing user input
-or thought text. A message outside the bounded recent window is unavailable.
+or thought text. A message outside the visible viewport is unavailable to the fallback.
 No grok pane was present during capture; grok and other unknown layouts use
 the last four non-chrome lines as grey fallback. Known kinds also fall back
 when no message, activity, tool step or question is recognized.
@@ -398,8 +440,9 @@ new live secret filter; fixture redaction is separate from display parsing.
 python3 -m unittest discover -s tools/herdremote/tests -p test_detail.py -v
 ```
 
-Deploy `hrdetail.py` alongside the other `hr*.py` files. Pair typed-detail
-backend deployment with the final eleven-field firmware. There is no change to focus,
+Deploy `hrappserver.py`, `hrsession.py`, `herdremote.py`, `hrherdr.py`,
+`hrproto.py` and the sibling `tools/podlink.py` together. Install the listed
+Python dependencies. Keep `hrdetail.py` for the visible-only fallback. There is no change to focus,
 keyboard or voice commands and no wire-version bump.
 
 Input extraction also preserves the current prompt text and optional cursor
@@ -408,9 +451,8 @@ visible `cursor` on an input row, the parser maps its row/column to a Unicode
 input offset, preferring `col_chars` for wide cells and combining marks.
 Prompt glyphs and frame padding do not count. Missing, invisible, malformed,
 or off-input cursor data falls back to the input end. When nonempty input
-comes from merged history with no cursor, one extra visible-viewport read
-can supply a recognized input cursor; failed or off-input results preserve
-the recent input and its end fallback. The fake herdr can
+has no recognized visible cursor, its end is the fallback. The adapter never
+requests merged history or moves the computer viewport. The fake herdr can
 return either the legacy record or a record containing cursor metadata.
 The approved [DETAIL-DESIGN.md](../../../ipod/DETAIL-DESIGN.md) owns all
 field order, budgets, escaping, truncation, state wording and presentation.

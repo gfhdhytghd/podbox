@@ -120,6 +120,8 @@ struct event {unsigned long tick;int button,held;};
 tests = r'''
 int main(void){
  reset();native(BUTTON_PLAY,BUTTON_PLAY,100);assert(ncommands==1&&sent_at[0]==100);
+ assert(!talk_wanted());model.voice='t';current_tick=114;assert(!talk_wanted());
+ current_tick=115;assert(talk_wanted());current_tick=100;model.voice=0;
  native(BUTTON_PLAY|BUTTON_REL,0,114);pair_is(0,"vc\t");assert(!talk_wanted());
  reset();native(BUTTON_PLAY,BUTTON_PLAY,100);native(BUTTON_PLAY|BUTTON_REL,0,115);
  pair_is(0,"vu\t");
@@ -147,6 +149,22 @@ int main(void){
  for(int i=0;i<12;i++)pair_is(i*2,"vc\t");
  pair_is(24,"vu\t");pair_is(26,"vu\t");
  assert(sent_at[0]==153358&&sent_at[1]==153371);
+ /* UI samples, including early host V replies, stay dark until hold. */
+ for(int remote=0;remote<2;remote++) {
+  reset();current_tick=100;struct gui_synclist list={0};start_talk(&list,remote);
+  flush();assert(ncommands==1&&!strncmp(commands[0],"vd\t",3));model.voice='t';
+  int threshold=remote?30:15,band_frames=0;
+  for(int t=0;t<threshold;t++){current_tick=100+t;if(talk_wanted())band_frames++;}
+  assert(!band_frames);current_tick=100+threshold;assert(talk_wanted());
+  finish_talk(false);flush();pair_is(0,"vu\t");
+  reset();current_tick=100;start_talk(&list,remote);flush();model.voice='t';
+  current_tick=100+threshold-1;assert(!talk_wanted());finish_talk(true);flush();
+  assert(!talk_wanted()&&!talk_note[0]);pair_is(0,"vc\t");
+ }
+ reset();rc(BUTTON_RC_PLAY,BUTTON_RC_PLAY,100);model.voice='t';assert(!talk_wanted());
+ rc(BUTTON_RC_PLAY|BUTTON_REL,0,113);assert(!talk_wanted());
+ rc(BUTTON_RC_PLAY,BUTTON_RC_PLAY,118);model.voice='t';assert(!talk_wanted());
+ rc(BUTTON_RC_PLAY|BUTTON_REL,0,131);assert(switches==1&&!talk_wanted());
  /* A delayed successful vc result cannot display Sent or Talking. */
  reset();rc(BUTTON_RC_PLAY,BUTTON_RC_PLAY,100);rc(BUTTON_RC_PLAY|BUTTON_REL,0,113);
  strcpy(model.result_req,talk_req);strcpy(model.result_text,"Discarded");model.result_ok=true;

@@ -36,9 +36,13 @@ enum { USB_DRIVER_MASS_STORAGE, USB_DRIVER_HID, USB_DRIVER_AUDIO,
        USB_DRIVER_SERIAL, USB_DRIVER_IAP, USB_DRIVER_CHARGING_ONLY,
        USB_NUM_DRIVERS };
 static struct usb_consent consent;
+#define USB_MODE_CHARGE 1
+static int usb_mode;
+static bool exclusive_storage_enabled,exclusive_storage_requested,usb_host_probe_on;
 static bool podlink_requested, drive, car;
 static bool enabled[USB_NUM_DRIVERS];
-static bool usb_hid = true, usb_serial = true, usb_iap = true;
+static bool usb_hid = true, usb_iap = true;
+static bool usb_serial __attribute__((unused)) = true;
 static int usb_audio;
 static struct { int usb_audio; } global_settings = {1};
 static bool usb_confirm_blocked(void) { return usb_consent_blocks(&consent); }
@@ -59,7 +63,8 @@ int main(void)
         usb_consent_begin(&consent, false, false);
         usb_configure_drivers(USB_INSERTED);
         assert(!enabled[USB_DRIVER_MASS_STORAGE]);
-        assert(enabled[USB_DRIVER_CHARGING_ONLY]);
+        assert(enabled[USB_DRIVER_SERIAL]);
+        assert(!enabled[USB_DRIVER_CHARGING_ONLY]);
         assert(enabled[USB_DRIVER_IAP]);
         assert(!enabled[USB_DRIVER_AUDIO]);
         assert(!enabled[USB_DRIVER_HID]);
@@ -78,11 +83,13 @@ int main(void)
         assert(enabled[USB_DRIVER_AUDIO] == !drive_only);
     }
     podlink_requested = true;
-    usb_consent_begin(&consent, false, true);
+    usb_consent_begin(&consent, false, false);
+    consent.state = USB_CONSENT_CHARGE;
     usb_configure_drivers(USB_INSERTED);
     for (int i = 0; i < USB_NUM_DRIVERS; ++i)
-        assert(enabled[i] == (i == USB_DRIVER_SERIAL));
+        assert(enabled[i] == (i == USB_DRIVER_SERIAL || i == USB_DRIVER_IAP));
     podlink_requested = false;
+    usb_mode = USB_MODE_CHARGE;
     usb_consent_begin(&consent, true, false);
     usb_configure_drivers(USB_POWERED);
     assert(!enabled[USB_DRIVER_MASS_STORAGE]);

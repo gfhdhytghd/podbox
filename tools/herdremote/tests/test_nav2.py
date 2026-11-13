@@ -261,7 +261,7 @@ class Detail(Harness):
         self.server.texts["w1:p3"] = "old\n\x1b[32mnew\x1b[0m\n"
         self.command(b"det\tw1:p3")
         self.assertEqual(self.records("D"), [[["D", "w1:p3", "-2", "", "", "old new", "", "", "", "", "0"]]])
-        self.assertEqual(self.server.calls, [("pane.read", dict(pane_id="w1:p3", source="recent_unwrapped", lines=240))])
+        self.assertEqual(self.server.calls, [("pane.read", dict(pane_id="w1:p3", source="visible"))])
         self.clear()
         self.server.texts["w1:p3"] = "changed"
         self.now.return_value = 100.9

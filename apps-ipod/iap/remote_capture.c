@@ -6,6 +6,30 @@
 #include "iap/remote_capture.h"
 
 struct remote_capture iap_remote_capture;
+static struct remote_volume_trace volume_trace[REMOTE_VOLUME_HISTORY];
+static unsigned long volume_sequence;
+
+void remote_volume_log(unsigned long tick, unsigned char echo,
+                       unsigned char target, int direction, char decision)
+{
+    unsigned long seq = ++volume_sequence;
+    volume_trace[(seq - 1) % REMOTE_VOLUME_HISTORY] =
+        (struct remote_volume_trace){seq, tick, echo, target,
+                                     direction, decision};
+}
+
+unsigned long remote_volume_count(void)
+{
+    return volume_sequence;
+}
+
+bool remote_volume_get(unsigned long sequence, struct remote_volume_trace *out)
+{
+    if (!sequence || volume_sequence - sequence >= REMOTE_VOLUME_HISTORY)
+        return false;
+    *out = volume_trace[(sequence - 1) % REMOTE_VOLUME_HISTORY];
+    return out->sequence == sequence;
+}
 
 void remote_capture_begin(struct remote_capture *r, unsigned int length)
 {

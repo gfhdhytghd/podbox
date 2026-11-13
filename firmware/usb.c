@@ -35,6 +35,9 @@
 #include "usb.h"
 #ifdef HAVE_USB_CONFIRM
 #include "usb_confirm.h"
+#ifdef HAVE_USB_PODLINK
+#include "podlink.h"
+#endif
 #endif
 #ifdef USB_ENABLE_SERIAL
 #include "usbstack/usb_serial.h"
@@ -114,9 +117,18 @@ static bool usb_mode_drive_only(void)
 }
 #endif
 
+#ifdef HAVE_USB_PODLINK
+static void usb_podlink_mode_changed(int mode);
+#endif
 void usb_set_mode(int mode)
 {
+#ifdef HAVE_USB_PODLINK
+    int previous = usb_mode;
+#endif
     usb_mode = mode;
+#ifdef HAVE_USB_PODLINK
+    if (mode != previous) usb_podlink_mode_changed(mode);
+#endif
 #if defined(DX50) || defined(DX90)
     ibasso_set_usb_mode(mode);
 #elif defined(HIBY_R3PROII) || defined(HIBY_R1) || defined(HIDIZS_AP80MAX)
@@ -154,10 +166,6 @@ bool usb_confirm_blocked(void)
 
 bool usb_confirm_pending(uint32_t epoch)
 {
-#ifdef HAVE_USB_PODLINK
-    if (usb_podlink_active())
-        return false;
-#endif
     return usb_detect() == USB_INSERTED && epoch == usb_consent.epoch &&
            usb_consent.state == USB_CONSENT_PROMPT;
 }
@@ -199,8 +207,6 @@ static bool usb_hid = true;
 static bool usb_serial = false;
 #ifdef HAVE_USB_PODLINK
 static volatile bool podlink_requested;
-static volatile uint32_t podlink_epoch;
-static volatile uint32_t podlink_charge_epoch;
 #endif
 #endif
 #ifdef USB_ENABLE_AUDIO
@@ -392,12 +398,23 @@ static inline void usb_configure_drivers(int for_state)
     usb_audio = global_settings.usb_audio;
 #endif
 #ifdef HAVE_USB_PODLINK
-    if (podlink_requested && (for_state == USB_INSERTED ||
-                             for_state == USB_POWERED))
+    podlink_requested = (for_state == USB_INSERTED || for_state == USB_POWERED)
+                        && usb_mode != USB_MODE_CHARGE
+#ifdef HAVE_USB_CONFIRM
+                        && usb_confirm_blocked()
+#endif
+                        && !exclusive_storage_enabled &&
+                        !exclusive_storage_requested && !usb_host_probe_on;
+    if (podlink_requested)
     {
-        /* A complete CDC-ACM function; never hand storage to the host. */
+        /* CDC owns configuration 1; storage is never a composite interface.
+         * Retain the existing accessory configuration when enabled. */
         for (int i = 0; i < USB_NUM_DRIVERS; ++i)
-            usb_core_enable_driver(i, i == USB_DRIVER_SERIAL);
+            usb_core_enable_driver(i, i == USB_DRIVER_SERIAL
+#ifdef USB_ENABLE_IAP
+                                     || (i == USB_DRIVER_IAP && usb_iap)
+#endif
+                                   );
         usb_attach();
         return;
     }
@@ -420,7 +437,12 @@ static inline void usb_configure_drivers(int for_state)
 #endif /* USB_ENABLE_CHARGING_ONLY */
 #endif /* USB_ENABLE_HID */
 #ifdef USB_ENABLE_SERIAL
-        usb_core_enable_driver(USB_DRIVER_SERIAL, usb_serial);
+        usb_core_enable_driver(USB_DRIVER_SERIAL,
+#ifdef HAVE_USB_PODLINK
+                               false);
+#else
+                               usb_serial);
+#endif
 #endif
 #ifdef USB_ENABLE_AUDIO
         usb_core_enable_driver(USB_DRIVER_AUDIO, usb_audio_wanted());
@@ -461,11 +483,19 @@ static inline void usb_configure_drivers(int for_state)
                                );
 #endif
 #ifdef USB_ENABLE_HID
-        usb_core_enable_driver(USB_DRIVER_HID, usb_hid && !usb_drive_only());
+        usb_core_enable_driver(USB_DRIVER_HID, usb_hid && !usb_drive_only()
+#ifdef HAVE_USB_PODLINK
+                           && !podlink_requested
+#endif
+                          );
 #endif
 #ifdef USB_ENABLE_SERIAL
         usb_core_enable_driver(USB_DRIVER_SERIAL,
+#ifdef HAVE_USB_PODLINK
+                               false);
+#else
                                usb_serial && !usb_drive_only());
+#endif
 #endif
 #ifdef USB_ENABLE_AUDIO
         usb_core_enable_driver(USB_DRIVER_AUDIO,
@@ -672,6 +702,9 @@ static void usb_extract(void)
 #endif
 
     usb_state = USB_EXTRACTED;
+#ifdef HAVE_USB_PODLINK
+    podlink_requested = false;
+#endif
 #ifdef HAVE_USB_CONFIRM
     timeout_cancel(&usb_confirm_tmo);
     usb_confirm_has_config = false;
@@ -951,10 +984,6 @@ static void NORETURN_ATTR usb_thread(void)
 
 #ifdef HAVE_USB_CONFIRM
         case USB_CONFIRM_READY:
-#ifdef HAVE_USB_PODLINK
-            if (podlink_requested)
-                break;
-#endif
             if ((uint32_t)ev.data == usb_consent.epoch &&
                 usb_detect() == USB_INSERTED && usb_host_present &&
                 usb_confirm_has_config &&
@@ -969,16 +998,15 @@ static void NORETURN_ATTR usb_thread(void)
             break;
         case USB_CONFIRM_CONNECT:
         case USB_CONFIRM_CHARGE:
-#ifdef HAVE_USB_PODLINK
-            if (podlink_requested)
-                break;
-#endif
             if (usb_detect() != USB_INSERTED ||
                 !usb_consent_reply(&usb_consent, (uint32_t)ev.data,
                                    ev.id == USB_CONFIRM_CONNECT))
                 break;
             if (ev.id == USB_CONFIRM_CONNECT)
             {
+#ifdef HAVE_USB_PODLINK
+                podlink_requested = false;
+#endif
                 usb_stack_enable(false);
                 sleep(HZ / 5);
                 if (usb_detect() == USB_INSERTED)
@@ -992,57 +1020,29 @@ static void NORETURN_ATTR usb_thread(void)
 
 #ifdef HAVE_USB_PODLINK
         case USB_PODLINK_OPEN:
-            if (!usb_profile_close_matches(podlink_requested, podlink_epoch,
-                                            (uint32_t)ev.data) ||
-                usb_detect() != USB_INSERTED)
+            /* Only an explicit USB Mode change posts this event. */
+            if ((int)ev.data != usb_mode || usb_detect() != USB_INSERTED ||
+                exclusive_storage_enabled || exclusive_storage_requested ||
+                usb_host_probe_on ||
+                (usb_mode != USB_MODE_CHARGE && podlink_requested))
                 break;
 #ifdef HAVE_USB_CONFIRM
             timeout_cancel(&usb_confirm_tmo);
-            usb_consent_begin(&usb_consent, false, true);
+            usb_power_only = usb_mode == USB_MODE_CHARGE;
+            usb_drive_only_now = usb_mode_drive_only() && !usb_power_only;
+            usb_consent_begin(&usb_consent, usb_power_only, false);
             usb_confirm_has_config = false;
 #endif
+            podlink_requested = false;
             usb_stack_enable(false);
             sleep(HZ / 5);
-            if (usb_detect() == USB_INSERTED &&
-                (usb_state == USB_INSERTED || usb_state == USB_POWERED))
+            if (usb_detect() == USB_INSERTED)
             {
                 usb_stack_enable(true);
-                usb_configure_drivers(USB_INSERTED);
+                usb_configure_drivers(usb_power_only ? USB_POWERED : USB_INSERTED);
             }
             break;
         case USB_PODLINK_CLOSE:
-            if (usb_profile_close_matches(podlink_requested, podlink_epoch,
-                                           (uint32_t)ev.data))
-            {
-                podlink_requested = false;
-#ifdef HAVE_USB_CONFIRM
-                if (usb_detect() == USB_INSERTED &&
-                    (usb_state == USB_INSERTED || usb_state == USB_POWERED))
-                {
-                    timeout_cancel(&usb_confirm_tmo);
-                    usb_power_only = usb_mode == USB_MODE_CHARGE;
-                    usb_drive_only_now = usb_mode_drive_only() &&
-                                         !usb_power_only;
-                    usb_consent_begin(&usb_consent, usb_power_only, false);
-                    if (!usb_power_only &&
-                        podlink_charge_epoch == (uint32_t)ev.data)
-                        usb_consent.state = USB_CONSENT_CHARGE;
-                    usb_confirm_has_config = false;
-                }
-#endif
-                if (usb_state == USB_INSERTED || usb_state == USB_POWERED)
-                {
-                    usb_stack_enable(false);
-                    sleep(HZ / 5);
-                    if (usb_detect() == USB_INSERTED &&
-                        (usb_state == USB_INSERTED || usb_state == USB_POWERED))
-                    {
-                        usb_stack_enable(true);
-                        usb_configure_drivers(usb_power_only ? USB_POWERED :
-                                                              USB_INSERTED);
-                    }
-                }
-            }
             break;
 #endif
         case USB_INSERTED:
@@ -1077,8 +1077,7 @@ static void NORETURN_ATTR usb_thread(void)
             /* The setting is authoritative; a held key is not disk consent. */
             usb_power_only = usb_mode == USB_MODE_CHARGE;
             usb_drive_only_now = usb_mode_drive_only() && !usb_power_only;
-            usb_consent_begin(&usb_consent, usb_power_only,
-                              podlink_requested);
+            usb_consent_begin(&usb_consent, usb_power_only, false);
             usb_confirm_has_config = false;
 #endif
 
@@ -1409,6 +1408,9 @@ void usb_init(void)
 #ifdef USB_ENABLE_SERIAL
     /* The API mutex exists even before the first USB insertion. */
     usb_serial_init();
+#ifdef HAVE_USB_PODLINK
+    podlink_init();
+#endif
 #endif
 
 #ifdef USB_FULL_INIT
@@ -1717,38 +1719,22 @@ void usb_car_found(void)
 #endif /* USB_ENABLE_IAP */
 
 #ifdef HAVE_USB_PODLINK
-bool usb_podlink_open(void)
+static void usb_podlink_mode_changed(int mode)
 {
-    /* Reserving the lease also blocks storage requests until the USB thread
-     * switches profiles. Never interrupt an existing storage handover. */
-    int level = disable_irq_save();
-    if (podlink_requested || usb_host_probe_on || exclusive_storage_enabled ||
-        exclusive_storage_requested)
-    {
-        restore_irq(level);
-        return false;
-    }
-    ++podlink_epoch;
-    if (!podlink_epoch) ++podlink_epoch;
-    podlink_charge_epoch = 0;
-    podlink_requested = true;
-    uint32_t epoch = podlink_epoch;
-    restore_irq(level);
-    if (usb_detect() == USB_INSERTED)
-        queue_post(&usb_queue, USB_PODLINK_OPEN, epoch);
-    return true;
+    if (usb_thread_entry)
+        queue_post(&usb_queue, USB_PODLINK_OPEN, mode);
 }
 
-void usb_podlink_charge_on_close(void)
+bool usb_podlink_open(void)
 {
-    if (podlink_requested)
-        podlink_charge_epoch = podlink_epoch;
+    return usb_mode != USB_MODE_CHARGE && !usb_host_probe_on &&
+           !exclusive_storage_enabled && !exclusive_storage_requested &&
+           (usb_detect() != USB_INSERTED || podlink_requested);
 }
 
 void usb_podlink_close(void)
 {
-    if (podlink_requested)
-        queue_post(&usb_queue, USB_PODLINK_CLOSE, podlink_epoch);
+    /* The cable/consent state owns the resident profile. */
 }
 
 bool usb_podlink_active(void)
@@ -1765,7 +1751,11 @@ void usb_set_serial(bool enable)
 #ifdef HAVE_USB_PODLINK
                            podlink_requested ||
 #endif
+#ifdef HAVE_USB_PODLINK
+                           false);
+#else
                            (usb_serial && !usb_drive_only()));
+#endif
 }
 
 bool usb_get_serial(void)

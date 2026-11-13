@@ -102,6 +102,7 @@ class Link:
         self.opened = False
         self.last_rx = time.monotonic()
         self.keepalive = None
+        self.foreground = None
         self.write_lock = threading.Lock()
 
     def send(self, kind, payload=b"", seq=None):
@@ -135,6 +136,8 @@ class Link:
                 self._check_size(frame)
                 self.last_rx = time.monotonic()
                 if frame.type == PING:
+                    if len(frame.payload) == 5 and frame.payload[:4] == b"PLFG" and frame.payload[4] <= 2:
+                        self.foreground = frame.payload[4]
                     self.send(PONG, frame.payload, seq=frame.seq)
                     continue
                 if frame.type == PONG and self.keepalive and frame.seq == self.keepalive[0]:

@@ -70,7 +70,9 @@ class Herdr:
         return self.read_record(pane_id, source, lines)["text"]
 
     def read_record(self, pane_id, source="visible", lines=None):
-        """Preserve optional cursor metadata supplied by newer herdr servers."""
+        """Read only the visible viewport, preserving optional cursor metadata."""
+        if source != "visible" or lines is not None:
+            raise HerdrError("viewport-only read: scrollback and line counts are forbidden")
         return self.call("pane.read", pane_id=pane_id,
                          source=source, **({"lines": lines} if lines is not None else {}))["read"]
 
@@ -242,7 +244,9 @@ def build_model(snapshot, read, subscribed=None, tab_id=None):
             other=best_state([code(r) for r in elsewhere]), **counts))
         agents[wid] = rows
         others[wid] = elsewhere
+    sessions = {a["pane_id"]: a.get("agent_session") for a in snapshot.get("agents", [])}
     pane_meta = {p["pane_id"]: dict(kind=p.get("agent") or "unknown",
+                 agent_session=p.get("agent_session") or sessions.get(p["pane_id"]),
                  status=p.get("agent_status") or "unknown",
                  title=p.get("terminal_title_stripped") or "")
                  for p in snapshot["panes"]}

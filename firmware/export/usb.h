@@ -36,10 +36,8 @@ void usb_confirm_configured(bool configured, bool accessory, bool probe_iap);
 #endif
 
 #ifdef HAVE_USB_PODLINK
-/* Open on a non-disk connection. Close is asynchronous and idempotent. */
+/* Resident eligibility; client APIs never change the USB profile. */
 bool usb_podlink_open(void);
-/* Keep this lease's close charge-only until unplug or the next open. */
-void usb_podlink_charge_on_close(void);
 void usb_podlink_close(void);
 bool usb_podlink_active(void);
 #endif

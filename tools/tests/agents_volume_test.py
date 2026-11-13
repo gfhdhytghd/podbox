@@ -78,7 +78,11 @@ static void iap_set_mute(bool mute){device.mute=mute;changes++;}
 #define cmd_ok(cmd) do{(void)cmd;acks++;}while(0)
 '''
 module=S/'apps-ipod/iap/agents_volume.c'
-if module.exists():pre+=body(module)
+if module.exists():
+ trace=(S/'apps-ipod/iap/remote_capture.c').read_text()
+ pre+=body(S/'apps-ipod/iap/remote_capture.h')
+ pre+=trace[trace.index('static struct remote_volume_trace'):trace.index('void remote_capture_begin')]
+ pre+=body(module)
 else:pre+='''
 static void iap_agents_volume_enable(bool enabled){(void)enabled;}
 static int iap_agents_volume_take(void){return 0;}
@@ -113,6 +117,12 @@ static void reported_is(int level,bool muted) {
 }
 int main(void) {
  global_status.volume=0x27;iap_agents_volume_enable(true);
+ current_tick=0;pair(0x27,0x2a);assert(iap_agents_volume_take()==PAGE_UP);
+ current_tick=23;pair(0x2a,0x2d);assert(!iap_agents_volume_take());
+ current_tick=50;assert(!iap_agents_volume_take());
+ current_tick=0;iap_agents_volume_enable(false);
+
+ global_status.volume=0x27;iap_agents_volume_enable(true);
  frame(6,up[0],true);assert(!changes&&!iap_agents_volume_take());
  frame(6,up[1],true);assert(!changes&&global_status.volume==0x27);
  assert(iap_agents_volume_take()==PAGE_UP&&!iap_agents_volume_take());
@@ -136,16 +146,16 @@ int main(void) {
    current_tick=t;pair(bound,bound);int b=iap_agents_volume_take();
    if(b){assert(b==(which==1?PAGE_DOWN:PAGE_UP));pages++;}
   }
-  assert(pages==4);reported_is(bound,false);
+  assert(pages==3);reported_is(bound,false);
  }
  /* A changing-target flood coalesces into at most four pages per second. */
  global_status.volume=0x27;global_settings.volume_limit=255;
  iap_agents_volume_enable(true);int pages=0;unsigned char v=0x27;
  for(int t=0;t<200;t++) {
-  current_tick=t;unsigned char target=(v+3)%240;pair(v,target);v=target;
+  current_tick=t;unsigned char target=v<255?v+1:255;pair(v,target);v=target;
   if(iap_agents_volume_take())pages++;
  }
- assert(pages==8);reported_is(v,false);
+ assert(pages==7);reported_is(v,false);
  iap_agents_volume_enable(false);assert(!iap_agents_volume_take());
  reported_is(0x27,false);sent=0;notify();assert(sent==2&&device.volume==0x27);
  /* Reset a half pair and all pending/rate state between app sessions. */
@@ -172,7 +182,30 @@ int main(void) {
  global_status.volume=255;iap_agents_volume_enable(true);current_tick=ULONG_MAX-10;
  pair(255,255);assert(iap_agents_volume_take()==PAGE_UP);
  current_tick=13;pair(255,255);assert(!iap_agents_volume_take());
- current_tick=14;assert(iap_agents_volume_take()==PAGE_UP);
+ current_tick=14;assert(!iap_agents_volume_take());
+ current_tick=35;pair(255,255);assert(!iap_agents_volume_take());
+ current_tick=49;pair(255,255);assert(iap_agents_volume_take()==PAGE_UP);
+ /* IR full-frame spacing 230/219ms becomes successive complete dock pairs. */
+ for(int direction=-1;direction<=1;direction+=2) {
+  global_status.volume=100;iap_agents_volume_enable(true);unsigned char v=100;
+  current_tick=1000;pair(v,v+direction*3);v+=direction*3;assert(iap_agents_volume_take());
+  current_tick=direction>0?1023:1022;pair(v,v+direction*3);v+=direction*3;assert(!iap_agents_volume_take());
+  current_tick=1050;assert(!iap_agents_volume_take());
+  current_tick=1058;pair(v,v+direction*3);assert(iap_agents_volume_take());
+ }
+ for(int clamp=0;clamp<2;clamp++) {
+  global_status.volume=clamp?255:0;iap_agents_volume_enable(true);int pages=0;
+  for(int t=0;t<200;t+=22){current_tick=2000+t;pair(global_status.volume,global_status.volume);if(iap_agents_volume_take())pages++;}
+  assert(pages==5);current_tick=2400;assert(!iap_agents_volume_take());
+ }
+ global_status.volume=39;iap_agents_volume_enable(true);int repeated=0;
+ for(int t=0;t<200;t+=22){current_tick=3000+t;pair(39,42);if(iap_agents_volume_take())repeated++;}
+ assert(repeated==5);
+ /* A lost target must not pair with the next physical press's echo. */
+ iap_agents_volume_enable(true);current_tick=4000;frame(6,up[0],true);
+ current_tick=4050;pair(39,42);assert(iap_agents_volume_take()==PAGE_UP);
+ struct remote_volume_trace trace;assert(remote_volume_get(remote_volume_count(),&trace));
+ assert(trace.decision=='E'&&trace.tick==4050);
  assert(acks>0);
  puts("captured pairs/resend flood/virtual replies+both notifications/real volume+mute frozen/exit restore PASS");
  puts("clamps/configured limit/4 pages per second/coalescing/lifecycle/absolute/outside/auth+length/wrap PASS");

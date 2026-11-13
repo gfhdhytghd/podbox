@@ -18,7 +18,7 @@
  *
  ****************************************************************************/
 #include "config.h"
-#include "podlink.h"
+#include "podlink_session.h"
 #include "usb.h"
 #include "usb_serial.h"
 #include "kernel.h"
@@ -38,7 +38,7 @@ static unsigned char input[4096];
 static unsigned int input_pos, input_length;
 static unsigned char event_data[PODLINK_MAX_MESSAGE];
 static enum podlink_connection state;
-static uint32_t next_seq, ping_seq, peer_max;
+static uint32_t next_seq, ping_seq, peer_max, session_revision;
 static uint32_t transport_generation;
 static long last_rx, ping_at, close_at;
 static bool leased, had_usb, ping_pending, release_requested;
@@ -105,7 +105,7 @@ static void send_close(unsigned int code)
     enqueue(PODLINK_CLOSE, next_seq++, data, sizeof(data), true);
 }
 
-bool podlink_open(void)
+bool podlink_session_open(void)
 {
     if (leased || !usb_podlink_open())
         return false;
@@ -115,15 +115,15 @@ bool podlink_open(void)
     state = PODLINK_WAIT_USB;
     return true;
 }
-enum podlink_connection podlink_state(void)
+enum podlink_connection podlink_session_state(void)
 {
     return state;
 }
-unsigned int podlink_max_message(void)
+unsigned int podlink_session_max_message(void)
 {
     return peer_max;
 }
-int podlink_send(unsigned int type, const void *data, unsigned int length)
+int podlink_session_send(unsigned int type, const void *data, unsigned int length)
 {
     if (type < PODLINK_TEXT || type > PODLINK_PONG || length > peer_max ||
         (length && !data))
@@ -135,7 +135,7 @@ int podlink_send(unsigned int type, const void *data, unsigned int length)
         ++next_seq;
     return rc;
 }
-void podlink_close(void)
+void podlink_session_close(void)
 {
     if (!leased || release_requested)
         return;
@@ -150,7 +150,7 @@ void podlink_close(void)
     close_at = current_tick;
 }
 
-int podlink_poll(struct podlink_message *m)
+int podlink_session_poll(struct podlink_message *m)
 {
     if (!m || !leased)
         return 0;
@@ -262,6 +262,7 @@ int podlink_poll(struct podlink_message *m)
                 (peer_max >> 16) & 255, (peer_max >> 24) & 255};
             enqueue(PODLINK_OPEN, incoming.seq, answer, sizeof(answer), true);
             state = PODLINK_CONNECTED;
+            ++session_revision;
             ping_pending = false;
         }
         else if (incoming.type == PODLINK_CLOSE)
@@ -316,8 +317,18 @@ int podlink_poll(struct podlink_message *m)
     return 0;
 }
 
-void podlink_wait(int ticks)
+void podlink_session_wait(int ticks)
 {
     if (input_pos == input_length)
         usb_serial_wait(ticks);
+}
+
+void podlink_session_abort(void)
+{
+    finish();
+}
+
+uint32_t podlink_session_revision(void)
+{
+    return session_revision;
 }

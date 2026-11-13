@@ -385,9 +385,31 @@ static int apply_detail(struct hr_model *m, char **f, int nf)
 {
     struct hr_detail *d = &m->detail;
     long long cursor;
-    if (nf != 11 || !f[1][0] || !age_value(f[2], &d->age) ||
+    int age;
+    if ((nf != 11 && nf != 12) || !f[1][0] || !age_value(f[2], &age) ||
+        (nf == 12 && (!f[11][0] || strlen(f[11]) > 16)) ||
         !count(f[10], HR_BIG, &cursor) || cursor < 0)
         return 0;
+    if (nf == 12)
+        for (const char *p = f[11]; *p; p++)
+            if ((*p < '0' || *p > '9') && (*p < 'a' || *p > 'f'))
+                return 0;
+    uint64_t signature = UINT64_C(14695981039346656037);
+    for (int i = 1; i < nf; i++)
+    {
+        if (i == 2) continue; /* Age advances locally, not by redraws. */
+        for (const unsigned char *p = (const unsigned char *)f[i]; ; p++)
+        {
+            signature = (signature ^ *p) * UINT64_C(1099511628211);
+            if (!*p) break;
+        }
+    }
+    if (m->detail_valid && m->detail_signature == signature)
+        return 0;
+    m->detail_signature = signature;
+    d->age = age;
+    hr_copy(m->detail_revision, nf == 12 ? f[11] : "",
+            sizeof m->detail_revision);
     hr_copy(m->detail_pane, f[1], sizeof m->detail_pane);
     hr_copy(d->task, f[3], sizeof d->task);
     hr_copy(d->now, f[4], sizeof d->now);
@@ -688,4 +710,10 @@ bool hr_usage_over_pace(int pct, int remaining, int period)
         remaining = period;
     /* pct/100 > (period - remaining)/period, in integers */
     return (long long)pct * period > 100LL * (period - remaining);
+}
+
+int hr_detail_scroll(int position, int old_max, int new_max)
+{
+    if (position >= old_max) return new_max;
+    return position < new_max ? position : new_max;
 }

@@ -307,7 +307,12 @@ class Replies(unittest.TestCase):
         self.server.texts['w1:p0'] = '• Summary\n› a'
         self.server.cursors['w1:p0'] = dict(row=1, col=3, visible=True)
         gate = threading.Event()
-        self.server.read_gates['visible'] = gate
+        original_model_read = self.daemon.read_model
+        def blocked_model(*args):
+            self.server.read_started.set()
+            gate.wait(5)
+            return original_model_read(*args)
+        self.daemon.read_model = blocked_model
         self.server.read_started.clear()
         samples = []
         def tap(key, count):

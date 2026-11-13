@@ -12,6 +12,7 @@
 #define HERDREMOTE_MODEL_H
 
 #include <stdbool.h>
+#include <stdint.h>
 
 #define HR_MAX_WS        32
 #define HR_MAX_AGENTS    16
@@ -132,6 +133,8 @@ struct hr_model {
     /* The last D, for the pane det subscribed to */
     char detail_pane[16];
     bool detail_valid;
+    char detail_revision[17];
+    uint64_t detail_signature;
     struct hr_detail detail;
     int nquestions;
     struct hr_question questions[HR_MAX_QUESTIONS];
@@ -148,6 +151,7 @@ struct hr_model {
  * 'T', 'U', 'V', 'D', 'H' for the hello, 'B' for the seven-field T that
  * lists tabs), or 0 if it was not a HerdRemote v1 message, in which case
  * the model is unchanged. */
+int hr_detail_scroll(int position, int old_max, int new_max);
 int hr_model_apply(struct hr_model *m, const char *data, unsigned int length);
 
 void hr_model_reset(struct hr_model *m);

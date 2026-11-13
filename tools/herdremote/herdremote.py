@@ -34,6 +34,8 @@ import hrproto  # noqa: E402
 import hrusage  # noqa: E402
 import hrvoice  # noqa: E402
 import hrkeys  # noqa: E402
+import hrsession  # noqa: E402
+import hrappserver  # noqa: E402
 
 VERSION = "herdremote-1"
 DEVICE = dict(vid=0x05AC, pid=0x1261, manufacturer="PodBox",
@@ -42,7 +44,7 @@ REFRESH_SECONDS = 1.0
 TICK_SECONDS = 2.0
 CONFIRM_SECONDS = 5.0
 DETAIL_SECONDS = 1.0
-DETAIL_RECENT_LINES = 240
+DETAIL_VISIBLE_LINES = 5
 DETAIL_KEY_SETTLE_SECONDS = 0.075
 # A live timer or token count in the working line changes every second and
 # must not redraw the player's view; the line still refreshes this often.
@@ -147,6 +149,8 @@ class Daemon:
         self.model_job = self.detail_job = None
         self.model_key = None
         self.next_refresh = 0.0
+        self.sessions = hrsession.Sessions()
+        self.appserver = hrappserver.Reader()
         self.reset_session()
 
     def reset_session(self):
@@ -169,6 +173,7 @@ class Daemon:
         self.detail_edit_revision = getattr(self, "detail_edit_revision", 0) + 1
         self.key_details = {}
         self.next_tick = 0.0
+        self.foreground = None
 
     # --- herdr ---------------------------------------------------------
     def refresh(self):
@@ -222,37 +227,38 @@ class Daemon:
         meta.setdefault("kind", "unknown")
         meta.setdefault("status", "unknown")
         meta["title"] = hrdetail.clean_title(meta.get("title", ""))
+        meta["resident"] = self.foreground is not None
         since = self.state_seen.get(pane, (None, None))[1]
         meta["state_age_s"] = -1 if since is None else max(0, int(time.monotonic() - since))
         return meta
 
     def detail_key(self, pane):
         meta = self.detail_context(pane)
-        return (meta["kind"], meta["status"], meta["title"], self.herdr_ok,
+        session = meta.get("agent_session") or {}
+        return (meta["kind"], meta["status"], meta["title"],
+                session.get("kind"), session.get("value"), self.herdr_ok,
                 pane in self.model["panes"], self.detail_edit_revision)
 
     def detail_limit(self):
         return getattr(self.link, "max_message", hrproto.MAX_MESSAGE)
 
     def read_detail(self, pane, readable, meta=None, client=None, max_message=None):
+        fields = (self.appserver.read(meta or {}) if (meta or {}).get("kind") == "codex"
+                  else self.sessions.read(meta or {})) if readable else None
+        if fields is not None:
+            if not (meta or {}).get("resident"):
+                fields.pop("revision", None)
+            return hrproto.detail(pane, fields, max_message=self.detail_limit() if max_message is None else max_message)
         fields = {}
         if readable and not self.stopping.is_set():
             client = client or hrherdr.Herdr(self.herdr.path, self.herdr.timeout)
             try:
-                record = client.read_record(pane, source="recent_unwrapped", lines=DETAIL_RECENT_LINES)
-                fields = hrdetail.parse(record["text"], terminal_cursor=record.get("cursor"), **(meta or {}))
-                # herdr omits cursors from merged alternate-screen history.
-                # Only while editing, try the real viewport for a recognized
-                # visible input cursor; keep recent activity and fallback data.
-                if fields["input"] and record.get("cursor") is None:
-                    try:
-                        visible = client.read_record(pane, source="visible")
-                        current = hrdetail.extract_input(visible["text"], (meta or {}).get("kind", "unknown"),
-                                                        visible.get("cursor"))
-                        if current["cursor_source"] == "herdr":
-                            fields.update(current)
-                    except hrherdr.HerdrError:
-                        pass
+                record = client.read_record(pane, source="visible")
+                # source=visible with no lines cannot request scrollback.
+                fields = hrdetail.parse(record["text"], terminal_cursor=record.get("cursor"),
+                                        **{k: v for k, v in (meta or {}).items()
+                                           if k in ("kind", "status", "title", "state_age_s")})
+                fields["say"] = "\n".join(fields.get("say", "").splitlines()[-DETAIL_VISIBLE_LINES:])
             except hrherdr.HerdrError:
                 pass
         return hrproto.detail(pane, fields, max_message=self.detail_limit() if max_message is None else max_message)
@@ -267,11 +273,26 @@ class Daemon:
         key = (tuple(stable), mode, self.detail_context(self.detail_pane)["status"])
         now = time.monotonic()
         if key != self.sent_detail_key or (
-                payload != self.sent_detail and now - self.sent_detail_at >= DETAIL_VOLATILE_SECONDS):
+                len(fields) != 12 and payload != self.sent_detail and
+                now - self.sent_detail_at >= DETAIL_VOLATILE_SECONDS):
             self.send(payload)
             self.sent_detail = payload
             self.sent_detail_key = key
             self.sent_detail_at = now
+
+    def adopt_foreground(self):
+        value = getattr(self.link, "foreground", None)
+        if value == self.foreground:
+            return
+        previous, self.foreground = self.foreground, value
+        self.detail_edit_revision += 1  # Reject a read begun in another visibility epoch.
+        if value in (0, 2):
+            self.voice.stop()
+        if value == 1 and previous in (0, 2):
+            # Keep subscriptions and the last sent picture; only changes go out.
+            self.next_detail = 0.0
+        if value != 1:
+            self.detail_fast_due = None
 
     def pump_reads(self):
         """Publish complete snapshots on the link thread, with bounded work.
@@ -290,7 +311,8 @@ class Daemon:
             requested, future = self.detail_job
             self.detail_job = None
             if requested[0] == self.session_generation:
-                if (requested[1] == self.detail_pane and self.sent_ws is not None and
+                if (self.foreground in (None, 1) and
+                        requested[1] == self.detail_pane and self.sent_ws is not None and
                         requested[2] == self.detail_key(self.detail_pane)):
                     self.send_detail(future.result())
                 # Switching detail cannot bypass the one-second send limit.
@@ -305,7 +327,8 @@ class Daemon:
                 self.read_model, client, self.subscribed, self.subscribed_tab,
                 not self.herdr_ok))
         due = self.detail_fast_due if self.detail_fast_due is not None else self.next_detail
-        if (self.sent_ws is not None and self.detail_pane and
+        if (self.foreground in (None, 1) and
+                self.sent_ws is not None and self.detail_pane and
                 self.detail_job is None and now >= due):
             pane = self.detail_pane
             self.detail_fast_due = None
@@ -369,8 +392,8 @@ class Daemon:
 
     def push(self):
         """Send whatever the player's picture lacks."""
-        if self.sent_ws is None:
-            return  # the screen has not said hello yet
+        if self.sent_ws is None or self.foreground == 2:
+            return  # no Agents client has introduced itself
         self.flush_replies()
         if not self.model_time:
             return  # do not present an empty startup model while a read is pending
@@ -407,7 +430,7 @@ class Daemon:
                 self.sent_questions[qid] = True
         now = time.monotonic()
         due = self.detail_fast_due if self.detail_fast_due is not None else self.next_detail
-        if self.reader is None and self.detail_pane and now >= due:
+        if self.foreground in (None, 1) and self.reader is None and self.detail_pane and now >= due:
             # Share one deadline across switches: repeated det cannot bypass
             # the read/send limit. Never read a pane absent from the snapshot.
             self.detail_fast_due = None
@@ -555,6 +578,7 @@ class Daemon:
                     frame = self.link.frames.popleft()
                     if frame.type == podlink.TEXT:
                         self.command(frame.payload)
+                self.adopt_foreground()
                 self.flush_replies()
                 self.pump_reads()
                 self.push()

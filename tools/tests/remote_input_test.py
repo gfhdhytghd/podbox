@@ -318,7 +318,7 @@ static int get_action(int context,int timeout) {
     assert(remote_input_active);calls++;
     switch(calls) {
     case 1:raw_button=BUTTON_SELECT|BUTTON_REL;return ACTION_STD_OK;
-    case 2:inject(false);raw_button=BUTTON_RC_MENU|BUTTON_REL;return ACTION_STD_MENU;
+    case 2:inject(false);remote_volume_log(calls*10,0x27,0x2a,1,'P');raw_button=BUTTON_RC_MENU|BUTTON_REL;return ACTION_STD_MENU;
     case 3:inject(true);raw_button=0;return ACTION_NONE;
     case 4:inject_large();raw_button=0;return ACTION_NONE;
     case 5:raw_button=BUTTON_SELECT|BUTTON_REL;return ACTION_STD_OK;
@@ -338,8 +338,11 @@ int main(void) {
     assert(!remote_input_active&&!inhibited);
     calls=0;assert(!dbg_remote_input());
     FILE *f=fopen(ROCKBOX_DIR "/remote-log.txt","r");assert(f);
-    char line[1024];int n=0,bad=0,trunc=0;
+    char line[1024];int n=0,bad=0,trunc=0,volume=0;
     while(fgets(line,sizeof(line),f)) {
+        if(strstr(line,"VOL ")) {
+            assert(strstr(line,"tick=20")&&strstr(line,"echo=27 target=2A dir=1 decision=P"));volume++;continue;
+        }
         if(strstr(line,"TRUNC")) {
             assert(strstr(line,"len=4096 rx=4096 stored=128"));trunc++;
         } else {
@@ -348,7 +351,7 @@ int main(void) {
         if(strstr(line,"BAD:"))bad++;
         n++;
     }
-    fclose(f);assert(n==6&&bad==2&&trunc==2);
+    fclose(f);assert(n==6&&bad==2&&trunc==2&&volume==2);
     puts("capture screen: 16 history rows/10 Hz poll/remote isolation/native logging/append/BAD/TRUNC/exit PASS");
 }
 '''

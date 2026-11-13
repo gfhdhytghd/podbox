@@ -154,7 +154,7 @@ class CursorAPI(Harness):
         self.server.texts['w1:p3'] = '• Output\n› 中😀ab\n\n  ? for shortcuts'
         meta = dict(row=1, col=6, col_chars=4, visible=True)
         self.server.cursors['w1:p3'] = meta
-        record = self.daemon.herdr.read_record('w1:p3', source='recent_unwrapped', lines=240)
+        record = self.daemon.herdr.read_record('w1:p3', source='visible')
         self.assertEqual(record['cursor'], meta)
         with mock.patch.object(hrproto, 'detail', side_effect=lambda pane, fields, **kwargs: fields):
             result = self.daemon.read_detail('w1:p3', True, self.daemon.detail_context('w1:p3'))
@@ -176,7 +176,7 @@ class CursorAPI(Harness):
             result = self.daemon.read_detail('w1:p3', True, self.daemon.detail_context('w1:p3'))
         self.assertEqual(result['cursor'], 2)
         self.assertEqual(result['cursor_source'], 'herdr')
-        self.assertEqual([p['source'] for m, p in self.server.calls], ['recent_unwrapped', 'visible'])
+        self.assertEqual([p['source'] for m, p in self.server.calls], ['visible'])
         self.assertEqual(result['say'], 'Output')
 
     def test_failed_viewport_read_keeps_recent_activity_and_input(self):
