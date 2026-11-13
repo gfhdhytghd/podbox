@@ -436,6 +436,11 @@ baseline=subprocess.check_output(['git','show','db11c0fb1e:apps-ipod/input/keyma
 candidate=(R/'apps-ipod/input/keymap_ipod.c').read_text()
 for name in re.findall(r'static const struct button_mapping (remote_button_context_\w+)\[\]',baseline):
     if name=='remote_button_context_agents': continue
+    if name=='remote_button_context_yesno':
+        # Only change: remote Play confirms (was cancel), like the USB popup.
+        yesno=re.search(r'remote_button_context_yesno\[\].*?\n\};',candidate,re.S).group()
+        assert re.search(r'ACTION_YESNO_ACCEPT,\s*BUTTON_RC_PLAY,',yesno) and not re.search(r'ACTION_STD_CANCEL,\s*BUTTON_RC_PLAY,',yesno)
+        continue
     pattern=r'static const struct button_mapping '+name+r'\[\].*?\n};'
     assert re.search(pattern,baseline,re.S).group()==re.search(pattern,candidate,re.S).group(),name
 print('outside Agents: every pre-existing remote keymap array identical to db11c0fb1e PASS')

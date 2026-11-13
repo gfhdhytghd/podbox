@@ -507,7 +507,8 @@ static const struct button_mapping remote_button_context_quickscreen[]  = {
 
 static const struct button_mapping remote_button_context_yesno[]  = {
     { ACTION_YESNO_ACCEPT,          BUTTON_RC_SELECT,                  BUTTON_NONE },
-    { ACTION_STD_CANCEL,          BUTTON_RC_PLAY,                  BUTTON_NONE },
+    /* A remote Play tap is SELECT: confirm the highlighted button */
+    { ACTION_YESNO_ACCEPT,          BUTTON_RC_PLAY,                  BUTTON_NONE },
     LAST_ITEM_IN_LIST__NEXTLIST(CONTEXT_STD)
 }; /* button_context_yesno */
 

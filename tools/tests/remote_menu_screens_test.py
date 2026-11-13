@@ -72,7 +72,8 @@ static int button_get(bool block) {(void)block;return raw;}
 #define PLUGIN_USB_CONNECTED 2
 #define PLUGIN_ABORT 3
 static void default_event_handler(int b) {(void)b;}
-enum {PF_MENU=1,PF_QUIT,PF_SORTING_NEXT,PF_SORTING_PREV,PF_RANDOM};
+enum {PF_MENU=1,PF_QUIT,PF_SORTING_NEXT,PF_SORTING_PREV,PF_RANDOM,PF_PREV,PF_PREV_REPEAT,PF_NEXT,PF_NEXT_REPEAT};
+#define ACTION_NONE 100
 struct button_mapping {int action,button,prerequisite;};
 #define CONTEXT_TREE 1
 #define LAST_ITEM_IN_LIST__NEXTLIST(x) {0,0,x}
@@ -107,6 +108,9 @@ int main(void) {
  assert(mapping(BUTTON_RC_MENU|BUTTON_REPEAT,BUTTON_RC_MENU)==PF_MENU);
  assert(mapping(BUTTON_RC_MENU|BUTTON_REL,BUTTON_RC_MENU)==PF_QUIT);
  assert(mapping(BUTTON_RC_MENU|BUTTON_REPEAT,BUTTON_RC_MENU|BUTTON_REPEAT)==0);
+ assert(mapping(BUTTON_RC_LEFT,BUTTON_NONE)==PF_PREV&&mapping(BUTTON_RC_RIGHT,BUTTON_NONE)==PF_NEXT);
+ assert(mapping(BUTTON_RC_LEFT|BUTTON_REPEAT,BUTTON_NONE)==PF_PREV_REPEAT&&mapping(BUTTON_RC_RIGHT|BUTTON_REPEAT,BUTTON_NONE)==PF_NEXT_REPEAT);
+ assert(mapping(BUTTON_RC_LEFT|BUTTON_REL,BUTTON_RC_LEFT)==ACTION_NONE&&mapping(BUTTON_RC_RIGHT|BUTTON_REL,BUTTON_RC_RIGHT)==ACTION_NONE);
  raw=BUTTON_RC_MENU;iv_decode_stop=0;assert(!iv_decode_row(1,2)&&iv_decode_stop==PLUGIN_ABORT);
  raw=BUTTON_MENU;iv_decode_stop=0;assert(!iv_decode_row(1,2)&&iv_decode_stop==PLUGIN_ABORT);
  raw=SYS_USB_CONNECTED;iv_decode_stop=0;assert(!iv_decode_row(1,2)&&iv_decode_stop==PLUGIN_USB_CONNECTED);
