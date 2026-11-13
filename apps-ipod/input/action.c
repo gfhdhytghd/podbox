@@ -51,6 +51,8 @@
 #include "audio/sound_feedback.h"
 #include "system/shutdown.h"
 #include "skin/skin_engine.h" /* skin_inhibit_flush */
+#include "usb.h"
+#include "widgets/usb_confirm.h"
 
 
 #include "backlight.h"
@@ -837,6 +839,13 @@ int get_action(int context, int timeout)
 
     action = do_backlight(&action_last, &current, action);
 
+#ifdef HAVE_USB_CONFIRM
+    if (action == SYS_USB_CONFIRM)
+    {
+        gui_usb_confirm_run(button_get_data());
+        return ACTION_REDRAW;
+    }
+#endif
     return action;
 }
 
@@ -936,6 +945,13 @@ int get_custom_action(int context,int timeout,
 
     action = do_backlight(&action_last, &current, action);
 
+#ifdef HAVE_USB_CONFIRM
+    if (action == SYS_USB_CONFIRM)
+    {
+        gui_usb_confirm_run(button_get_data());
+        return ACTION_REDRAW;
+    }
+#endif
     return action;
 }
 

@@ -1142,6 +1142,18 @@ static int usb_core_do_set_config(uint8_t new_config)
     usb_record_waypoint(USB_WP_EXCLUSIVE, require_exclusive, 0);
 #endif
 
+#ifdef HAVE_USB_CONFIRM
+    usb_confirm_configured(usb_config != 0,
+#ifdef USB_ENABLE_IAP
+        usb_config == usb_cdrv_iap.config ||
+        usb_iap2_car_seen(),
+        usb_iap2_offered()
+#else
+        false, false
+#endif
+        );
+#endif
+
 #ifdef USB_ENABLE_IAP
     if(require_exclusive && usb_iap2_offered()) {
         /* Held while the host may yet prove a car; a car, never */
@@ -1254,6 +1266,9 @@ static void request_handler_device(struct usb_ctrlrequest* req, uint8_t* reqdata
             if(usb_iap2_offered() &&
                (req->bRequestType & USB_DIR_IN) && req->wLength <= 4) {
                 usb_iap2_host_is_car();
+#ifdef HAVE_USB_CONFIRM
+                usb_confirm_configured(true, true, false);
+#endif
                 usb_car_found();
                 memset(reqdata, 0, req->wLength);
                 usb_core_control_response(USB_CONTROL_ACK, reqdata,

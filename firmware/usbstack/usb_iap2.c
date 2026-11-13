@@ -181,6 +181,11 @@ void usb_iap2_host_new(void)
     car_seen = false;
 }
 
+bool usb_iap2_car_seen(void)
+{
+    return car_seen;
+}
+
 /* ---- logging ------------------------------------------------------------ */
 
 /* A report from its link-control byte on, eight bytes an entry, up to 16. */

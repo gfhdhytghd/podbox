@@ -131,6 +131,7 @@ widgets/search_dialog.c
 widgets/splash.c
 widgets/text_box.c
 widgets/yesno.c
+widgets/usb_confirm.c
 #ifdef HAVE_TAGCACHE
 widgets/folder_select.c
 #endif

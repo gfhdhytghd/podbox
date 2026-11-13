@@ -49,6 +49,7 @@ bool usb_iap2_offered(void);
 /* The host has sent 0x53; and a new host, which has not. */
 void usb_iap2_host_is_car(void);
 void usb_iap2_host_new(void);
+bool usb_iap2_car_seen(void);
 
 /* Whether the probe is answered now, by the mode above. */
 bool usb_iap_answer_iap2(void);

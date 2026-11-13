@@ -69,6 +69,16 @@ bool usb_drive_only(void)
 {
     return false;
 }
+#ifdef HAVE_USB_CONFIRM
+/* Charging traces model an already chosen profile. Consent has no authority
+ * over the charger; its separate profile/decision tests cover that boundary. */
+void usb_confirm_configured(bool configured, bool accessory, bool probe_iap)
+{
+    (void)configured;
+    (void)accessory;
+    (void)probe_iap;
+}
+#endif
 bool usb_storage_host_wrote(void)
 {
     return false;

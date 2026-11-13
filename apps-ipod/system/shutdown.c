@@ -26,6 +26,8 @@
 #include "audio/playback.h" /* add_playbacklog */
 #include "storage.h"
 #include "usb_core.h"       /* usb_core_host_wrote_storage */
+#include "usb.h"
+#include "widgets/usb_confirm.h"
 #include "iap-usb.h"        /* iap_on_power_off */
 #include "ata_idle_notify.h"
 #include "dircache.h"
@@ -306,6 +308,12 @@ long default_event_handler_ex(long event, void (*callback)(void *), void *parame
 
     switch(event)
     {
+#ifdef HAVE_USB_CONFIRM
+        case SYS_USB_CONFIRM:
+            gui_usb_confirm_run(button_get_data());
+            button_queue_post(BUTTON_REDRAW, 0);
+            break;
+#endif
         case SYS_BATTERY_UPDATE:
             if(global_settings.talk_battery_level)
             {

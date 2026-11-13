@@ -68,10 +68,12 @@ bool usb_storage_is_ejected(void)
 }
 
 /* Charging-mode selection, declared under HAVE_USB_POWER. */
+#ifndef HAVE_USB_CONFIRM
 void usb_set_mode(int mode)
 {
     (void)mode;
 }
+#endif
 
 #ifdef HAVE_USB_CHARGING_ENABLE
 /* Declared under HAVE_USB_CHARGING_ENABLE, which the target config sets and

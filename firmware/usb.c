@@ -33,6 +33,9 @@
 #include "panic.h"
 #include "lcd.h"
 #include "usb.h"
+#ifdef HAVE_USB_CONFIRM
+#include "usb_confirm.h"
+#endif
 #ifdef USB_ENABLE_SERIAL
 #include "usbstack/usb_serial.h"
 #ifdef HAVE_USB_PODLINK
@@ -139,6 +142,59 @@ static bool usb_monitor_enabled = false;
 static bool exclusive_storage_enabled = false;
 static bool exclusive_storage_requested = false;
 static struct event_queue usb_queue SHAREDBSS_ATTR;
+#ifdef HAVE_USB_CONFIRM
+static struct usb_consent usb_consent;
+static struct timeout usb_confirm_tmo;
+static bool usb_confirm_has_config;
+
+bool usb_confirm_blocked(void)
+{
+    return usb_consent_blocks(&usb_consent);
+}
+
+bool usb_confirm_pending(uint32_t epoch)
+{
+#ifdef IPOD_ACCESSORY_PROTOCOL
+    if (iap_accessory_present())
+        return false;
+#endif
+    return usb_detect() == USB_INSERTED && epoch == usb_consent.epoch &&
+           usb_consent.state == USB_CONSENT_PROMPT;
+}
+
+void usb_confirm_reply(uint32_t epoch, bool connect)
+{
+    queue_post(&usb_queue, connect ? USB_CONFIRM_CONNECT : USB_CONFIRM_CHARGE,
+               epoch);
+}
+
+static int usb_confirm_tmo_cb(struct timeout *tmo)
+{
+    queue_post(&usb_queue, USB_CONFIRM_READY, tmo->data);
+    return 0;
+}
+
+void usb_confirm_configured(bool configured, bool accessory, bool probe_iap)
+{
+#ifdef IPOD_ACCESSORY_PROTOCOL
+    accessory |= iap_accessory_present();
+#endif
+    usb_confirm_has_config = configured;
+    if (!configured || accessory)
+    {
+        timeout_cancel(&usb_confirm_tmo);
+        usb_consent_observe(&usb_consent, true, false, accessory);
+    }
+    else if (usb_consent.state == USB_CONSENT_WAIT)
+    {
+        if (probe_iap)
+            timeout_register(&usb_confirm_tmo, usb_confirm_tmo_cb, HZ,
+                             usb_consent.epoch);
+        else
+            queue_post(&usb_queue, USB_CONFIRM_READY, usb_consent.epoch);
+    }
+}
+#endif
 #ifdef USB_ENABLE_HID
 static bool usb_hid = true;
 #endif
@@ -347,6 +403,10 @@ static inline void usb_configure_drivers(int for_state)
         return;
     }
 #endif
+#ifdef HAVE_USB_CONFIRM
+    if (usb_confirm_blocked() && for_state == USB_INSERTED)
+        for_state = USB_POWERED;
+#endif
     switch(for_state)
     {
     case USB_POWERED:
@@ -365,6 +425,10 @@ static inline void usb_configure_drivers(int for_state)
 #endif
 #ifdef USB_ENABLE_AUDIO
         usb_core_enable_driver(USB_DRIVER_AUDIO, usb_audio_wanted());
+#ifdef HAVE_USB_CONFIRM
+        if (usb_confirm_blocked())
+            usb_core_enable_driver(USB_DRIVER_AUDIO, false);
+#endif
 #endif /* USB_ENABLE_AUDIO */
 #ifdef USB_ENABLE_IAP
         /* Charge only keeps the disk from a computer, not the audio from a
@@ -609,6 +673,11 @@ static void usb_extract(void)
 #endif
 
     usb_state = USB_EXTRACTED;
+#ifdef HAVE_USB_CONFIRM
+    timeout_cancel(&usb_confirm_tmo);
+    usb_confirm_has_config = false;
+    usb_consent_observe(&usb_consent, false, false, false);
+#endif
 #ifndef BOOTLOADER
     send_event(SYS_EVENT_USB_EXTRACTED, NULL);
 #endif
@@ -881,6 +950,42 @@ static void NORETURN_ATTR usb_thread(void)
             break;
 #endif /* HAVE_USBSTACK */
 
+#ifdef HAVE_USB_CONFIRM
+        case USB_CONFIRM_READY:
+            if ((uint32_t)ev.data == usb_consent.epoch &&
+                usb_detect() == USB_INSERTED && usb_host_present &&
+                usb_confirm_has_config &&
+                usb_consent_observe(&usb_consent, true, true,
+#ifdef USB_ENABLE_IAP
+                    usb_iap2_car_seen()
+#else
+                    false
+#endif
+#ifdef IPOD_ACCESSORY_PROTOCOL
+                    || iap_accessory_present()
+#endif
+                    ))
+                button_queue_post(SYS_USB_CONFIRM, usb_consent.epoch);
+            break;
+        case USB_CONFIRM_CONNECT:
+        case USB_CONFIRM_CHARGE:
+            if (usb_detect() != USB_INSERTED ||
+                !usb_consent_reply(&usb_consent, (uint32_t)ev.data,
+                                   ev.id == USB_CONFIRM_CONNECT))
+                break;
+            if (ev.id == USB_CONFIRM_CONNECT)
+            {
+                usb_stack_enable(false);
+                sleep(HZ / 5);
+                if (usb_detect() == USB_INSERTED)
+                {
+                    usb_stack_enable(true);
+                    usb_configure_drivers(USB_INSERTED);
+                }
+            }
+            break;
+#endif
+
 #ifdef HAVE_USB_PODLINK
         case USB_PODLINK_CLOSE:
             if (usb_profile_close_matches(podlink_requested, podlink_epoch,
@@ -930,6 +1035,14 @@ static void NORETURN_ATTR usb_thread(void)
             }
             usb_drive_only_now = usb_mode_drive_only() && !usb_power_only;
 #endif
+#ifdef HAVE_USB_CONFIRM
+            /* The setting is authoritative; a held key is not disk consent. */
+            usb_power_only = usb_mode == USB_MODE_CHARGE;
+            usb_drive_only_now = usb_mode_drive_only() && !usb_power_only;
+            usb_consent_begin(&usb_consent, usb_power_only,
+                              podlink_requested);
+            usb_confirm_has_config = false;
+#endif
 
 #ifndef BOOTLOADER
             /* Zero the counters first: a reading has to describe this
@@ -955,7 +1068,12 @@ static void NORETURN_ATTR usb_thread(void)
             usb_set_host_present(true);
 #endif
 #ifdef HAVE_USB_HOST_AUDIO
-            if(usb_dac_auto && !usb_dac_tried && !usb_drive_only()
+            if(usb_dac_auto && !usb_dac_tried &&
+#ifdef HAVE_USB_CONFIRM
+               !usb_drive_only_now
+#else
+               !usb_drive_only()
+#endif
 #ifdef HAVE_USB_PODLINK
                && !podlink_requested
 #endif
@@ -1359,6 +1477,10 @@ bool usb_host_is_present(void)
  * us mid-session releases it before it asks again. */
 bool usb_host_wants_storage(void)
 {
+#ifdef HAVE_USB_CONFIRM
+    if (usb_confirm_blocked())
+        return false;
+#endif
 #if defined(HAVE_USBSTACK) && !defined(BOOTLOADER)
     return usb_host_is_present()
            && (exclusive_storage_requested || usb_core_storage_pending());
@@ -1373,6 +1495,10 @@ bool usb_host_wants_storage(void)
 bool usb_drive_only(void)
 {
 #if defined(HAVE_USB_POWER) && defined(USB_FULL_INIT)
+#ifdef HAVE_USB_CONFIRM
+    if (usb_confirm_blocked())
+        return false;
+#endif
     return usb_drive_only_now;
 #else
     return false;
@@ -1431,6 +1557,10 @@ bool usb_exclusive_storage(void)
 
 void usb_request_exclusive_storage(void)
 {
+#ifdef HAVE_USB_CONFIRM
+    if (usb_confirm_blocked())
+        return;
+#endif
 #ifdef HAVE_USB_PODLINK
     /* A live application lease cannot hand storage to any host profile. */
     if (podlink_requested)
@@ -1600,6 +1730,10 @@ void usb_set_audio(int value)
 #ifdef HAVE_USB_POWER
 bool usb_powered_only(void)
 {
+#ifdef HAVE_USB_CONFIRM
+    if (usb_confirm_blocked())
+        return true;
+#endif
     return usb_power_only;
 }
 #endif /* HAVE_USB_POWER */

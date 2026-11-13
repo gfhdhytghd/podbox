@@ -27,6 +27,11 @@
 #include "thread.h"
 #include "debug.h"
 #include "usb.h"
+#ifdef HAVE_USB_CONFIRM
+#include "usb_confirm.h"
+static struct usb_consent sim_consent;
+static int sim_usb_mode;
+#endif
 #include "mv.h"
 #include "ata_idle_notify.h"
 
@@ -45,6 +50,10 @@ enum {
     SIM_SCREENDUMP,
     SIM_USB_INSERTED,
     SIM_USB_EXTRACTED,
+#ifdef HAVE_USB_CONFIRM
+    SIM_USB_CONNECT,
+    SIM_USB_CHARGE,
+#endif
 #ifdef HAVE_HOTSWAP
     SIM_EXT_INSERTED,
     SIM_EXT_EXTRACTED,
@@ -77,6 +86,20 @@ void sim_thread(void)
 #endif
                 break;
             case SIM_USB_INSERTED:
+#ifdef HAVE_USB_CONFIRM
+                usb_consent_begin(&sim_consent,
+                                  sim_usb_mode == USB_MODE_CHARGE, false);
+                if (usb_consent_observe(&sim_consent, true, true, false))
+                    button_queue_post(SYS_USB_CONFIRM, sim_consent.epoch);
+                break;
+            case SIM_USB_CHARGE:
+                usb_consent_reply(&sim_consent, ev.data, false);
+                break;
+            case SIM_USB_CONNECT:
+                if (usb_detect() != USB_INSERTED ||
+                    !usb_consent_reply(&sim_consent, ev.data, true))
+                    break;
+#endif
             /* from firmware/usb.c: */
                 /* Tell all threads that they have to back off the storage.
                    We subtract one for our own thread. Expect an ACK for every
@@ -110,6 +133,9 @@ void sim_thread(void)
                 }
                 break;
             case SIM_USB_EXTRACTED:
+#ifdef HAVE_USB_CONFIRM
+                usb_consent_observe(&sim_consent, false, false, false);
+#endif
                 /* in usb.c, this is only done for exclusive storage
                  * do it here anyway but don't depend on the acks */
                 queue_broadcast(SYS_USB_DISCONNECTED, 0);
@@ -171,9 +197,28 @@ void sim_trigger_lo(bool inserted)
 #endif
 
 static bool is_usb_inserted;
+#ifdef HAVE_USB_CONFIRM
+bool usb_confirm_pending(uint32_t epoch)
+{
+    return is_usb_inserted && epoch == sim_consent.epoch &&
+           sim_consent.state == USB_CONSENT_PROMPT;
+}
+
+void usb_confirm_reply(uint32_t epoch, bool connect)
+{
+    queue_post(&sim_queue, connect ? SIM_USB_CONNECT : SIM_USB_CHARGE, epoch);
+}
+
+void usb_set_mode(int mode)
+{
+    sim_usb_mode = mode;
+}
+#endif
+
 void sim_trigger_usb(bool inserted)
 {
     int usbmode = -1;
+    is_usb_inserted = inserted;
     if (inserted)
     {
         send_event(SYS_EVENT_USB_INSERTED, &usbmode);
@@ -185,8 +230,6 @@ void sim_trigger_usb(bool inserted)
         queue_post(&sim_queue, SIM_USB_EXTRACTED, 0);
         DEBUGF("USB %s.\n", inserted ? "inserted":"removed");
     }
-    is_usb_inserted = inserted;
-
 }
 
 int usb_detect(void)

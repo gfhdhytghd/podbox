@@ -24,6 +24,17 @@
 #include "kernel.h"
 #include "button.h"
 
+#if defined(IPOD_6G) && !defined(BOOTLOADER)
+#define HAVE_USB_CONFIRM
+/* UI requests carry the cable epoch, so an old choice cannot accept a replug. */
+bool usb_confirm_pending(uint32_t epoch);
+void usb_confirm_reply(uint32_t epoch, bool connect);
+#ifdef HAVE_USBSTACK
+bool usb_confirm_blocked(void);
+void usb_confirm_configured(bool configured, bool accessory, bool probe_iap);
+#endif
+#endif
+
 #ifdef HAVE_USB_PODLINK
 /* Open only with the cable absent. Close is asynchronous and idempotent. */
 bool usb_podlink_open(void);
@@ -136,6 +147,11 @@ enum
 #endif
 #ifdef USB_ENABLE_IAP
     USB_CAR_RECONNECT,       /* Event - a car: again without the sound card */
+#endif
+#ifdef HAVE_USB_CONFIRM
+    USB_CONFIRM_READY,
+    USB_CONFIRM_CONNECT,
+    USB_CONFIRM_CHARGE,
 #endif
 #endif
 #ifdef USB_FIREWIRE_HANDLING
