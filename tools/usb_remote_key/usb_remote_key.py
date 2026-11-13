@@ -14,8 +14,8 @@ LOG = logging.getLogger('podbox-usbkey')
 REQUEST = 0x5B
 MENU = 1
 SELECT = 2
-MENU_HOLD_SECONDS = 0.220
-MENU_HOLD_REPEATS = 2
+MENU_HOLD_SECONDS = 0.300
+MENU_HOLD_REPEATS = 3
 RECEIVER_SERIAL = '2543030725032a2a'
 IPOD_SERIAL = re.compile(r'.AA0000000000360\Z', re.DOTALL)
 RELEASE_SECONDS = 0.150
@@ -29,6 +29,7 @@ class NECDecoder:
     """Decode active-low EDGE lines; b'' is a NEC repeat, bytes a full frame."""
     def __init__(self):
         self.edges = []
+        self.span_us = 0
 
     def edge(self, timestamp, level):
         if level not in (0, 1):
@@ -50,9 +51,11 @@ class NECDecoder:
             if not repeat and not near(d[1][0], 4500, .25):
                 self.edges.clear()
             elif repeat and len(d) == 3:
+                self.span_us = (timestamp - self.edges[0][0]) % (1 << 30)
                 self.edges.clear()
                 return b'' if near(d[2][0], 560, .6) else None
             elif not repeat and len(d) == 67:
+                self.span_us = (timestamp - self.edges[0][0]) % (1 << 30)
                 self.edges.clear()
                 bits = []
                 for i in range(2, 66, 2):
@@ -94,7 +97,7 @@ class MenuForwarder:
         self.usb.send(True, now, key)
         self.usb.send(False, now, key)
 
-    def frame(self, frame, now):
+    def frame(self, frame, now, span_seconds=0.0):
         self.poll(now)
         if frame is None:
             return
@@ -103,7 +106,9 @@ class MenuForwarder:
         if menu or (frame == b'' and self.down):
             if not self.down:
                 self.down, self.sent = True, False
-                self.first, self.repeats = now, 0
+                # Hold age starts at the first edge, not 68 ms later when
+                # the complete frame can be decoded. Silence uses last below.
+                self.first, self.repeats = now - span_seconds, 0
             else:
                 self.repeats += 1
             self.last = now
@@ -240,7 +245,8 @@ def main():
                 if len(buffer) > 128:
                     buffer = b''
                 for line in lines:
-                    forwarder.frame(decoder.line(line), time.monotonic())
+                    frame = decoder.line(line)
+                    forwarder.frame(frame, time.monotonic(), decoder.span_us / 1e6)
             except OSError as exc:
                 LOG.warning('IR unavailable: %s', exc)
                 forwarder.release(time.monotonic())

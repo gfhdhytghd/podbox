@@ -36,16 +36,27 @@ configuration, claims an interface, detaches a driver, or sends a key saved
 while disconnected.
 Disk mode and firmware without this request receive no working Menu input.
 
-Menu is classified on the computer. A stream continuing at least 220 ms
-(`MENU_HOLD_SECONDS`) after its first frame, with at least two repeats,
+Menu is classified on the computer. A stream continuing at least 300 ms
+(`MENU_HOLD_SECONDS`) after its first frame, with at least three repeats,
 sends one Select press/release. Elapsed time without another frame cannot
 classify a hold. Otherwise 150 ms without another Menu frame/repeat sends
 one Menu press/release. Another complete key ends the current Menu stream;
 its repeats cannot extend Menu. Further repeats after Select send nothing.
 
-The 220 ms rule keeps the one-repeat Menu taps in the supplied capture as
-Menu. Fast single taps wait until the 150 ms silence deadline. A long tap
-that actually continues past 220 ms is necessarily classified as Select.
+The third repeat normally starts about 324 ms after the first frame. The
+300 ms time gate leaves margin for jitter; both the repeat count and time
+gate must pass. Hold age starts at the first edge of the initial frame,
+using its decoded microsecond span. The 150 ms silence timer still starts
+at the end of the latest event. This keeps the third repeat eligible even
+though a full frame takes about 68 ms to decode and a repeat only 12 ms.
+Fast taps and collapsed doubles with only one or two repeats remain Menu.
+A stopped stream cannot become Select just because time passes.
+
+`tests/fixtures/ir-gestures-raw.log` contains host-timed EDGE lines. Tests
+feed these through the production decoder, separating the initial full
+frame and repeat even when `ir-gestures.log` reports them together as 72
+edges. The fixtures cover Menu taps, collapsed doubles and five one-second
+Menu holds. The bridge continues to ignore Play and other dock commands.
 Deploy this bridge with firmware accepting key ID 2; older firmware stalls
 Select. The firmware keeps a short EP0 pulse down for at least 50 ms so the
 button sampler cannot lose its back-to-back down/up requests. Its one-second

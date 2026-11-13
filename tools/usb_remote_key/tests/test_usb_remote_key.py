@@ -52,6 +52,17 @@ class DecoderTests(unittest.TestCase):
         self.assertEqual(decode(b'\xee\x87\x02\x59', start=(1 << 30)-40000),
                          b'\xee\x87\x02\x59')
 
+    def test_frame_and_repeat_spans_across_wrap(self):
+        for frame in (bytes.fromhex('ee870259'), b''):
+            for start in (0, (1 << 30)-40000):
+                decoder = k.NECDecoder()
+                waveform = edges(frame, start=start)
+                for timestamp, level in waveform:
+                    result = decoder.edge(timestamp, level)
+                self.assertEqual(result, frame)
+                self.assertEqual(decoder.span_us,
+                                 (waveform[-1][0]-start) % (1 << 30))
+
     def test_jitter(self):
         for scale in (.85, 1.15):
             self.assertEqual(decode(b'\xee\x87\x03\xff', scale=scale),
@@ -117,7 +128,7 @@ class ForwardTests(unittest.TestCase):
             self.assertEqual(self.events,[])
             self.f.poll(.259)
             self.assertEqual([(a,b) for a,b,t in self.events],[(1,True),(1,False)])
-    def test_hold_requires_continuing_stream_at_220ms(self):
+    def test_hold_requires_three_repeats_and_300ms(self):
         self.f.frame(bytes.fromhex('ee870259'),0)
         for t in (.108,.216):self.f.frame(b'',t)
         self.assertEqual(self.events,[])
@@ -128,11 +139,26 @@ class ForwardTests(unittest.TestCase):
         self.assertEqual(len(self.events),2)
     def test_threshold_and_foreign_repeat(self):
         self.f.frame(bytes.fromhex('ee870259'),0)
-        self.f.frame(b'',.110);self.f.frame(b'',.220)
-        self.assertEqual(self.events,[(2,True,.220),(2,False,.220)])
+        self.f.frame(b'',.100);self.f.frame(b'',.200);self.f.frame(b'',.300)
+        self.assertEqual(self.events,[(2,True,.300),(2,False,.300)])
         self.setUp();self.f.frame(bytes.fromhex('ee870259'),0)
         self.f.frame(bytes.fromhex('ee870459'),.05);self.f.frame(b'',.1)
         self.assertEqual([(a,b) for a,b,t in self.events],[(1,True),(1,False)])
+    def test_two_jittered_repeats_cannot_promote_a_double(self):
+        self.f.frame(bytes.fromhex('ee870259'),0)
+        self.f.frame(b'',.120);self.f.frame(b'',.240)
+        self.assertEqual(self.events,[])
+        self.f.poll(.391)
+        self.assertEqual([(key,down) for key,down,t in self.events],[(1,True),(1,False)])
+
+    def test_three_repeats_before_time_threshold_stay_menu(self):
+        self.f.frame(bytes.fromhex('ee870259'),0)
+        for t in (.099,.199,.299):self.f.frame(b'',t)
+        self.assertEqual(self.events,[])
+        self.f.poll(.301);self.assertEqual(self.events,[])
+        self.f.poll(.450)
+        self.assertEqual([(key,down) for key,down,t in self.events],[(1,True),(1,False)])
+
     def test_orphan_noise_and_shutdown(self):
         self.f.frame(b'',0);self.f.frame(None,.01);self.assertEqual(self.events,[])
         self.f.frame(bytes.fromhex('ee870259'),1);self.f.release(1.05)

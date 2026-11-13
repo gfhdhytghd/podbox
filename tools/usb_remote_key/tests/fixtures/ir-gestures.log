@@ -1,0 +1,123 @@
+t=14.788 NEC ee 87 02 59 edges=68 span_us=68409 first_us=685989620
+t=15.345 NEC ee 87 02 59 edges=68 span_us=68405 first_us=686547311
+t=16.145 NEC ee 87 02 59 edges=68 span_us=68373 first_us=687347462
+t=17.056 NEC ee 87 02 59 edges=68 span_us=68393 first_us=688259316
+t=17.915 NEC ee 87 02 59 edges=68 span_us=68407 first_us=689118393
+t=19.005 NEC ee 87 02 59 edges=68 span_us=68396 first_us=690209965
+t=19.273 NEC ee 87 02 59 edges=68 span_us=68411 first_us=690476846
+t=20.409 NEC ee 87 02 59 edges=68 span_us=68369 first_us=691610905
+t=20.582 NEC ee 87 02 59 edges=68 span_us=68375 first_us=691783478
+t=21.501 NEC ee 87 02 59 edges=68 span_us=68374 first_us=692704468
+t=21.650 NEC ee 87 02 59 edges=68 span_us=68415 first_us=692854709
+t=22.685 NEC ee 87 02 59 edges=68 span_us=68398 first_us=693887851
+t=22.836 NEC ee 87 02 59 edges=68 span_us=68351 first_us=694039530
+t=23.881 NEC ee 87 02 59 edges=72 span_us=120280 first_us=695086291
+t=25.253 NEC ee 87 02 59 edges=72 span_us=120254 first_us=696457665
+t=25.472 REPEAT edges=4 span_us=11885 first_us=696674638
+t=25.580 REPEAT edges=4 span_us=11868 first_us=696783234
+t=25.690 REPEAT edges=4 span_us=11887 first_us=696891843
+t=25.798 REPEAT edges=4 span_us=11918 first_us=697000444
+t=25.906 REPEAT edges=4 span_us=11911 first_us=697109065
+t=26.013 REPEAT edges=4 span_us=11944 first_us=697217682
+t=27.191 NEC ee 87 02 59 edges=72 span_us=120266 first_us=698394563
+t=27.407 REPEAT edges=4 span_us=11901 first_us=698611544
+t=27.518 REPEAT edges=4 span_us=11895 first_us=698720158
+t=27.626 REPEAT edges=4 span_us=11916 first_us=698828779
+t=27.733 REPEAT edges=4 span_us=11911 first_us=698937403
+t=27.841 REPEAT edges=4 span_us=11875 first_us=699046017
+t=27.951 REPEAT edges=4 span_us=11938 first_us=699154621
+t=28.058 REPEAT edges=4 span_us=11922 first_us=699263220
+t=28.169 REPEAT edges=4 span_us=11944 first_us=699371832
+t=29.162 NEC ee 87 02 59 edges=72 span_us=120263 first_us=700364434
+t=29.377 REPEAT edges=4 span_us=11915 first_us=700581385
+t=29.485 REPEAT edges=4 span_us=11900 first_us=700689968
+t=29.595 REPEAT edges=4 span_us=11901 first_us=700798569
+t=29.704 REPEAT edges=4 span_us=11897 first_us=700907164
+t=29.812 REPEAT edges=4 span_us=11921 first_us=701015767
+t=29.922 REPEAT edges=4 span_us=11911 first_us=701124381
+t=30.030 REPEAT edges=4 span_us=11882 first_us=701232978
+t=30.137 REPEAT edges=4 span_us=11897 first_us=701341584
+t=30.248 REPEAT edges=4 span_us=11907 first_us=701450173
+t=31.238 NEC ee 87 02 59 edges=72 span_us=120246 first_us=702441025
+t=31.453 REPEAT edges=4 span_us=11918 first_us=702657946
+t=31.564 REPEAT edges=4 span_us=11912 first_us=702766533
+t=31.672 REPEAT edges=4 span_us=11928 first_us=702875112
+t=31.780 REPEAT edges=4 span_us=11922 first_us=702983686
+t=31.888 REPEAT edges=4 span_us=11890 first_us=703092281
+t=31.998 REPEAT edges=4 span_us=11919 first_us=703200866
+t=32.105 REPEAT edges=4 span_us=11886 first_us=703309471
+t=33.093 NEC ee 87 02 59 edges=72 span_us=120232 first_us=704295401
+t=33.309 REPEAT edges=4 span_us=11863 first_us=704512314
+t=33.416 REPEAT edges=4 span_us=11917 first_us=704620889
+t=33.527 REPEAT edges=4 span_us=11916 first_us=704729453
+t=33.635 REPEAT edges=4 span_us=11870 first_us=704838023
+t=33.743 REPEAT edges=4 span_us=11919 first_us=704946593
+t=33.851 REPEAT edges=4 span_us=11897 first_us=705055167
+t=33.959 REPEAT edges=4 span_us=11916 first_us=705163748
+t=35.756 NEC ee 87 04 59 edges=68 span_us=68396 first_us=706961139
+t=36.617 NEC ee 87 04 59 edges=72 span_us=120281 first_us=707822775
+t=37.568 NEC ee 87 04 59 edges=72 span_us=120260 first_us=708771920
+t=38.552 NEC ee 87 04 59 edges=72 span_us=120266 first_us=709757683
+t=39.439 NEC ee 87 04 59 edges=72 span_us=120269 first_us=710644979
+t=40.914 NEC ee 87 04 59 edges=72 span_us=120261 first_us=712118050
+t=41.130 REPEAT edges=4 span_us=11922 first_us=712335044
+t=42.235 NEC ee 87 04 59 edges=68 span_us=68391 first_us=713439881
+t=42.410 NEC ee 87 04 59 edges=68 span_us=68387 first_us=713612786
+t=43.534 NEC ee 87 04 59 edges=68 span_us=68410 first_us=714737454
+t=43.688 NEC ee 87 04 59 edges=68 span_us=68385 first_us=714892526
+t=44.765 NEC ee 87 04 59 edges=68 span_us=68392 first_us=715968791
+t=44.929 NEC ee 87 04 59 edges=68 span_us=68383 first_us=716133272
+t=45.978 NEC ee 87 04 59 edges=68 span_us=68359 first_us=717182121
+t=46.140 NEC ee 87 04 59 edges=68 span_us=68399 first_us=717343784
+t=47.438 NEC ee 87 04 59 edges=72 span_us=120260 first_us=718642381
+t=47.656 REPEAT edges=4 span_us=11893 first_us=718859337
+t=47.763 REPEAT edges=4 span_us=11897 first_us=718967921
+t=47.874 REPEAT edges=4 span_us=11884 first_us=719076532
+t=47.981 REPEAT edges=4 span_us=11897 first_us=719185134
+t=48.091 REPEAT edges=4 span_us=11897 first_us=719293733
+t=48.198 REPEAT edges=4 span_us=11877 first_us=719402340
+t=48.306 REPEAT edges=4 span_us=11923 first_us=719510943
+t=48.414 REPEAT edges=4 span_us=11912 first_us=719619541
+t=48.524 REPEAT edges=4 span_us=11874 first_us=719728134
+t=48.632 REPEAT edges=4 span_us=11875 first_us=719836723
+t=49.135 NEC ee 87 04 59 edges=72 span_us=120280 first_us=720340533
+t=49.353 REPEAT edges=4 span_us=11922 first_us=720557512
+t=49.461 REPEAT edges=4 span_us=11902 first_us=720666139
+t=49.569 REPEAT edges=4 span_us=11926 first_us=720774762
+t=49.680 REPEAT edges=4 span_us=11899 first_us=720883383
+t=49.787 REPEAT edges=4 span_us=11905 first_us=720992009
+t=49.897 REPEAT edges=4 span_us=11892 first_us=721100629
+t=50.005 REPEAT edges=4 span_us=11873 first_us=721209232
+t=50.113 REPEAT edges=4 span_us=11908 first_us=721317849
+t=50.530 NEC ee 87 04 59 edges=72 span_us=120289 first_us=721735424
+t=50.749 REPEAT edges=4 span_us=11919 first_us=721952422
+t=50.856 REPEAT edges=4 span_us=11894 first_us=722061042
+t=50.966 REPEAT edges=4 span_us=11946 first_us=722169666
+t=51.074 REPEAT edges=4 span_us=11923 first_us=722278294
+t=51.181 REPEAT edges=4 span_us=11903 first_us=722386911
+t=51.292 REPEAT edges=4 span_us=11923 first_us=722495520
+t=51.400 REPEAT edges=4 span_us=11914 first_us=722604134
+t=51.914 NEC ee 87 04 59 edges=72 span_us=120282 first_us=723119231
+t=52.132 REPEAT edges=4 span_us=11900 first_us=723336217
+t=52.239 REPEAT edges=4 span_us=11934 first_us=723444834
+t=52.350 REPEAT edges=4 span_us=11955 first_us=723553467
+t=52.457 REPEAT edges=4 span_us=11876 first_us=723662104
+t=52.568 REPEAT edges=4 span_us=11946 first_us=723770739
+t=52.675 REPEAT edges=4 span_us=11934 first_us=723879358
+t=53.141 NEC ee 87 04 59 edges=72 span_us=120267 first_us=724344138
+t=53.356 REPEAT edges=4 span_us=11911 first_us=724561105
+t=53.466 REPEAT edges=4 span_us=11944 first_us=724669729
+t=53.574 REPEAT edges=4 span_us=11902 first_us=724778340
+t=53.682 REPEAT edges=4 span_us=11927 first_us=724886971
+t=53.792 REPEAT edges=4 span_us=11900 first_us=724995607
+t=53.899 REPEAT edges=4 span_us=11892 first_us=725104238
+t=188.024 NEC ee 87 02 59 edges=72 span_us=120221 first_us=859232692
+t=188.240 REPEAT edges=4 span_us=11896 first_us=859449611
+t=188.351 REPEAT edges=4 span_us=11920 first_us=859558241
+t=188.977 NEC ee 87 04 59 edges=72 span_us=120296 first_us=860187707
+t=189.196 REPEAT edges=4 span_us=11913 first_us=860404722
+t=190.608 NEC ee 87 04 59 edges=72 span_us=120285 first_us=861816724
+t=190.824 REPEAT edges=4 span_us=11880 first_us=862033691
+t=190.934 REPEAT edges=4 span_us=11889 first_us=862142297
+t=191.578 NEC ee 87 02 59 edges=68 span_us=68366 first_us=862788201
+t=191.777 NEC ee 87 02 59 edges=68 span_us=68407 first_us=862985796
