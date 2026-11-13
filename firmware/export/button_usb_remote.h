@@ -9,6 +9,7 @@
 #define USB_REMOTE_KEY_ENABLED
 #define USB_REMOTE_KEY_REQUEST 0x5b
 #define USB_REMOTE_KEY_MENU 1
+#define USB_REMOTE_KEY_SELECT 2
 
 struct usb_ctrlrequest;
 bool button_usb_remote_request(const struct usb_ctrlrequest *req);

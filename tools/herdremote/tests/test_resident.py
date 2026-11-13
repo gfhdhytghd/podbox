@@ -103,8 +103,8 @@ class Foreground(unittest.TestCase):
             for tick in range(1,40):clock.return_value=100+tick;sample(tick)
             self.assertEqual(len(self.messages),1)
             socket.items[0]['item']['text']='appended message';sample(40)
-            socket.items[0]['item']['completedAtMs']=2;sample(41)
-            self.assertEqual(len(self.messages),3)
+            socket.items[0]['item']['completedAtMs']=2;clock.return_value=141;sample(41)
+            self.assertEqual(len(self.messages),2)
 
     def test_scroll_request_is_refused_before_socket_io(self):
         with mock.patch.object(self.daemon.herdr, 'call') as call:

@@ -341,7 +341,7 @@ int main(void) {
     char line[1024];int n=0,bad=0,trunc=0,volume=0;
     while(fgets(line,sizeof(line),f)) {
         if(strstr(line,"VOL ")) {
-            assert(strstr(line,"tick=20")&&strstr(line,"echo=27 target=2A dir=1 decision=P"));volume++;continue;
+            assert(strstr(line,"tick=20")&&strstr(line,"previous=27 target=2A dir=1 decision=P"));volume++;continue;
         }
         if(strstr(line,"TRUNC")) {
             assert(strstr(line,"len=4096 rx=4096 stored=128"));trunc++;
@@ -355,6 +355,7 @@ int main(void) {
     puts("capture screen: 16 history rows/10 Hz poll/remote isolation/native logging/append/BAD/TRUNC/exit PASS");
 }
 '''
+uipre+='\nstatic void iap_agents_volume_enable(bool b){(void)b;}\n'
 (O/'screen.c').write_text(pre+body('apps-ipod/iap/remote_capture.c')+uipre+body('apps-ipod/screens/system/remote_input.c')+uitest)
 subprocess.run(['cc','-std=gnu11','-Wall','-Wextra','-Werror','-g','-fsanitize=address,undefined','-fno-sanitize-recover=all','-fno-pie','-no-pie','-I'+str(O),'-I'+str(R),'-I'+str(R/'apps-ipod'),str(O/'screen.c'),'-o',str(O/'screen')],check=True)
 subprocess.run([str(O/'screen')],check=True)
@@ -377,6 +378,12 @@ pagepre='''
 #define USE_LINE 21
 struct vp {int height;};struct gl {struct vp *parent[1];};
 static int view,usage_scroll,detail_scroll,detail_scroll_max,detail_page_lines,draws;
+static int raw_page,volume_changes;
+#define IPOD_ACCESSORY_PROTOCOL
+#define BUTTON_MULTIMEDIA_VOLUME_UP 101
+#define BUTTON_MULTIMEDIA_VOLUME_DOWN 102
+static void get_action_statuscode(int *b){*b=raw_page;}
+static void default_event_handler(int b){assert(b==101||b==102);volume_changes++;}
 static void draw_usage(struct gl*l){(void)l;draws++;}
 static void draw_detail(struct gl*l){(void)l;draws++;}
 static void page_move(int action){struct vp vp={.height=100};struct gl list={.parent={&vp}};
@@ -388,6 +395,7 @@ int main(void){
  page_move(ACTION_LISTTREE_PGDOWN);assert(usage_scroll==124);
  page_move(ACTION_LISTTREE_PGUP);assert(usage_scroll==24);
  page_move(ACTION_LISTTREE_PGUP);assert(usage_scroll==0);
+ raw_page=BUTTON_RC_VOL_UP;int scroll=usage_scroll;page_move(ACTION_LISTTREE_PGUP);assert(volume_changes==1&&usage_scroll==scroll);raw_page=0;
  view=VIEW_DETAIL;detail_scroll_max=23;detail_page_lines=7;
  page_move(ACTION_LISTTREE_PGDOWN);assert(detail_scroll==7);
  page_move(ACTION_LISTTREE_PGDOWN);assert(detail_scroll==14);
@@ -497,9 +505,8 @@ int main(void) {
     action_last_t last={.button=BUTTON_REL,.context=CONTEXT_AGENTS};
     action_cur_t cur={.context=CONTEXT_AGENTS,.timeout=5};
     queued_button=held_button=BUTTON_RC_LEFT;
-    assert(action_poll_button(&last,&cur));assert(!cur.button);
-    queued_button=BUTTON_RC_LEFT|BUTTON_REL;held_button=0;current_tick=10;
     assert(!action_poll_button(&last,&cur));assert(cur.button==BUTTON_LEFT);
+    queued_button=BUTTON_RC_LEFT|BUTTON_REL;held_button=0;current_tick=10;
     assert(!action_poll_button(&last,&cur));assert(cur.button==(BUTTON_LEFT|BUTTON_REL));
     queued_button=BUTTON_RC_PLAY;held_button=BUTTON_SELECT|BUTTON_RC_PLAY;
     assert(!action_poll_button(&last,&cur));assert(cur.button==BUTTON_RC_PLAY);

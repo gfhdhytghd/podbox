@@ -36,12 +36,20 @@ configuration, claims an interface, detaches a driver, or sends a key saved
 while disconnected.
 Disk mode and firmware without this request receive no working Menu input.
 
-A full Menu frame presses Menu. NEC repeats and repeated full Menu frames
-keep it held. After 150 ms without a valid Menu frame or repeat, the bridge
-releases Menu. A different complete frame immediately releases Menu.
-On shutdown or receiver disconnect, the bridge attempts a release.
-The firmware releases after 1 second without a down/up request, even if the
-bridge crashes. Key debounce adds at most two firmware ticks to transitions.
+Menu is classified on the computer. A stream continuing at least 220 ms
+(`MENU_HOLD_SECONDS`) after its first frame, with at least two repeats,
+sends one Select press/release. Elapsed time without another frame cannot
+classify a hold. Otherwise 150 ms without another Menu frame/repeat sends
+one Menu press/release. Another complete key ends the current Menu stream;
+its repeats cannot extend Menu. Further repeats after Select send nothing.
+
+The 220 ms rule keeps the one-repeat Menu taps in the supplied capture as
+Menu. Fast single taps wait until the 150 ms silence deadline. A long tap
+that actually continues past 220 ms is necessarily classified as Select.
+Deploy this bridge with firmware accepting key ID 2; older firmware stalls
+Select. The firmware keeps a short EP0 pulse down for at least 50 ms so the
+button sampler cannot lose its back-to-back down/up requests. Its one-second
+safety release still covers a missing up request.
 
 ## EP0 protocol
 
@@ -51,7 +59,7 @@ The firmware protocol is independent of interfaces and USB configurations:
 | --- | --- |
 | bmRequestType | `0x40` (vendor, device, OUT) |
 | bRequest | `0x5b` |
-| wValue | `1` (Menu) |
+| wValue | `1` (Menu), `2` (Select) |
 | wIndex | `1` (down/keepalive) or `0` (up) |
 | wLength | `0` |
 
@@ -59,8 +67,8 @@ Only configured normal iPod Classic firmware accepts the request. All other
 key IDs, request directions, recipients, states and payload lengths STALL.
 Bootloader and simulator omit the feature. No descriptor changes are needed.
 The native button sampler merges the state with the dock button state;
-its existing queue emits `BUTTON_RC_MENU`, repeats, and `BUTTON_REL`.
-`button_status()` includes the held key for the remote hold rules.
+its existing queue emits `BUTTON_RC_MENU` or `BUTTON_RC_SELECT` and their
+release. Firmware does not classify a Menu hold into Select.
 
 Run offline tests without opening either device:
 

@@ -386,7 +386,7 @@ static const struct button_mapping remote_button_context_agents[] = {
     { ACTION_AGENTS_REMOTE_TALK, BUTTON_RC_PLAY, BUTTON_NONE },
     { ACTION_AGENTS_DISCARD, BUTTON_RC_PLAY|BUTTON_REL|BUTTON_REPEAT,
       BUTTON_NONE },
-    /* A volume-set pair supplies one completed page gesture. */
+    /* A classified volume press supplies one completed page gesture. */
     { ACTION_LISTTREE_PGUP, BUTTON_RC_VOL_UP|BUTTON_REL|BUTTON_REPEAT,
       BUTTON_NONE },
     { ACTION_LISTTREE_PGDOWN, BUTTON_RC_VOL_DOWN|BUTTON_REL|BUTTON_REPEAT,
@@ -396,8 +396,9 @@ static const struct button_mapping remote_button_context_agents[] = {
     { ACTION_LISTTREE_PGDOWN, BUTTON_RC_VOL_DOWN, BUTTON_NONE },
     { ACTION_LISTTREE_PGDOWN, BUTTON_RC_VOL_DOWN|BUTTON_REPEAT, BUTTON_NONE },
     { ACTION_STD_MENU, BUTTON_RC_MENU|BUTTON_REL, BUTTON_NONE },
-    /* The raw-button adapter emits SELECT once at the Menu hold threshold. */
-    { ACTION_STD_OK, BUTTON_RC_SELECT, BUTTON_NONE },
+    /* EP0 supplies a complete host-classified Select gesture. */
+    { ACTION_NONE, BUTTON_RC_SELECT, BUTTON_NONE },
+    { ACTION_STD_OK, BUTTON_RC_SELECT|BUTTON_REL, BUTTON_NONE },
     LAST_ITEM_IN_LIST__NEXTLIST(CONTEXT_STD)
 };
 

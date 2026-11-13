@@ -28,7 +28,12 @@ static int take(struct agents_remote_state *s)
 static void play_tap(struct agents_remote_state *s)
 {
     /* Agents already discarded the short recording on physical release. */
-    if (s->play_context != REMOTE_AGENTS)
+    if (s->play_context == REMOTE_AGENTS)
+    {
+        emit(s, BUTTON_SELECT);
+        emit(s, BUTTON_SELECT | BUTTON_REL);
+    }
+    else
     {
         emit(s, BUTTON_RC_PLAY);
         emit(s, BUTTON_RC_PLAY | BUTTON_REL);
@@ -114,46 +119,16 @@ static bool play_button(struct agents_remote_state *s, int context, int button,
 int agents_remote_button(struct agents_remote_state *s, int context,
                          int button, int held, unsigned long now)
 {
-    static const int keys[] = {
-        BUTTON_RC_MENU, BUTTON_RC_RIGHT, BUTTON_RC_LEFT
-    };
     if (s->queued) return take(s);
     if (play_button(s, context, button, held, now)) return take(s);
-    for (unsigned int i = 0; i < sizeof(keys) / sizeof(keys[0]); i++)
-    {
-        struct agents_remote_hold *h = &s->hold[i];
-        int key = keys[i];
-        bool event = (button & BUTTON_REMOTE) == key;
-        bool release = event && (button & BUTTON_REL);
-        bool allowed = key != BUTTON_RC_MENU || context == REMOTE_AGENTS;
-        if (!h->down && event && !release && allowed)
-        {
-            h->down = true;
-            h->fired = false;
-            h->at = now;
-        }
-        if (h->down && (event || button == BUTTON_NONE))
-        {
-            bool ended = release || !(held & key);
-            bool fire = !h->fired && now - h->at >= (3 * HZ + 4) / 5;
-            bool tap = ended && !h->fired && !fire;
-            if (ended) h->down = false;
-            if (fire || tap)
-            {
-                h->fired = true;
-                int result = fire ? (key == BUTTON_RC_LEFT ? BUTTON_MENU :
-                                                            BUTTON_SELECT) :
-                             context == REMOTE_AGENTS ?
-                             (key == BUTTON_RC_MENU ? BUTTON_MENU :
-                              key == BUTTON_RC_LEFT ? BUTTON_LEFT : BUTTON_RIGHT) :
-                             key;
-                emit(s, result);
-                emit(s, result | BUTTON_REL);
-            }
-            return take(s);
-        }
-        if (event && allowed) return take(s);
-    }
+    /* Menu/Select are already classified by the host IR bridge. Direction
+     * keys retain their normal press/repeat/release meanings everywhere. */
+    if (context == REMOTE_AGENTS &&
+        ((button & BUTTON_REMOTE) == BUTTON_RC_LEFT ||
+         (button & BUTTON_REMOTE) == BUTTON_RC_RIGHT))
+        button = (button & (BUTTON_REL | BUTTON_REPEAT)) |
+                 ((button & BUTTON_REMOTE) == BUTTON_RC_LEFT ?
+                  BUTTON_LEFT : BUTTON_RIGHT);
     if (button != BUTTON_NONE) emit(s, button);
     return take(s);
 }

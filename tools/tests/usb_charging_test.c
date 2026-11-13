@@ -6,6 +6,7 @@
 #include "../../firmware/usbstack/usb_core.c"
 #define BUTTON_NONE 0
 #define BUTTON_RC_MENU 0x00200000
+#define BUTTON_RC_SELECT 0x00400000
 #include "../../firmware/drivers/button_usb_remote.c"
 #include "../../firmware/target/arm/s5l8702/ipod6g/power-6g.c"
 
@@ -505,6 +506,7 @@ int main(void)
                 assert(button_usb_remote_read() == BUTTON_RC_MENU);
                 key.wIndex = 0;
                 usb_core_control_request_handler(&key, NULL, 0);
+                current_tick += (HZ + 19) / 20;
                 assert(button_usb_remote_read() == BUTTON_NONE);
                 assert(usb_charging_current_grant() == grant);
                 expect_current(grant);

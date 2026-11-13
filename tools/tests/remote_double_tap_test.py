@@ -80,10 +80,10 @@ int main(void) {
         reset();feed(modes[c],BUTTON_RC_PLAY,BUTTON_RC_PLAY,first);
         feed(modes[c],BUTTON_RC_PLAY|BUTTON_REL,0,up);
         assert(!count);feed(modes[c],0,0,up+20);assert(!count);
-        feed(modes[c],0,0,up+21);assert(count==(c==0?0:2));
+        feed(modes[c],0,0,up+21);assert(count==2);
         feed(modes[c],BUTTON_RC_PLAY,BUTTON_RC_PLAY,second);
         feed(modes[c],BUTTON_RC_PLAY|BUTTON_REL,0,second+length);
-        feed(modes[c],0,0,second+length+21);assert(count==(c==0?0:4));
+        feed(modes[c],0,0,second+length+21);assert(count==4);
         for(int i=0;i<count;i++) assert(output[i]!=SWITCH);
         for(int gap=19;gap<=21;gap++) {
             reset();feed(modes[c],BUTTON_RC_PLAY,BUTTON_RC_PLAY,100);
@@ -91,7 +91,7 @@ int main(void) {
             feed(modes[c],BUTTON_RC_PLAY,BUTTON_RC_PLAY,129+gap);
             feed(modes[c],BUTTON_RC_PLAY|BUTTON_REL,0,142+gap);
             if(gap<=20) assert(count==1&&output[0]==SWITCH);
-            else {feed(modes[c],0,0,180+gap);assert(count==(c==0?0:4));}
+            else {feed(modes[c],0,0,180+gap);assert(count==4);}
         }
     }
     reset();feed(REMOTE_AGENTS,BUTTON_RC_PLAY,BUTTON_RC_PLAY,100);
@@ -102,13 +102,13 @@ int main(void) {
     assert(count==1&&output[0]==(BUTTON_PLAY|BUTTON_REL));
     feed(REMOTE_AGENTS,BUTTON_RC_PLAY,BUTTON_RC_PLAY,190);
     feed(REMOTE_AGENTS,BUTTON_RC_PLAY|BUTTON_REL,0,203);
-    feed(REMOTE_AGENTS,0,0,224);assert(count==1);
+    feed(REMOTE_AGENTS,0,0,224);assert(count==3);
     reset();feed(REMOTE_AGENTS,BUTTON_RC_PLAY,BUTTON_RC_PLAY,100);
     feed(REMOTE_AGENTS,BUTTON_RC_PLAY|BUTTON_REL,0,129);
     feed(REMOTE_AGENTS,BUTTON_RC_PLAY,BUTTON_RC_PLAY,139);
-    feed(REMOTE_AGENTS,0,BUTTON_RC_PLAY,169);assert(!count);
+    feed(REMOTE_AGENTS,0,BUTTON_RC_PLAY,169);assert(count==2);
     feed(REMOTE_AGENTS,BUTTON_RC_PLAY|BUTTON_REL,0,180);
-    assert(count==1&&output[0]==(BUTTON_PLAY|BUTTON_REL));
+    assert(count==3&&output[2]==(BUTTON_PLAY|BUTTON_REL));
     for(int mode=REMOTE_OTHER;mode<=REMOTE_WPS;mode+=2) {
         reset();feed(mode,BUTTON_RC_PLAY,BUTTON_RC_PLAY,300);
         feed(mode,0,BUTTON_RC_PLAY,359);assert(!count);
@@ -128,7 +128,7 @@ int main(void) {
         }
         feed(modes[c],0,0,previous+21);int switches=0;
         for(int i=0;i<count;i++)switches+=output[i]==SWITCH;
-        assert(switches==3&&count==(c==0?5:c==1?17:21));
+        assert(switches==3&&count==(c==0?17:c==1?17:21));
     }
     /* An unpolled second hold can emit five queued WPS events at release. */
     reset();feed(REMOTE_WPS,BUTTON_RC_PLAY,BUTTON_RC_PLAY,100);

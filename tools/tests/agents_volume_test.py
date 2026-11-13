@@ -1,6 +1,6 @@
 """Captured Universal Dock volume-set pairs through the production lingo-3 arm."""
 from pathlib import Path
-import re,subprocess,sys
+import re,subprocess,sys,os
 R=Path(__file__).resolve().parents[2];O=Path(sys.argv[1]).resolve();O.mkdir(parents=True,exist_ok=True)
 S=Path(sys.argv[2]).resolve() if len(sys.argv)>2 else R
 s=(S/'apps-ipod/iap/iap-lingo3.c').read_text()
@@ -44,7 +44,10 @@ pre=r'''
 #include <stdio.h>
 #include <stdint.h>
 #include <limits.h>
+#include <stdlib.h>
+static bool remote_input_active;
 #define HAVE_USB_PODLINK
+#define IPOD_ACCESSORY_PROTOCOL
 #define HZ 100
 static unsigned long current_tick;
 #define TIME_BEFORE(a,b) ((long)((unsigned long)(a)-(unsigned long)(b))<0)
@@ -98,117 +101,75 @@ static void frame(unsigned int len,const unsigned char *buf,bool auth) {
 reported=function(core,'iap_get_volume')+'\n'+function(core,'iap_set_remote_volume')
 reported+='\nstatic void notify(void){'+notify+'}\n'
 reported+='\nstatic void query(int type){IAP_TX_INIT(3,13);IAP_TX_PUT(type);switch(type){'+replies+'}}\n'
+screen=(S/'apps-ipod/screens/system/agents_screen.c').read_text()
+policy=function(screen,'update_volume_mode') if 'static void update_volume_mode' in screen else 'static void update_volume_mode(void){iap_agents_volume_enable(true);}'
+pre+='\nstatic int view,confirm_from;static bool volume_paging __attribute__((unused));\n#define VIEW_USAGE 4\n#define VIEW_CONFIRM 5\n'+policy
+trace=[]
+for line in (R/'tools/tests/fixtures/remote-volume/2026-11-13.txt').read_text().splitlines():
+ m=re.search(r'tick=(\d+).*03 0E 04 00 ([0-9A-F]{2}) 01',line)
+ if m:trace.append('{'+m[1]+',0x'+m[2]+'}')
+pre+='\nstatic const struct {unsigned long tick;unsigned char volume;} trace[]={'+','.join(trace)+'};\n'
 tests=r'''
-/* remote-log.txt frames 328/329 and 335/336, exact captured bytes. */
-static const unsigned char up[][6]={{3,14,4,0,0x27,1},{3,14,4,0,0x2a,1}};
-static const unsigned char down[][6]={{3,14,4,0,0x27,1},{3,14,4,0,0x24,1}};
-static void pair(unsigned char echo,unsigned char target) {
- unsigned char b[]={3,14,4,0,echo,1};frame(6,b,true);b[4]=target;frame(6,b,true);
-}
-static void reported_is(int level,bool muted) {
- unsigned char v;bool m;iap_get_volume(&v,&m);assert(v==level&&m==muted);
+static void step(unsigned char v){unsigned char b[]={3,14,4,0,v,1};frame(6,b,true);}
+static void reported_is(int n){unsigned char v;bool m;iap_get_volume(&v,&m);assert(v==n&&!m);}
+int main(int argc,char **argv) {
+ (void)argc;(void)argv;
+ global_status.volume=12;iap_agents_volume_enable(true);volume_paging=true;
+ if(getenv("VOLUME_POLICY")) {
+  view=VIEW_USAGE;update_volume_mode();unsigned char v;bool m;
+  assert(!iap_agents_volume_get(&v,&m));step(15);
+  assert(global_status.volume==15&&!iap_agents_volume_take());
+  view=2;update_volume_mode();step(18);
+  assert(iap_agents_volume_take()==PAGE_UP&&global_status.volume==15);
+  view=VIEW_CONFIRM;confirm_from=VIEW_USAGE;update_volume_mode();
+  assert(!iap_agents_volume_get(&v,&m));puts("Usage real volume / return paging PASS");return 0;
+ }
+ int ups=0,downs=0;
+ for(unsigned int i=0;i<sizeof(trace)/sizeof(trace[0]);i++) {
+  current_tick=trace[i].tick;step(trace[i].volume);int b=iap_agents_volume_take();
+  if(i==0)assert(b==PAGE_UP);
+  if(b==PAGE_UP)ups++;else if(b==PAGE_DOWN)downs++;
+ }
+ printf("recorded L3 steps: up=%d down=%d (expected 6/8)\n",ups,downs);fflush(stdout);
+ assert(ups==6&&downs==8&&global_status.volume==12);reported_is(0);
+ /* Clamp keeps its sign; fresh presses are separated by 300ms or more. */
+ for(int bound=0;bound<=255;bound+=255) {
+  global_status.volume=bound;iap_agents_volume_enable(true);int pages=0;
+  for(int t=0;t<200;t+=10){current_tick=1000+t;step(bound);int b=iap_agents_volume_take();if(b){pages++;assert(b==(bound?PAGE_UP:PAGE_DOWN));}}
+  assert(pages==6);current_tick=1230;step(bound);assert(iap_agents_volume_take());
+ }
+ /* Every packet updates virtual readback; reversals start another press. */
+ global_status.volume=39;iap_agents_volume_enable(true);
+ current_tick=2000;step(42);assert(iap_agents_volume_take()==PAGE_UP);reported_is(42);
+ current_tick=2010;step(45);assert(!iap_agents_volume_take());reported_is(45);
+ current_tick=2020;step(42);assert(iap_agents_volume_take()==PAGE_DOWN);
+ current_tick=2030;step(39);assert(!iap_agents_volume_take());
+ current_tick=2060;step(36);assert(iap_agents_volume_take()==PAGE_DOWN);
+ iap_agents_volume_enable(false);step(33);assert(global_status.volume==33&&changes==1);
+ /* Diagnostic screen logs the same decisions without virtualizing real audio. */
+ activity=0;remote_input_active=true;global_status.volume=12;iap_agents_volume_enable(true);
+ unsigned long before=remote_volume_count();current_tick=3000;step(15);
+ assert(global_status.volume==15&&!iap_agents_volume_take());
+ struct remote_volume_trace trace_row;assert(remote_volume_count()>before&&remote_volume_get(remote_volume_count(),&trace_row));assert(trace_row.decision=='P'&&trace_row.direction==1);
+ remote_input_active=false;iap_agents_volume_enable(false);
+ /* Authentication, lengths and both absolute-volume encodings stay gated. */
+ activity=ACTIVITY_AGENTS;global_status.volume=39;changes=0;iap_agents_volume_enable(true);
+ unsigned char absolute[]={3,14,16,0,0,42,1};
+ frame(7,absolute,false);frame(4,absolute,true);assert(!iap_agents_volume_take());
+ current_tick=4000;frame(7,absolute,true);assert(iap_agents_volume_take()==PAGE_UP&&!changes);reported_is(42);
+ device.notifications=BIT_N(4)|BIT_N(16);device.volume=39;sent=0;notify();
+ assert(sent==2&&device.volume==42&&packets[0][4]==42&&packets[1][5]==42);
  sent=0;query(4);query(16);iap_set_remote_volume();
- assert(sent==3&&sizes[0]==5&&sizes[1]==6&&sizes[2]==5);
- for(int i=0;i<2;i++){assert(packets[i][3]==muted&&packets[i][4]==level);}
- bool virtual=iap_agents_volume_get(&v,&m);
- assert(packets[2][3]==(virtual?muted:false));
- assert(packets[2][4]==(virtual?level:global_status.volume));
- assert(packets[1][5]==level);
-}
-int main(void) {
- global_status.volume=0x27;iap_agents_volume_enable(true);
- current_tick=0;pair(0x27,0x2a);assert(iap_agents_volume_take()==PAGE_UP);
- current_tick=23;pair(0x2a,0x2d);assert(!iap_agents_volume_take());
- current_tick=50;assert(!iap_agents_volume_take());
- current_tick=0;iap_agents_volume_enable(false);
-
- global_status.volume=0x27;iap_agents_volume_enable(true);
- frame(6,up[0],true);assert(!changes&&!iap_agents_volume_take());
- frame(6,up[1],true);assert(!changes&&global_status.volume==0x27);
- assert(iap_agents_volume_take()==PAGE_UP&&!iap_agents_volume_take());
- reported_is(0x2a,false);
- device.notifications=BIT_N(4)|BIT_N(16);device.volume=0x27;
- sent=0;notify();assert(sent==2&&device.volume==0x2a);
- assert(packets[0][3]==0&&packets[0][4]==0x2a&&packets[1][5]==0x2a);
- notify();assert(sent==2); /* Stable virtual readback stops change notifications. */
- for(int i=0;i<1000;i++){frame(6,up[0],true);frame(6,up[1],true);}
- current_tick=100;assert(!iap_agents_volume_take());reported_is(0x2a,false);
- frame(6,down[0],true);assert(!iap_agents_volume_take());
- frame(6,down[1],true);assert(iap_agents_volume_take()==PAGE_DOWN);
- reported_is(0x24,false);assert(!changes&&global_status.volume==0x27);
- for(int i=0;i<1000;i++){frame(6,down[0],true);frame(6,down[1],true);}
- current_tick=200;assert(!iap_agents_volume_take());
- for(int which=0;which<3;which++) {
-  int bound=which==0?255:which==1?0:100;
-  global_settings.volume_limit=which==2?100:255;global_status.volume=bound;
-  iap_agents_volume_enable(true);int pages=0;current_tick=0;
-  for(int t=0;t<100;t++) {
-   current_tick=t;pair(bound,bound);int b=iap_agents_volume_take();
-   if(b){assert(b==(which==1?PAGE_DOWN:PAGE_UP));pages++;}
-  }
-  assert(pages==3);reported_is(bound,false);
- }
- /* A changing-target flood coalesces into at most four pages per second. */
- global_status.volume=0x27;global_settings.volume_limit=255;
- iap_agents_volume_enable(true);int pages=0;unsigned char v=0x27;
- for(int t=0;t<200;t++) {
-  current_tick=t;unsigned char target=v<255?v+1:255;pair(v,target);v=target;
-  if(iap_agents_volume_take())pages++;
- }
- assert(pages==7);reported_is(v,false);
- iap_agents_volume_enable(false);assert(!iap_agents_volume_take());
- reported_is(0x27,false);sent=0;notify();assert(sent==2&&device.volume==0x27);
- /* Reset a half pair and all pending/rate state between app sessions. */
- iap_agents_volume_enable(true);frame(6,up[0],true);
- iap_agents_volume_enable(false);iap_agents_volume_enable(true);
- pair(0x27,0x24);assert(iap_agents_volume_take()==PAGE_DOWN);
- unsigned char mute[]={3,14,4,1,0x24,1};frame(6,mute,true);
- reported_is(0,true);assert(!device.mute&&!changes);
- device.mute=true;iap_agents_volume_enable(true);reported_is(0,true);
- pair(0,3);assert(iap_agents_volume_take()==PAGE_UP);
- reported_is(3,false);assert(device.mute&&!changes);
- iap_agents_volume_enable(false);reported_is(0,true);device.mute=false;
- iap_agents_volume_enable(true);
- unsigned char absolute[]={3,14,16,0,0,0x27,1};frame(7,absolute,true);
- absolute[5]=0x2a;frame(7,absolute,true);
- assert(iap_agents_volume_take()==PAGE_UP&&!changes);reported_is(0x2a,false);
- iap_agents_volume_enable(false);frame(7,absolute,true);
- assert(changes==1&&global_status.volume==0x2a);changes=0;
- frame(6,down[1],true);assert(changes==1&&global_status.volume==0x24);
- iap_agents_volume_enable(true);activity=0;frame(6,up[1],true);
- assert(changes==2&&global_status.volume==0x2a);reported_is(0x2a,false);
- activity=ACTIVITY_AGENTS;iap_agents_volume_enable(true);
- frame(6,up[1],false);frame(4,up[1],true);assert(!iap_agents_volume_take());
- global_status.volume=255;iap_agents_volume_enable(true);current_tick=ULONG_MAX-10;
- pair(255,255);assert(iap_agents_volume_take()==PAGE_UP);
- current_tick=13;pair(255,255);assert(!iap_agents_volume_take());
- current_tick=14;assert(!iap_agents_volume_take());
- current_tick=35;pair(255,255);assert(!iap_agents_volume_take());
- current_tick=49;pair(255,255);assert(iap_agents_volume_take()==PAGE_UP);
- /* IR full-frame spacing 230/219ms becomes successive complete dock pairs. */
- for(int direction=-1;direction<=1;direction+=2) {
-  global_status.volume=100;iap_agents_volume_enable(true);unsigned char v=100;
-  current_tick=1000;pair(v,v+direction*3);v+=direction*3;assert(iap_agents_volume_take());
-  current_tick=direction>0?1023:1022;pair(v,v+direction*3);v+=direction*3;assert(!iap_agents_volume_take());
-  current_tick=1050;assert(!iap_agents_volume_take());
-  current_tick=1058;pair(v,v+direction*3);assert(iap_agents_volume_take());
- }
- for(int clamp=0;clamp<2;clamp++) {
-  global_status.volume=clamp?255:0;iap_agents_volume_enable(true);int pages=0;
-  for(int t=0;t<200;t+=22){current_tick=2000+t;pair(global_status.volume,global_status.volume);if(iap_agents_volume_take())pages++;}
-  assert(pages==5);current_tick=2400;assert(!iap_agents_volume_take());
- }
- global_status.volume=39;iap_agents_volume_enable(true);int repeated=0;
- for(int t=0;t<200;t+=22){current_tick=3000+t;pair(39,42);if(iap_agents_volume_take())repeated++;}
- assert(repeated==5);
- /* A lost target must not pair with the next physical press's echo. */
- iap_agents_volume_enable(true);current_tick=4000;frame(6,up[0],true);
- current_tick=4050;pair(39,42);assert(iap_agents_volume_take()==PAGE_UP);
- struct remote_volume_trace trace;assert(remote_volume_get(remote_volume_count(),&trace));
- assert(trace.decision=='E'&&trace.tick==4050);
- assert(acks>0);
- puts("captured pairs/resend flood/virtual replies+both notifications/real volume+mute frozen/exit restore PASS");
- puts("clamps/configured limit/4 pages per second/coalescing/lifecycle/absolute/outside/auth+length/wrap PASS");
+ assert(sent==3&&packets[0][4]==42&&packets[1][4]==42&&packets[2][4]==42);
+ unsigned char muted[]={3,14,4,1,42,1};frame(6,muted,true);
+ unsigned char v;bool m;iap_get_volume(&v,&m);assert(v==0&&m&&!device.mute&&!iap_agents_volume_take());
+ current_tick=4010;step(3);assert(iap_agents_volume_take()==PAGE_UP&&!changes);reported_is(3);
+ iap_agents_volume_enable(false);frame(7,absolute,true);assert(global_status.volume==42&&changes==1);
+ global_settings.volume_limit=100;global_status.volume=100;iap_agents_volume_enable(true);
+ current_tick=ULONG_MAX-10;step(100);assert(iap_agents_volume_take()==PAGE_UP);
+ current_tick=9;step(100);assert(!iap_agents_volume_take());
+ current_tick=49;step(100);assert(iap_agents_volume_take()==PAGE_UP);
+ puts("single-message decode/readback/6 up + 8 down/gap/hold/clamps/reversal/Usage/Debug PASS");
 }
 '''
 (O/'volume.c').write_text(pre+setter+handle+reported+tests)

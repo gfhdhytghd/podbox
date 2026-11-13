@@ -11,6 +11,7 @@
 #include "iap.h"
 #include "iap/iap-core.h"
 #include "iap/remote_capture.h"
+#include "iap/agents_volume.h"
 #include "input/action.h"
 #include "system/app_util.h"
 #include "system/shutdown.h"
@@ -122,6 +123,9 @@ bool dbg_remote_input(void)
     bool inhibited = skin_flush_inhibited();
     skin_inhibit_flush(true);
     remote_input_active = true;
+#ifdef HAVE_USB_PODLINK
+    iap_agents_volume_enable(true);
+#endif
     lcd_set_viewport(NULL);
     lcd_setfont(FONT_SYSFIXED);
     button_clear_queue();
@@ -160,7 +164,7 @@ bool dbg_remote_input(void)
                 restore_irq(level);
                 if (!have) continue;
                 snprintf(line, sizeof(line),
-                         "VOL %lu tick=%lu echo=%02X target=%02X dir=%d "
+                         "VOL %lu tick=%lu previous=%02X target=%02X dir=%d "
                          "decision=%c\n", v.sequence, v.tick, v.echo, v.target,
                          v.direction, v.decision);
                 log_error = !put_log(fd, line);
@@ -242,6 +246,9 @@ bool dbg_remote_input(void)
     }
     if (fd >= 0) close(fd);
     remote_input_active = false;
+#ifdef HAVE_USB_PODLINK
+    iap_agents_volume_enable(false);
+#endif
     button_clear_queue();
     lcd_setfont(FONT_UI);
     skin_inhibit_flush(inhibited);

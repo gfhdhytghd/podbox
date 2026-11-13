@@ -155,6 +155,7 @@ screens/system/podlink_screen.c
 screens/system/agents_screen.c
 input/agents_shortcut.c
 screens/system/herdremote_model.c
+screens/system/detail_layout.c
 #endif
 screens/system/db_search.c
 screens/system/file_search.c

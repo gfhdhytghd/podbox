@@ -64,6 +64,10 @@ static unsigned long current_tick,shortcut_talking_at;
 static bool shortcut_talking,talk_held,talk_remote,talk_discarded,talk_req_up,talk_failed;
 static long talk_since,talk_until;
 static char talk_req[8],talk_note[64],outbox[OUTBOX][96];
+static int music;
+#define BUTTON_MULTIMEDIA_PLAYPAUSE 0x10000100
+static void __attribute__((unused)) default_event_handler(int b){assert(b==BUTTON_MULTIMEDIA_PLAYPAUSE);music++;}
+static bool native_play_pending;static unsigned long native_play_at __attribute__((unused));
 static int nout,view,ret,switches;static bool done;
 static unsigned int next_req=1;
 static struct {bool hello,result_new,result_ok;int voice;char result_req[8],result_text[64];}model;
@@ -78,6 +82,7 @@ code = re.sub(r'^#include .*$', '', (R/'firmware/export/button_chord.h').read_te
 code += function(action,'agents_shortcut_talking') + chord + remote
 for name in ['outbox_slot','take_req','talk_result','start_talk','finish_talk','talk_is_short','talk_wanted','take_talk_result']:
     code += '\n'+function(agents,name)
+if 'static void finish_native_play' in agents:code += '\n'+function(agents,'finish_native_play')
 code += '\nstatic void perform(int button) {struct gui_synclist list={0};int action=0;\n'
 code += r'''
  if(button==BUTTON_PLAY)action=ACTION_AGENTS_TALK;
@@ -99,7 +104,7 @@ static void reset(void){
  memset(&rstate,0,sizeof rstate);memset(&nstate,0,sizeof nstate);
  talk_held=talk_discarded=talk_failed=shortcut_talking=false;
  talk_note[0]=talk_req[0]=0;model.hello=true;model.voice=0;
- nout=ncommands=switches=0;done=false;
+ nout=ncommands=switches=music=0;native_play_pending=false;done=false;
 }
 static void rc(int b,int held,unsigned long tick){
  current_tick=tick;perform(agents_remote_button(&rstate,REMOTE_AGENTS,b,held,tick));
@@ -122,9 +127,11 @@ int main(void){
  reset();native(BUTTON_PLAY,BUTTON_PLAY,100);assert(ncommands==1&&sent_at[0]==100);
  assert(!talk_wanted());model.voice='t';current_tick=114;assert(!talk_wanted());
  current_tick=115;assert(talk_wanted());current_tick=100;model.voice=0;
- native(BUTTON_PLAY|BUTTON_REL,0,114);pair_is(0,"vc\t");assert(!talk_wanted());
+ native(BUTTON_PLAY|BUTTON_REL,0,114);pair_is(0,"vc\t");assert(!talk_wanted());assert(music==1);
+ reset();model.hello=false;native(BUTTON_PLAY,BUTTON_PLAY,100);assert(!talk_wanted());
+ native(BUTTON_PLAY|BUTTON_REL,0,114);assert(music==1&&!ncommands&&!talk_wanted());
  reset();native(BUTTON_PLAY,BUTTON_PLAY,100);native(BUTTON_PLAY|BUTTON_REL,0,115);
- pair_is(0,"vu\t");
+ pair_is(0,"vu\t");assert(!music);
  reset();native(BUTTON_PLAY,BUTTON_PLAY,100);
  native(BUTTON_SELECT|BUTTON_PLAY,BUTTON_SELECT|BUTTON_PLAY,110);
  assert(switches==1&&ncommands==2);pair_is(0,"vc\t");

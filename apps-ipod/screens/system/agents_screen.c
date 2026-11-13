@@ -79,6 +79,8 @@
 #include "backlight.h"
 #include "button.h"
 #include "font.h"
+#include "rbunicode.h"
+#include "diacritic.h"
 #include "podlink.h"
 #include "usb.h"
 #include "input/action.h"
@@ -97,6 +99,7 @@
 #include "system/activity.h"
 #include "speech/talk.h"
 #include "herdremote_model.h"
+#include "detail_layout.h"
 #include "agents_screen.h"
 
 enum view { VIEW_SPACES, VIEW_AGENTS, VIEW_DETAIL, VIEW_QUESTION, VIEW_USAGE,
@@ -192,6 +195,14 @@ static int cache_top;
 static long usage_next;         /* when to ask next */
 static long usage_at;           /* when the shown figures came */
 static unsigned int usage_serial;
+#ifdef IPOD_ACCESSORY_PROTOCOL
+static bool volume_paging;
+#endif
+static bool native_play_pending;
+static unsigned long native_play_at;
+_Static_assert(sizeof(struct detail_layout) <= 6400, "Detail layout cache budget");
+static struct detail_layout detail_layout;
+static int detail_body_y, detail_body_avail;
 static int usage_scroll, detail_scroll, detail_scroll_max, detail_page_lines;
 static struct row usage_from;   /* the spaces row to go back to */
 
@@ -1432,14 +1443,13 @@ static int draw_input(struct screen *d, struct viewport *vp, int y,
     return y + shown * USE_LINE + 2 * INPUT_PAD + DET_GAP;
 }
 
-/* The non-empty steps of the detail, oldest first; returns how many */
-static int detail_steps(const char *steps[HR_DETAIL_STEPS])
+static int detail_glyph(const char *text, int *bytes, void *ctx)
 {
-    int n = 0;
-    for (int i = 0; i < HR_DETAIL_STEPS; i++)
-        if (model.detail.step[i][0])
-            steps[n++] = model.detail.step[i];
-    return n;
+    ucschar_t ch;
+    const unsigned char *start = (const unsigned char *)text;
+    const unsigned char *next = utf8decode(start, &ch);
+    *bytes = next - start;
+    return ch == '\n' || IS_DIACRITIC(ch) ? 0 : font_get_width(ctx, ch);
 }
 
 /* Draw the detail view over the empty list. The agent's name and kind head
@@ -1547,40 +1557,44 @@ static void draw_detail(struct gui_synclist *list)
     }
     y += DET_GAP;
 
-    /* The message takes the lines it needs, the steps what is left */
-    const char *steps[HR_DETAIL_STEPS];
-    int nsteps = detail_steps(steps);
-    int avail = MAX(0, (vp->height - y) / USE_LINE);
+    /* Retain closed lines during streaming. A reader above the bottom
+     * keeps the accepted message, steps and body geometry until returning. */
+    bool frozen = detail_scroll < detail_scroll_max;
     struct font *pf = font_get(vp->font);
-    const char *text = det->say, *end;
-    int need = 0;
+    char identity[9] = "";
+    if (!strcmp(a->kind, "codex") && strlen(model.detail_revision) == 16)
+        snprintf(identity, sizeof identity, "%.8s", model.detail_revision);
     font_lock(vp->font, true);
-    for (const char *p = text; *p; need++)
-        p = text_wrap_next_punct(p, vp->width, pf, &end);
+    detail_layout_update(&detail_layout, detail_pane, identity, det->say,
+                         det, vp->width, frozen, detail_glyph, pf);
+    font_lock(vp->font, false);
+    if (!frozen || !detail_body_avail)
+    {
+        detail_body_y = y;
+        detail_body_avail = MAX(0, (vp->height - y) / USE_LINE);
+    }
+    y = detail_body_y;
+    int avail = detail_body_avail, need = detail_layout.count;
     detail_page_lines = MAX(1, avail);
-    int maximum = MAX(0, need + nsteps - avail);
+    /* Tool rows consume spare space; starting/finishing a tool must never
+     * push a message line off screen or change the scroll anchor. */
+    int maximum = MAX(0, need - avail);
     detail_scroll = hr_detail_scroll(detail_scroll, detail_scroll_max, maximum);
     detail_scroll_max = maximum;
     unsigned colour = t_trouble || fallback ? USE_DIM : USE_TEXT;
-    for (int i = 0; i < need; i++)
+    for (int i = detail_scroll; i < need && i < detail_scroll + avail; i++)
     {
-        const char *next = text_wrap_next_punct(text, vp->width, pf, &end);
-        if (i >= detail_scroll && i < detail_scroll + avail)
-        {
-            snprintf(line, sizeof line, "%.*s", (int)MIN(end - text,
-                                                     (long)sizeof line - 1),
-                     text);
-            text_at(d, 0, y + (i - detail_scroll) * USE_LINE, colour, line);
-        }
-        text = next;
+        int start = detail_layout.start[i], end = detail_layout.end[i];
+        snprintf(line, sizeof line, "%.*s", MIN(end - start, (int)sizeof line - 1),
+                 detail_layout.text + start);
+        text_at(d, 0, y + (i - detail_scroll) * USE_LINE, colour, line);
     }
-    font_lock(vp->font, false);
-    for (int i = 0; i < nsteps; i++)
+    int row = need - detail_scroll;
+    for (int i = 0; i < HR_DETAIL_STEPS && row < avail; i++)
     {
-        int row = need + i - detail_scroll;
-        if (row < 0 || row >= avail) continue;
-        snprintf(line, sizeof line, "› %s", steps[i]);
-        text_at(d, 0, y + row * USE_LINE, USE_DIM,
+        if (!detail_layout.steps[i][0]) continue;
+        snprintf(line, sizeof line, "› %s", detail_layout.steps[i]);
+        text_at(d, 0, y + row++ * USE_LINE, USE_DIM,
                 fit(line, sizeof line, line, vp->width));
     }
     d->set_foreground(fg);
@@ -1631,7 +1645,9 @@ static bool talk_is_short(void);
 
 static bool talk_wanted(void)
 {
-    if (talk_held && talk_is_short())
+    if ((talk_held && talk_is_short()) ||
+        (native_play_pending && (unsigned long)current_tick - native_play_at <
+                                (3 * HZ + 19) / 20))
         return false;
     if (talk_discarded && !talk_failed)
         return false;
@@ -1782,6 +1798,20 @@ static bool talk_is_short(void)
     return (unsigned long)current_tick - (unsigned long)talk_since < limit;
 }
 
+static void finish_native_play(void)
+{
+    bool tap = native_play_pending &&
+               (unsigned long)current_tick - native_play_at < (3 * HZ + 19) / 20;
+    native_play_pending = false;
+    finish_talk(talk_is_short());
+    if (tap)
+    {
+        talk_note[0] = '\0';
+        talk_failed = false;
+        default_event_handler(BUTTON_MULTIMEDIA_PLAYPAUSE);
+    }
+}
+
 static void forget_keys(void)
 {
     key_req[0] = '\0';
@@ -1926,12 +1956,26 @@ static void settle_viewport(struct gui_synclist *list)
     gui_synclist_layout(list);
 }
 
+static void update_volume_mode(void)
+{
+#ifdef IPOD_ACCESSORY_PROTOCOL
+    bool want = view != VIEW_USAGE &&
+                !(view == VIEW_CONFIRM && confirm_from == VIEW_USAGE);
+    if (want != volume_paging)
+    {
+        iap_agents_volume_enable(want);
+        volume_paging = want;
+    }
+#endif
+}
+
 /* Rebuild and draw, selecting the first row that can be chosen from select
  * on. In the question view the rows above it stay in view as far as they
  * fit, so a question is read from its start; in a list the selection goes
  * to the middle. top, when not -1, is the row to keep at the top instead. */
 static void show_at(struct gui_synclist *list, int select, int top)
 {
+    update_volume_mode();
     build_rows(list);
     gui_synclist_set_nb_items(list, nrows);
     gui_synclist_set_title(list, view_title(), Icon_NOICON);
@@ -2105,6 +2149,8 @@ static void switch_tab(struct gui_synclist *list, int dir)
 static void open_detail(struct gui_synclist *list, const struct hr_agent *a)
 {
     detail_scroll = detail_scroll_max = 0;
+    memset(&detail_layout, 0, sizeof detail_layout);
+    detail_body_avail = 0;
     snprintf(detail_pane, sizeof detail_pane, "%s", a->pane);
     detail_agent = *a;
     detail_ready = false;
@@ -2348,14 +2394,18 @@ int agents_screen(void)
     last_message = current_tick;
     usage_serial = model.usage.serial;
     usage_scroll = detail_scroll = detail_scroll_max = 0;
+    memset(&detail_layout, 0, sizeof detail_layout);
+    detail_body_avail = 0;
     detail_page_lines = 1;
     }
     cache_generation = podlink_generation();
 
     FOR_NB_SCREENS(i)
         viewportmanager_theme_enable(i, true, NULL);
+    native_play_pending = false;
 #ifdef IPOD_ACCESSORY_PROTOCOL
-    iap_agents_volume_enable(true);
+    volume_paging = false;
+    update_volume_mode();
 #endif
     push_current_activity(ACTIVITY_AGENTS);
     /* Play is held to talk here, and held long enough it would power off */
@@ -2443,8 +2493,8 @@ int agents_screen(void)
         /* A release the keymap did not see still ends the hold. A failure
          * stays in view while Play is held, and for a moment after. */
         bool play_down = agents_play_down();
-        if (talk_held && !play_down)
-            finish_talk(talk_is_short());
+        if ((talk_held || native_play_pending) && !play_down)
+            finish_native_play();
         if (talk_failed && play_down && TIME_BEFORE(current_tick, talk_until))
             talk_until = current_tick + 3 * HZ;
         if (talk_req[0] && TIME_AFTER(current_tick, talk_until))
@@ -2496,21 +2546,34 @@ int agents_screen(void)
             if (action == ACTION_LISTTREE_PGUP ||
                 action == ACTION_LISTTREE_PGDOWN)
             {
-                int direction = action == ACTION_LISTTREE_PGUP ? -1 : 1;
-                if (view == VIEW_USAGE)
+#ifdef IPOD_ACCESSORY_PROTOCOL
+                int raw_button;
+                get_action_statuscode(&raw_button);
+                if (view == VIEW_USAGE &&
+                    (raw_button & (BUTTON_RC_VOL_UP | BUTTON_RC_VOL_DOWN)))
                 {
-                    int height = list.parent[SCREEN_MAIN]->height;
-                    int maximum = MAX(0, HR_USAGE_SVCS * USE_BLOCK +
-                                         USE_LINE + 3 - height);
-                    usage_scroll = MAX(0, MIN(maximum,
-                                      usage_scroll + direction * height));
-                    draw_usage(&list);
+                    default_event_handler(action == ACTION_LISTTREE_PGUP ?
+                        BUTTON_MULTIMEDIA_VOLUME_UP : BUTTON_MULTIMEDIA_VOLUME_DOWN);
                 }
-                else if (view == VIEW_DETAIL)
+                else
+#endif
                 {
-                    detail_scroll = MAX(0, MIN(detail_scroll_max,
-                        detail_scroll + direction * detail_page_lines));
-                    draw_detail(&list);
+                    int direction = action == ACTION_LISTTREE_PGUP ? -1 : 1;
+                    if (view == VIEW_USAGE)
+                    {
+                        int height = list.parent[SCREEN_MAIN]->height;
+                        int maximum = MAX(0, HR_USAGE_SVCS * USE_BLOCK +
+                                             USE_LINE + 3 - height);
+                        usage_scroll = MAX(0, MIN(maximum,
+                                          usage_scroll + direction * height));
+                        draw_usage(&list);
+                    }
+                    else if (view == VIEW_DETAIL)
+                    {
+                        detail_scroll = MAX(0, MIN(detail_scroll_max,
+                            detail_scroll + direction * detail_page_lines));
+                        draw_detail(&list);
+                    }
                 }
                 action = ACTION_NONE;
             }
@@ -2649,6 +2712,8 @@ int agents_screen(void)
                 break;
             }
             case ACTION_AGENTS_TALK:
+                native_play_pending = true;
+                native_play_at = current_tick;
                 if (view != VIEW_CONFIRM)
                 {
                     start_talk(&list, false);
@@ -2662,12 +2727,13 @@ int agents_screen(void)
                 finish_talk(true);
                 break;
             case ACTION_AGENTS_SWITCH:
+                native_play_pending = false;
                 finish_talk(true);
                 ret = AGENTS_SWITCH_WPS;
                 done = true;
                 break;
             case ACTION_AGENTS_TALK_END:
-                finish_talk(talk_is_short());
+                finish_native_play();
                 break;
             case ACTION_STD_CONTEXT:
                 /* SELECT held is still one Enter in usage and detail: the
@@ -2725,7 +2791,9 @@ int agents_screen(void)
     pop_current_activity();
 #ifdef IPOD_ACCESSORY_PROTOCOL
     iap_agents_volume_enable(false);
+    volume_paging = false;
 #endif
+    native_play_pending = false;
     FOR_NB_SCREENS(i)
         viewportmanager_theme_undo(i, false);
     return ret;

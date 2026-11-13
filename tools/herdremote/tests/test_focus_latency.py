@@ -127,6 +127,9 @@ class Scheduling(unittest.TestCase):
             send('Working 5m %02ds' % sec)
         self.assertEqual(len(self.messages), 1)
         send('Working 5m 06s', say='New output')
+        self.assertEqual(len(self.messages), 1)
+        self.daemon.sent_detail_at -= 1
+        self.daemon.flush_detail()
         self.assertEqual(len(self.messages), 2)
         self.daemon.sent_detail_at -= 20
         send('Working 5m 30s', say='New output')

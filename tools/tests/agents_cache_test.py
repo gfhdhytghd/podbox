@@ -14,6 +14,7 @@ pre=r'''
 #include <stdio.h>
 #include <string.h>
 #include "herdremote_model.h"
+#include "detail_layout.h"
 #define PODLINK_CONNECTED 3
 #define PODLINK_CLOSE 6
 #define PODLINK_TEXT 2
@@ -24,6 +25,7 @@ struct podlink_message {int type;unsigned int length;const unsigned char *data;}
 enum view {VIEW_SPACES,VIEW_DETAIL,VIEW_USAGE,VIEW_CONFIRM};
 static enum view view;
 static struct hr_model model;
+static struct detail_layout detail_layout;static int detail_body_avail;
 struct row {int kind;char id[16];};
 struct gui_synclist {int start_item[1];};
 static struct row cache_row;
@@ -77,6 +79,8 @@ int main(void){
  assert(hr_model_apply(&model,d,strlen(d))==0);
  const char *age="D\tp1\t9\ttask\tworking\tmessage\t\t\t\t\t0\t1";
  assert(hr_model_apply(&model,age,strlen(age))==0);
+ const char *revision="D\tp1\t9\ttask\tworking\tmessage\t\t\t\t\t0\t2";
+ assert(hr_model_apply(&model,revision,strlen(revision))==0);
  puts("production cache entry/render: 500 warm returns keep detail/selection/scroll; zero host round trips before first frame; generation loss cold fetch; anchor up/bottom; identical/age-only D no redraw PASS");
  printf("hr_model cache bytes=%zu; selection snapshot bytes=%zu\n",sizeof(model),sizeof(cache_row)+sizeof(cache_top)+sizeof(cache_generation)+sizeof(cache_valid));
 }

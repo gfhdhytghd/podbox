@@ -80,7 +80,8 @@ class Reader:
                 self.latest.move_to_end(sid)
                 while len(self.latest) > 16:
                     self.latest.popitem(last=False)
-                revision = hashlib.sha256(json.dumps((message_id, completed, latest, steps[:3]), sort_keys=True).encode()).hexdigest()[:16]
+                identity = hashlib.sha256(str(message_id).encode()).hexdigest()[:8]
+                revision = identity + hashlib.sha256(json.dumps((latest, steps[:3]), sort_keys=True).encode()).hexdigest()[:8]
                 return dict(task='', now=meta.get('status', 'unknown'), say=latest,
                             steps=steps[:3], input='', cursor=0, revision=revision,
                             state_age_s=meta.get('state_age_s', -1))

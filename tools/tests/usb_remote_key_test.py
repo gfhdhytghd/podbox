@@ -4,7 +4,7 @@ import re
 import subprocess
 import sys
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(sys.argv[2]).resolve() if len(sys.argv)>2 else Path(__file__).resolve().parents[2]
 out = Path(sys.argv[1]).resolve()
 out.mkdir(parents=True, exist_ok=True)
 helper = ROOT / 'firmware/drivers/button_usb_remote.c'
@@ -56,6 +56,7 @@ preamble = r'''
 #define CONFIGURED 2
 #define USB_REMOTE_KEY_REQUEST 0x5b
 #define USB_REMOTE_KEY_MENU 1
+#define USB_REMOTE_KEY_SELECT 2
 #define TIME_BEFORE(a,b) ((long)((unsigned long)(a)-(unsigned long)(b)) < 0)
 struct usb_ctrlrequest { uint8_t bRequestType, bRequest; uint16_t wValue, wIndex, wLength; };
 static unsigned long current_tick;
@@ -98,36 +99,19 @@ static void poll_tick(int context,unsigned long t) {
     if(cursor==used) collect(context,0,t);
     else while(cursor<used) collect(context,posted[cursor++],t);
 }
-static void gesture(int context,unsigned long start,int held) {
+static void gesture(int context,unsigned long start,int id) {
     remote=(struct agents_remote_state){0};cursor=used;mapped_count=0;
-    current_tick=start;request(0x40,1,1,0,USB_CONTROL_ACK);
-    for(int i=1;i<=held;i++) {
-        if(i%10==0) request(0x40,1,1,0,USB_CONTROL_ACK);
-        poll_tick(context,start+i);
-        if(context==REMOTE_AGENTS && i<62) assert(!mapped_count);
-        if(context==REMOTE_AGENTS && i>=62) {
-            assert(mapped_count==2 && mapped[0]==BUTTON_SELECT);
-            assert(mapped[1]==(BUTTON_SELECT|BUTTON_REL));
-        }
-    }
-    request(0x40,1,0,0,USB_CONTROL_ACK);
-    poll_tick(context,start+held+1);poll_tick(context,start+held+2);
-    if(context==REMOTE_AGENTS) {
-        int expected=held>=60?BUTTON_SELECT:BUTTON_MENU;
-        assert(mapped_count==2 && mapped[0]==expected);
-        assert(mapped[1]==(expected|BUTTON_REL));
-    } else {
-        assert(mapped[0]==BUTTON_RC_MENU);
-        assert(mapped[mapped_count-1]==(BUTTON_RC_MENU|BUTTON_REL));
-        for(int i=1;i<mapped_count-1;i++)
-            assert(mapped[i]==(BUTTON_RC_MENU|BUTTON_REPEAT));
-    }
-    assert(!lastbtn && !agents_remote_pending(&remote));
+    current_tick=start;request(0x40,id,1,0,USB_CONTROL_ACK);
+    request(0x40,id,0,0,USB_CONTROL_ACK);
+    for(int i=1;i<=8;i++)poll_tick(context,start+i);
+    int expected=id==1?BUTTON_RC_MENU:BUTTON_RC_SELECT;
+    assert(mapped_count==2&&mapped[0]==expected&&mapped[1]==(expected|BUTTON_REL));
+    assert(!lastbtn&&!agents_remote_pending(&remote));
 }
 int main(void) {
     for(int type=0;type<256;type++) if(type!=0x40)
         request(type,1,1,0,USB_CONTROL_STALL);
-    for(int key=0;key<65536;key++) if(key!=1)
+    for(int key=0;key<65536;key++) if(key!=1&&key!=2)
         request(0x40,key,1,0,USB_CONTROL_STALL);
     request(0x40,1,2,0,USB_CONTROL_STALL);
     request(0x40,1,1,1,USB_CONTROL_STALL);
@@ -151,18 +135,11 @@ int main(void) {
     current_tick=600;request(0x40,1,1,0,USB_CONTROL_ACK);tick(601);tick(602);
     current_tick=699;request(0x40,1,1,0,USB_CONTROL_ACK);
     tick(700);assert(lastbtn);
-    current_tick=798;request(0x40,2,1,0,USB_CONTROL_STALL);
+    current_tick=798;request(0x40,3,1,0,USB_CONTROL_STALL);
     tick(798);assert(lastbtn);tick(799);tick(800);assert(!lastbtn);
-    gesture(REMOTE_AGENTS,1000,20); /* Short tap: complete native MENU. */
-    gesture(REMOTE_AGENTS,1200,59); /* Released before the threshold. */
-    gesture(REMOTE_AGENTS,1400,60); /* Release reaches the 600 ms boundary. */
-    gesture(REMOTE_AGENTS,1600,90); /* Timer fires once while still held. */
-    gesture(REMOTE_AGENTS,1800,220); /* Keepalives sustain a long hold. */
-    gesture(REMOTE_OTHER,2200,20);
-    gesture(REMOTE_OTHER,2400,90);
-    gesture(REMOTE_WPS,2600,20);
-    gesture(REMOTE_WPS,2800,90);
-    puts("EP0 -> real button queue -> Agents MENU tap / 600ms SELECT once PASS");
+    for(int c=REMOTE_OTHER;c<=REMOTE_WPS;c++)for(int id=1;id<=2;id++)
+        gesture(c,1000+c*200+id*50,id);
+    puts("EP0 Menu/Select back-to-back press/release survives debounce in all contexts PASS");
     puts("Outside Agents/WPS remote Menu press/repeat/release unchanged PASS");
     puts("EP0 strict parsing + real button queue press/repeat/release + 1s safety/wrap PASS");
 }

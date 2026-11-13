@@ -86,8 +86,9 @@ class DecoderTests(unittest.TestCase):
                 recorder = Recorder()
                 forward = k.MenuForwarder(recorder)
                 forward.frame(decode(frame), 1)
+                forward.poll(1.151)
                 expected = frame[:2] == b'\xee\x87' and frame[2] in (2, 3)
-                self.assertEqual(recorder.events, [(True, 1)] if expected else [])
+                self.assertEqual(recorder.events, [(1, True, 1.151), (1, False, 1.151)] if expected else [])
                 count += 1
                 menu += expected
         self.assertEqual(count, 31)
@@ -98,53 +99,62 @@ class Recorder:
     def __init__(self):
         self.events = []
 
-    def send(self, down, now):
-        self.events.append((down, now))
+    def send(self, down, now, key=1):
+        self.events.append((key, down, now))
         return True
 
 
 class ForwardTests(unittest.TestCase):
     def setUp(self):
-        self.usb = Recorder()
-        self.f = k.MenuForwarder(self.usb)
-
-    def test_short_release(self):
-        self.f.frame(b'\xee\x87\x02\x59', 0)
-        self.f.poll(.149)
-        self.assertTrue(self.f.down)
-        self.f.poll(.151)
-        self.assertEqual(self.usb.events, [(True, 0), (False, .151)])
-
-    def test_repeat_hold_and_release(self):
-        self.f.frame(b'\xee\x87\x03\xff', 0)
-        for i in range(1, 11):
-            self.f.frame(b'', i/10)
-        self.assertTrue(self.f.down)
-        self.assertEqual(len(self.usb.events), 11)
-        self.f.poll(1.151)
-        self.assertEqual(self.usb.events[-1], (False, 1.151))
-
-    def test_orphan_repeat_and_noise(self):
-        self.f.frame(b'', 0)
-        self.assertEqual(self.usb.events, [])
-        self.f.frame(b'\xee\x87\x02\x59', 1)
-        self.f.frame(None, 1.1)
-        self.f.frame(b'', 1.2)
-        self.assertFalse(self.f.down)
-        self.assertEqual(self.usb.events[-1], (False, 1.2))
-
-    def test_other_key_owns_repeats(self):
-        for frame in (b'\xee\x87\x04\x59', b'\x01\x02\x02\x59'):
-            self.setUp()
-            self.f.frame(b'\xee\x87\x02\x59', 0)
-            self.f.frame(frame, .05)
-            self.f.frame(b'', .1)
-            self.assertEqual(self.usb.events, [(True, 0), (False, .05)])
-
-    def test_duplicate_down_is_keepalive(self):
-        self.f.frame(b'\xee\x87\x02\x59', 0)
-        self.f.frame(b'\xee\x87\x02\x59', .1)
-        self.assertEqual(self.usb.events, [(True, 0), (True, .1)])
+        self.events=[]
+        class Port:
+            def send(_, down, now, key=1):self.events.append((key,down,now));return True
+        self.f=k.MenuForwarder(Port())
+    def test_single_and_one_repeat_stay_menu(self):
+        for repeat in (False,True):
+            self.setUp();self.f.frame(bytes.fromhex('ee870259'),0)
+            if repeat:self.f.frame(b'',.108)
+            self.assertEqual(self.events,[])
+            self.f.poll(.259)
+            self.assertEqual([(a,b) for a,b,t in self.events],[(1,True),(1,False)])
+    def test_hold_requires_continuing_stream_at_220ms(self):
+        self.f.frame(bytes.fromhex('ee870259'),0)
+        for t in (.108,.216):self.f.frame(b'',t)
+        self.assertEqual(self.events,[])
+        self.f.poll(.230);self.assertEqual(self.events,[]) # elapsed alone is not evidence
+        self.f.frame(b'',.324)
+        self.assertEqual([(a,b) for a,b,t in self.events],[(2,True),(2,False)])
+        self.f.frame(b'',.432);self.f.poll(.6)
+        self.assertEqual(len(self.events),2)
+    def test_threshold_and_foreign_repeat(self):
+        self.f.frame(bytes.fromhex('ee870259'),0)
+        self.f.frame(b'',.110);self.f.frame(b'',.220)
+        self.assertEqual(self.events,[(2,True,.220),(2,False,.220)])
+        self.setUp();self.f.frame(bytes.fromhex('ee870259'),0)
+        self.f.frame(bytes.fromhex('ee870459'),.05);self.f.frame(b'',.1)
+        self.assertEqual([(a,b) for a,b,t in self.events],[(1,True),(1,False)])
+    def test_orphan_noise_and_shutdown(self):
+        self.f.frame(b'',0);self.f.frame(None,.01);self.assertEqual(self.events,[])
+        self.f.frame(bytes.fromhex('ee870259'),1);self.f.release(1.05)
+        self.assertEqual([(a,b) for a,b,t in self.events],[(1,True),(1,False)])
+    def test_recorded_menu_logs(self):
+        import re
+        fixture=ROOT/'tests/fixtures'
+        # Fine timestamps in combo; ir-menu has only wall-clock seconds.
+        expected=[]
+        for line in (fixture/'ir-combo-ms.log').read_text().splitlines():
+            m=re.search(r't=([\d.]+) (NEC ([0-9a-f ]+) \(|REPEAT)',line)
+            if m:self.f.frame(bytes.fromhex(m[3]) if m[3] else b'',float(m[1]))
+        self.f.poll(10000)
+        keys=[key for key,down,t in self.events if down]
+        self.assertEqual(keys,[1,1,1,1,1,1])
+        self.setUp();count=0
+        for line in (fixture/'ir-menu.log').read_text().splitlines():
+            m=re.search(r'NEC (ee 87 0[23] [0-9a-f]{2}) ',line)
+            if m:
+                self.f.frame(bytes.fromhex(m[1]),count);self.f.poll(count+.151);count+=1
+        self.assertEqual(len(self.events),count*2)
+        self.assertTrue(all(key==1 for key,down,t in self.events))
 
 
 class USBError(Exception):

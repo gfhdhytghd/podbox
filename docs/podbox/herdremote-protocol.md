@@ -589,3 +589,25 @@ Deploy the matching `herdremote.py`, `hrappserver.py`, `hrsession.py`,
 `hrherdr.py`, `hrproto.py`, sibling `tools/podlink.py` and Python dependencies.
 This extension supersedes the older source/window and full-refresh-on-return
 rules while retaining the v1 voice, focus, key and result semantics.
+
+## Streaming detail stability (Follow-up 9)
+
+The optional 16-hex Codex revision has an eight-hex message-identity prefix
+and eight-hex visible-content suffix. Other sources may retain opaque
+revisions. Players/hosts still accept old revisions; no frame field or
+protocol version changes. Revision-only and elapsed-second changes do not
+trigger redraw. A known/unknown/fallback age-mode change does.
+
+The host coalesces message/tool changes to at most one D per second. A
+pending candidate is replaced by the newest candidate and discarded on
+pane/session/visibility changes. Input/cursor-only changes retain the fast
+key-read path. D logs expose only metadata (time, pane, revision, byte length,
+changed field names): INFO at most once/second and DEBUG for every send.
+
+The player retains at most 4096 message bytes, 128 fixed line boundaries,
+the previous bounded wire window and three tool rows (6288 host-test bytes,
+ARM size measured in the report). Streaming suffix overlap appends without
+reflowing closed lines. A scrolled-up view freezes that snapshot and its
+body geometry until the reader reaches the bottom. Tools occupy spare rows
+and never contribute to message scroll maximum. Cached return still needs
+zero host round trips for its first frame.

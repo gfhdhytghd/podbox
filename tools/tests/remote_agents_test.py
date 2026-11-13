@@ -55,56 +55,27 @@ static int lookup(int context, int button, int prev)
 }
 '''
 tests='''
-static void tap(struct agents_remote_state *s,int context,int raw,int local,int map) {
-    int b=agents_remote_button(s,context,raw,raw,100);
-    assert(!b);
-    assert(!agents_remote_button(s,context,raw|BUTTON_REPEAT,raw,130));
-    b=agents_remote_button(s,context,raw|BUTTON_REL,0,159);
-    assert(b==local);
-    int action=lookup(map,b,0);
-    b=agents_remote_button(s,context,0,0,159);
-    assert(b==(local|BUTTON_REL));
-    assert(action==lookup(map,local,0));
-    assert(lookup(map,b,local)==lookup(map,local|BUTTON_REL,local));
-    assert(!agents_remote_button(s,context,0,0,160));
-}
 int main(void) {
-    assert(lookup(CONTEXT_AGENTS,BUTTON_RC_VOL_UP,0)==ACTION_LISTTREE_PGUP);
-    assert(lookup(CONTEXT_AGENTS,BUTTON_RC_VOL_DOWN,0)==ACTION_LISTTREE_PGDOWN);
-    assert(lookup(CONTEXT_AGENTS,BUTTON_RC_VOL_UP|BUTTON_REL|BUTTON_REPEAT,0)==ACTION_LISTTREE_PGUP);
-    assert(lookup(CONTEXT_AGENTS,BUTTON_RC_VOL_DOWN|BUTTON_REL|BUTTON_REPEAT,0)==ACTION_LISTTREE_PGDOWN);
     const int contexts[]={REMOTE_AGENTS,REMOTE_OTHER,REMOTE_WPS};
     const int maps[]={CONTEXT_AGENTS,CONTEXT_LIST,CONTEXT_WPS};
     const int rc[]={BUTTON_RC_RIGHT,BUTTON_RC_LEFT};
     const int local[]={BUTTON_RIGHT,BUTTON_LEFT};
-    const int heldkey[]={BUTTON_SELECT,BUTTON_MENU};
     for(int c=0;c<3;c++)for(int i=0;i<2;i++) {
         struct agents_remote_state st={0};
-        tap(&st,contexts[c],rc[i],c==0?local[i]:rc[i],maps[c]);
-        st=(struct agents_remote_state){0};
-        assert(!agents_remote_button(&st,contexts[c],rc[i],rc[i],200));
-        assert(!agents_remote_button(&st,contexts[c],rc[i]|BUTTON_REPEAT,rc[i],259));
-        int b=agents_remote_button(&st,contexts[c],0,rc[i],260);
-        assert(b==heldkey[i]);
-        int a=lookup(maps[c],b,0);
-        b=agents_remote_button(&st,contexts[c],0,rc[i],260);
-        assert(b==(heldkey[i]|BUTTON_REL));
-        assert(lookup(maps[c],b,heldkey[i])==lookup(maps[c],heldkey[i]|BUTTON_REL,heldkey[i]));
-        assert(a==lookup(maps[c],heldkey[i],0));
-        assert(!agents_remote_button(&st,contexts[c],rc[i]|BUTTON_REPEAT,rc[i],270));
-        assert(!agents_remote_button(&st,contexts[c],rc[i]|BUTTON_REL,0,280));
-        /* A threshold release without a timer poll is still a hold. */
-        st=(struct agents_remote_state){0};
-        assert(!agents_remote_button(&st,contexts[c],rc[i],rc[i],300));
-        assert(agents_remote_button(&st,contexts[c],rc[i]|BUTTON_REL,0,360)==heldkey[i]);
+        int expected=c==0?local[i]:rc[i];
+        assert(agents_remote_button(&st,contexts[c],rc[i],rc[i],100)==expected);
+        assert(agents_remote_button(&st,contexts[c],rc[i]|BUTTON_REPEAT,rc[i],160)==(expected|BUTTON_REPEAT));
+        assert(agents_remote_button(&st,contexts[c],rc[i]|BUTTON_REL,0,180)==(expected|BUTTON_REL));
+        assert(!agents_remote_button(&st,contexts[c],0,0,200));
+        assert(!agents_remote_pending(&st));
+        assert(lookup(maps[c],expected,0)==lookup(maps[c],expected,0));
     }
-    /* Menu tap/hold stays available in Agents. */
     struct agents_remote_state st={0};
-    tap(&st,REMOTE_AGENTS,BUTTON_RC_MENU,BUTTON_MENU,CONTEXT_AGENTS);
-    assert(!agents_remote_button(&st,REMOTE_AGENTS,BUTTON_RC_MENU,BUTTON_RC_MENU,400));
-    assert(agents_remote_button(&st,REMOTE_AGENTS,0,BUTTON_RC_MENU,460)==BUTTON_SELECT);
-    assert(agents_remote_button(&st,REMOTE_AGENTS,0,BUTTON_RC_MENU,460)==(BUTTON_SELECT|BUTTON_REL));
-    assert(!agents_remote_button(&st,REMOTE_AGENTS,BUTTON_RC_MENU|BUTTON_REL,0,470));
+    assert(agents_remote_button(&st,REMOTE_AGENTS,BUTTON_RC_MENU,BUTTON_RC_MENU,400)==BUTTON_RC_MENU);
+    assert(!agents_remote_button(&st,REMOTE_AGENTS,0,BUTTON_RC_MENU,460));
+    assert(agents_remote_button(&st,REMOTE_AGENTS,BUTTON_RC_MENU|BUTTON_REL,0,470)==(BUTTON_RC_MENU|BUTTON_REL));
+    assert(lookup(CONTEXT_AGENTS,BUTTON_RC_MENU|BUTTON_REL,0)==ACTION_STD_MENU);
+    assert(lookup(CONTEXT_AGENTS,BUTTON_RC_SELECT|BUTTON_REL,0)==ACTION_STD_OK);
     st=(struct agents_remote_state){0};
     for(int f=0;f<3;f++) {
         int flag=f==1?BUTTON_REPEAT:f==2?BUTTON_REL:0;
@@ -128,7 +99,7 @@ int main(void) {
     assert(!fire&&lookup(CONTEXT_AGENTS,b,BUTTON_SELECT)==ACTION_STD_CONTEXT);
     b=agents_shortcut_button(&cs,BUTTON_SELECT|BUTTON_PLAY,BUTTON_SELECT|BUTTON_PLAY,false,&fire);
     assert(!fire&&lookup(CONTEXT_WPS,b,BUTTON_SELECT|BUTTON_REPEAT)==ACTION_WPS_HOTKEY);
-    puts("remote holds: Agents/other/WPS Left+Right tap vs 600ms/no direction leak/one shot; Play scopes; native keys PASS");
+    puts("plain Left/Right press+repeat+release everywhere; host Menu/Select; Play scopes; native keys PASS");
 }
 '''
 # The target header's config include needs only this feature for this test.

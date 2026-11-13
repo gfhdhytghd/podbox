@@ -394,10 +394,11 @@ static int apply_detail(struct hr_model *m, char **f, int nf)
         for (const char *p = f[11]; *p; p++)
             if ((*p < '0' || *p > '9') && (*p < 'a' || *p > 'f'))
                 return 0;
-    uint64_t signature = UINT64_C(14695981039346656037);
+    uint64_t signature = UINT64_C(14695981039346656037) ^
+                         (unsigned int)(age < 0 ? -age : 0);
     for (int i = 1; i < nf; i++)
     {
-        if (i == 2) continue; /* Age advances locally, not by redraws. */
+        if (i == 2 || i == 11) continue; /* Age/revision alone cannot redraw. */
         for (const unsigned char *p = (const unsigned char *)f[i]; ; p++)
         {
             signature = (signature ^ *p) * UINT64_C(1099511628211);

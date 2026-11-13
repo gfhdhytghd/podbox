@@ -13,6 +13,9 @@ import time
 LOG = logging.getLogger('podbox-usbkey')
 REQUEST = 0x5B
 MENU = 1
+SELECT = 2
+MENU_HOLD_SECONDS = 0.220
+MENU_HOLD_REPEATS = 2
 RECEIVER_SERIAL = '2543030725032a2a'
 IPOD_SERIAL = re.compile(r'.AA0000000000360\Z', re.DOTALL)
 RELEASE_SECONDS = 0.150
@@ -83,7 +86,13 @@ class MenuForwarder:
     def __init__(self, usb):
         self.usb = usb
         self.down = False
-        self.last = 0.0
+        self.first = self.last = 0.0
+        self.repeats = 0
+        self.sent = False
+
+    def pulse(self, key, now):
+        self.usb.send(True, now, key)
+        self.usb.send(False, now, key)
 
     def frame(self, frame, now):
         self.poll(now)
@@ -92,16 +101,25 @@ class MenuForwarder:
         menu = (len(frame) == 4 and frame[:2] == b'\xee\x87'
                 and frame[2] in (0x02, 0x03))
         if menu or (frame == b'' and self.down):
-            self.down, self.last = True, now
-            self.usb.send(True, now)
+            if not self.down:
+                self.down, self.sent = True, False
+                self.first, self.repeats = now, 0
+            else:
+                self.repeats += 1
+            self.last = now
+            # A timer alone cannot establish a hold: a continuing IR stream
+            # at/after the named threshold is required.
+            if (not self.sent and self.repeats >= MENU_HOLD_REPEATS and
+                    now - self.first + 1e-9 >= MENU_HOLD_SECONDS):
+                self.pulse(SELECT, now)
+                self.sent = True
         elif frame:
-            # A repeat belongs to the most recent full frame, including
-            # non-Apple frames. Never turn another key's repeat into Menu.
             self.release(now)
 
     def release(self, now):
         if self.down:
-            self.usb.send(False, now)
+            if not self.sent:
+                self.pulse(MENU, now)
             self.down = False
 
     def poll(self, now):
@@ -120,7 +138,7 @@ class USBRemote:
             self.util.dispose_resources(self.device)
             self.device = None
 
-    def send(self, down, now):
+    def send(self, down, now, key=MENU):
         if self.device is None and now < self.retry_at:
             return False
         try:
@@ -143,7 +161,7 @@ class USBRemote:
             if self.device is None:
                 return False
             # No configuration selection, interface claim or driver detach.
-            self.device.ctrl_transfer(0x40, REQUEST, MENU, int(down),
+            self.device.ctrl_transfer(0x40, REQUEST, key, int(down),
                                       b'', timeout=100)
             return True
         except (self.core.USBError, ValueError) as exc:

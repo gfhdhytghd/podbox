@@ -5,11 +5,10 @@
   HerdRemote files and dependencies before using the new foreground notice
   and structured Codex detail source. Codex needs its existing app-server
   daemon; the visible-only fallback does not scroll the computer's pane.
-- **Remote volume taps page once.** Repeated dock pairs within 350 ms form
+- **Remote volume taps page once.** Consecutive dock volume steps within 300 ms form
   one press; holding past 600 ms repeats at no more than four pages/s.
   PLAY starts audio capture immediately but hides the recording band until
   the native 150 ms or remote 300 ms hold threshold.
-- Switching from Agents to Now Playing keeps the computer cable in charge-only mode without a USB popup. Leaving Agents through its MENU exit still asks before connecting the disk. Remote MENU also works in the USB popup and screens that read wheel buttons directly.
 - **Double-tap remote Play to switch between Agents and Now Playing.**
   Start the second press within 200 ms of releasing the first. A single
   tap waits for that window. In Agents, recording starts on press: remote
@@ -18,16 +17,18 @@
   Now Playing to Agents when the switch opened it from Agents.
 - **Agents and PodLink can open with USB already connected.** A charging
   connection switches to PodLink without unplugging. A disk in use by the
-  computer stays with it. Leaving asks for disk access again; USB Mode
-  Charge keeps charging without a popup. Dock volume keys page Agents at
+  computer stays with it. USB Mode Charge keeps charging without a popup. Dock volume keys page Agents at
   up to four pages per second and leave the player's volume unchanged.
-- **Dock remote controls now have tap and hold actions.** Hold Left for
-  Menu or Right for Select for 0.6 seconds. A tap keeps its existing action;
-  a hold sends no Left/Right action and no longer seeks in Now Playing.
-  Outside Agents and Now Playing, holding remote Play opens Now Playing;
-  a tap keeps its existing action. Agents still uses Play for hold-to-talk.
-  Dock volume commands page Agents without changing the player's volume.
-  Leaving PodLink on a computer connection asks for disk access again.
+- **Remote Left/Right keep their normal tap and hold actions.** In Now
+  Playing their holds seek. Menu comes from the computer's IR bridge:
+  a stream continuing for at least 220 ms selects; a shorter stream sends
+  Menu after 150 ms of silence. Update the matching bridge and firmware
+  together. Unknown EP0 key IDs still fail.
+- **Usage remote volume controls the real volume.** Returning to an Agents
+  list or detail restores paging. Debug > Remote input logs volume page
+  decisions even outside Agents, while retaining real volume behavior.
+- **Streaming agent detail keeps existing line breaks.** Reading above the
+  bottom holds the visible message; returning to the bottom adopts updates.
 - **SELECT + PLAY switches between Now Playing and Agents.** From another
   screen it opens Agents. This replaces the configured Select + Play action.
   Native Play starts recording immediately. Add SELECT within 150 ms to

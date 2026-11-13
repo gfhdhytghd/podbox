@@ -168,6 +168,9 @@ class Daemon:
         self.sent_detail = None
         self.sent_detail_key = None
         self.sent_detail_at = 0.0
+        self.pending_detail = None
+        self.detail_log_at = float("-inf")
+        self.detail_log_suppressed = 0
         self.next_detail = 0.0
         self.detail_fast_due = None
         self.detail_edit_revision = getattr(self, "detail_edit_revision", 0) + 1
@@ -265,20 +268,45 @@ class Daemon:
 
     def send_detail(self, payload):
         fields = payload.split(b"\t")
-        # The player advances a known age locally; elapsed seconds alone do
-        # not cause a frame. A known/unknown/fallback transition still does.
         mode = b"known" if int(fields[2]) >= 0 else fields[2]
-        stable = fields[:2] + fields[3:]
-        stable[3] = VOLATILE.sub(b"#", stable[3])  # the working line, timers masked
+        # Revision and elapsed seconds are metadata, not visible changes.
+        stable = fields[:2] + fields[3:11]
+        stable[3] = VOLATILE.sub(b"#", stable[3])
         key = (tuple(stable), mode, self.detail_context(self.detail_pane)["status"])
         now = time.monotonic()
-        if key != self.sent_detail_key or (
-                len(fields) != 12 and payload != self.sent_detail and
-                now - self.sent_detail_at >= DETAIL_VOLATILE_SECONDS):
-            self.send(payload)
-            self.sent_detail = payload
-            self.sent_detail_key = key
-            self.sent_detail_at = now
+        legacy_due = (len(fields) != 12 and payload != self.sent_detail and
+                      now - self.sent_detail_at >= DETAIL_VOLATILE_SECONDS)
+        if key == self.sent_detail_key and not legacy_due:
+            self.pending_detail = None
+            return
+        # Editing remains responsive. Streaming body/tool changes share a
+        # one-second deadline, including changes caused by fast key reads.
+        old = self.sent_detail.split(b"\t") if self.sent_detail else None
+        same_body = old is not None and fields[1:2] + fields[3:9] == old[1:2] + old[3:9]
+        if old is not None and not same_body and now - self.sent_detail_at < DETAIL_SECONDS:
+            self.pending_detail = payload
+            return
+        self.pending_detail = None
+        names = ("type", "pane", "age", "task", "now", "say", "step1",
+                 "step2", "step3", "input", "cursor", "revision")
+        changed = [names[i] for i, value in enumerate(fields)
+                   if old is None or i >= len(old) or old[i] != value]
+        args = (now, fields[1].decode("utf-8", "replace"),
+                fields[11].decode() if len(fields) == 12 else "-",
+                len(payload), ",".join(changed))
+        log.debug("D time=%.3f pane=%s revision=%s bytes=%d changed=%s", *args)
+        if now - self.detail_log_at >= DETAIL_SECONDS:
+            log.info("D time=%.3f pane=%s revision=%s bytes=%d changed=%s suppressed=%d",
+                     *args, self.detail_log_suppressed)
+            self.detail_log_at, self.detail_log_suppressed = now, 0
+        else:
+            self.detail_log_suppressed += 1
+        self.send(payload)
+        self.sent_detail, self.sent_detail_key, self.sent_detail_at = payload, key, now
+
+    def flush_detail(self):
+        if self.pending_detail is not None and self.foreground in (None, 1):
+            self.send_detail(self.pending_detail)
 
     def adopt_foreground(self):
         value = getattr(self.link, "foreground", None)
@@ -293,6 +321,7 @@ class Daemon:
             self.next_detail = 0.0
         if value != 1:
             self.detail_fast_due = None
+            self.pending_detail = None
 
     def pump_reads(self):
         """Publish complete snapshots on the link thread, with bounded work.
@@ -301,6 +330,7 @@ class Daemon:
         Each worker owns its Herdr client, so probes cannot change the focus
         connection's capabilities. Stale subscription/session results are dropped.
         """
+        self.flush_detail()
         key = (self.session_generation, self.subscribed, self.subscribed_tab)
         if self.model_job and self.model_job[1].done():
             requested, future = self.model_job
@@ -394,6 +424,7 @@ class Daemon:
         """Send whatever the player's picture lacks."""
         if self.sent_ws is None or self.foreground == 2:
             return  # no Agents client has introduced itself
+        self.flush_detail()
         self.flush_replies()
         if not self.model_time:
             return  # do not present an empty startup model while a read is pending
@@ -465,6 +496,7 @@ class Daemon:
             if pane != self.detail_pane:
                 self.sent_detail = None
                 self.sent_detail_key = None
+                self.pending_detail = None
                 self.detail_fast_due = None
                 self.key_details.clear()
             self.detail_pane = pane
@@ -613,8 +645,9 @@ def main():
                         help="usage-dump indexing budget in seconds (default: 6)")
     hrvoice.add_arguments(parser)
     hrkeys.add_arguments(parser)
+    parser.add_argument("--debug", action="store_true", help="log metadata for every detail frame")
     args = parser.parse_args()
-    logging.basicConfig(stream=sys.stdout, level=logging.INFO,
+    logging.basicConfig(stream=sys.stdout, level=logging.DEBUG if args.debug else logging.INFO,
                         format="%(asctime)s %(levelname)s %(message)s")
     if args.usage_dump:
         cache = hrusage.UsageCache()

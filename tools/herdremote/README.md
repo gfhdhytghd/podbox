@@ -11,13 +11,23 @@ computer onto the iPod, in **System > Agents**. From the player you can:
 - SELECT opens that agent's detail: task, current activity, latest message and
   up to three tool steps. A nonempty input takes priority in a cursor-following
   block of at most five lines. Ordinary updates are at most once per second;
-  completed detail key taps request a fresh read after 75 ms. MENU returns to the Space;
+  completed detail key taps request a fresh read after 75 ms. Input-only
+  updates retain that fast path; message/tool changes coalesce to one second.
+  MENU returns to the Space;
 - hold Play/Pause to dictate with the computer's microphone; release to finish.
   Wheel focus waits while Play is held;
 - answer Claude Code questions/permission prompts and Codex approvals/questions.
   New questions pop up oldest first, after any hold-to-talk and its result;
 - switch between Spaces and Usage with LEFT/RIGHT. Usage shows each service's
   5-hour and weekly limits, tokens this week and their equivalent API price.
+
+Remote PLAY taps select after the 200 ms double-tap window; double taps
+switch screens. Native PLAY taps under 150 ms play/pause music. Remote holds
+of at least 300 ms and native holds of at least 150 ms talk; recording starts
+on press and its band appears only at the hold threshold. Usage uses real
+remote volume. List/detail restore virtual volume paging. Remote Left/Right
+retain their ordinary meanings, including seeking outside Agents. The IR
+bridge supplies Menu or Select after classifying the Menu stream.
 
 Navigation v2 firmware uses these controls:
 
@@ -510,3 +520,17 @@ focus/keys, opens a player, starts voice, or controls the deployed service.
 | `hrvoice.py` | Session-bus voice calls, hold ownership and independent stop watchdog |
 | `hrkeys.py` | Whitelisted desktop key taps, counted batches and bounded outstanding work |
 | `tests/` | `python3 -m unittest discover -s tools/herdremote/tests` |
+
+## Detail stability and diagnostics
+
+Closed display lines keep their breaks during a streaming message. A reader
+scrolled above the bottom keeps a bounded snapshot of the message and tools;
+returning to the bottom adopts the latest message. Tools use spare display
+rows and cannot push a message line out of view. A completion timestamp or
+revision without changed visible fields causes no D frame or redraw.
+
+D-send logs contain monotonic time, pane, revision, byte length and changed
+field names, never message/input text. INFO is limited to one line per
+second, with a suppressed count for fast input frames. `--debug` emits
+metadata for every D frame. The app-server stays read-only and fallback
+herdr reads stay within the visible viewport.
