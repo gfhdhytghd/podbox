@@ -121,6 +121,28 @@ bool ide_powered()
 #define CHRG_BACKOFF_MAX       (30*60*HZ)
 #define CHRG_STABLE_RESET      (10*60*HZ)
 
+enum {
+    CHRG_INPUT_LOW_MA = 100,
+    CHRG_INPUT_FALLBACK_MA = 500,
+    CHRG_INPUT_HIGH_MA = 1000,
+};
+static volatile int chrg_input_requested = CHRG_INPUT_LOW_MA;
+static volatile int chrg_input_applied = CHRG_INPUT_LOW_MA;
+static volatile int chrg_input_ceiling = CHRG_INPUT_HIGH_MA;
+
+/* Clear the double-current bit before changing HPWR, so lowering a tier
+ * never passes through the unintended 200 mA combination. IRQs are masked. */
+static void chrg_apply_input(int requested)
+{
+    int limit = MIN(requested, chrg_input_ceiling);
+    GPIOCMD = 0xb070e | (limit < CHRG_INPUT_LOW_MA ? 1 : 0);
+    GPIOCMD = 0xc000e;
+    GPIOCMD = 0xb060e | (limit >= CHRG_INPUT_FALLBACK_MA ? 1 : 0);
+    if (limit >= CHRG_INPUT_HIGH_MA)
+        GPIOCMD = 0xc000f;
+    chrg_input_applied = limit;
+}
+
 static struct timeout chrg_monitor_tmo;
 /* ISR owns sampling; thread accesses/reset take the IRQ lock. */
 static volatile bool chrg_monitoring, chrg_backoff, chrg_pulse_armed;
@@ -151,6 +173,7 @@ void usb_charging_guard_reset(void)
     chrg_stop_monitor();
     chrg_clear_trace();
     chrg_backoff = false;
+    chrg_input_ceiling = CHRG_INPUT_HIGH_MA;
     chrg_triggers = 0;
     chrg_last_trigger = chrg_retry_at = 0;
     chrg_next_backoff = CHRG_BACKOFF_FIRST;
@@ -205,9 +228,18 @@ static int chrg_monitor_cb(struct timeout *tmo)
             chrg_pulses[tail] = now;
             if (++chrg_count == CHRG_DROPOUTS)
             {
-                chrg_backoff = true;
                 chrg_last_trigger = now;
                 ++chrg_triggers;
+                if (chrg_input_applied == CHRG_INPUT_HIGH_MA)
+                {
+                    /* First reduce load without inhibiting battery charge.
+                     * Keep this ceiling until unplug/settings reset. */
+                    chrg_input_ceiling = CHRG_INPUT_FALLBACK_MA;
+                    chrg_apply_input(chrg_input_requested);
+                    chrg_clear_trace();
+                    return 1;
+                }
+                chrg_backoff = true;
                 chrg_retry_at = now + chrg_next_backoff;
                 chrg_next_backoff = MIN(chrg_next_backoff * 2,
                                         CHRG_BACKOFF_MAX);
@@ -230,8 +262,8 @@ static int chrg_monitor_cb(struct timeout *tmo)
     return 1;
 }
 
-/* Apply only C1 here: the USB core's budget remains authoritative for
- * SUSP/HPWR. Both thread callers use this same policy. */
+/* C1 policy is shared by both callers. Input tier changes belong to the
+ * budget setter and the qualified-dropout ISR, not this status query. */
 static bool usb_charge_apply(int maxcurrent)
 {
     int oldlevel = disable_irq_save();
@@ -267,6 +299,8 @@ static bool usb_charge_apply(int maxcurrent)
 void usb_charging_guard_get_status(struct usb_charge_guard_status *status)
 {
     int oldlevel = disable_irq_save();
+    status->input_limit_ma = chrg_input_applied;
+    status->input_ceiling_ma = chrg_input_ceiling;
     status->dropouts = chrg_count;
     status->triggers = chrg_triggers;
     status->last_trigger_tick = chrg_last_trigger;
@@ -280,12 +314,20 @@ void usb_charging_guard_get_status(struct usb_charge_guard_status *status)
 #ifdef HAVE_USB_CHARGING_ENABLE
 void usb_charging_maxcurrent_change(int maxcurrent)
 {
-    /* LTC4066 SUSP: high blocks USB input. HPWR: 100/500 mA total input.
-     * Normally C1 is low at either limit: the chip prioritizes system load
-     * and reduces battery current. Only observed oscillation pauses charge. */
-    GPIOCMD = 0xb070e | (maxcurrent < 100 ? 1 : 0);
-    GPIOCMD = 0xb060e | (maxcurrent >= 500 ? 1 : 0);
+    int oldlevel = disable_irq_save();
+#ifndef BOOTLOADER
+    /* Keep the USB descriptor/grant unchanged. The target input setting
+     * doubles the former 500 mA tier; the weak-source ceiling can lower it. */
+    if (maxcurrent >= CHRG_INPUT_FALLBACK_MA)
+        maxcurrent = CHRG_INPUT_HIGH_MA;
+#endif
+    chrg_input_requested = maxcurrent < CHRG_INPUT_LOW_MA ? 0 :
+        maxcurrent >= CHRG_INPUT_HIGH_MA ? CHRG_INPUT_HIGH_MA :
+        maxcurrent >= CHRG_INPUT_FALLBACK_MA ? CHRG_INPUT_FALLBACK_MA :
+                                             CHRG_INPUT_LOW_MA;
+    chrg_apply_input(chrg_input_requested);
     usb_charge_apply(maxcurrent);
+    restore_irq(oldlevel);
 }
 #endif
 

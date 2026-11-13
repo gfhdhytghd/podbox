@@ -85,6 +85,8 @@ int usb_charging_get_mode(void);
 int usb_charging_current_grant(void);
 #ifdef IPOD_6G
 struct usb_charge_guard_status {
+    int input_limit_ma;
+    int input_ceiling_ma;
     unsigned int dropouts; /* completed short pulses in the observation window */
     unsigned int triggers;
     unsigned int backoff_seconds;

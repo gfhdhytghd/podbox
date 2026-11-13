@@ -25,6 +25,7 @@ static void flush_gpio(void)
     {
         case 0xb070e: gpio_b = (gpio_b & ~0x80u) | (bit << 7); break;
         case 0xb060e: gpio_b = (gpio_b & ~0x40u) | (bit << 6); break;
+        case 0xc000e: gpio_c = (gpio_c & ~1u) | bit; break;
         case 0xc010e: gpio_c = (gpio_c & ~2u) | (bit << 1); break;
     }
 }
@@ -235,6 +236,10 @@ static void expect_current(int expected)
     flush_gpio();
     assert(!!(gpio_b & 0x80) == (expected < 100));
     assert(!!(gpio_b & 0x40) == (expected >= 500));
+#ifndef BOOTLOADER
+    assert(!!(gpio_c & 1) == (expected >= 500 &&
+                             chrg_input_ceiling == CHRG_INPUT_HIGH_MA));
+#endif
     assert(!!(gpio_c & 2) == !enabled);
     unsigned int status = power_input_status();
     assert(((status & POWER_INPUT_CHARGER) != 0) == enabled);
@@ -277,7 +282,7 @@ static void attach(int mode)
     /* Attach must undo the unplug/boot SUSP command before any host request.
      * Do not drain an artificial charger event: insertion queues none. */
     assert(usb_charging_maxcurrent() == 100);
-    assert(previous_previous_gpio == 0xb070e);
+    assert(previous_previous_gpio == 0xc000e);
     assert(previous_gpio == 0xb060e);
     assert(test_gpio == (uint32_t)(0xc010e |
            (mode == USB_CHARGING_DISABLE ? 1 : 0)));
@@ -380,11 +385,14 @@ static void run_guard_traces(void)
     insert(USB_CHARGING_ENABLE);
     descriptor(USB_DT_CONFIG, 250);
     configure(1);
+    pulses(8, 10*HZ);
+    assert(!chrg_backoff && chrg_triggers == 1);
+    assert(chrg_input_applied == 500 && chrg_input_ceiling == 500);
     unsigned int schedule[] = {60, 120, 240, 480, 960, 1800, 1800};
     for (unsigned int n = 0; n < ARRAYLEN(schedule); ++n)
     {
         pulses(8, 10*HZ);
-        assert(chrg_backoff && chrg_triggers == n + 1);
+        assert(chrg_backoff && chrg_triggers == n + 2);
         struct usb_charge_guard_status status;
         usb_charging_guard_get_status(&status);
         assert(status.dropouts == 8);
@@ -396,11 +404,11 @@ static void run_guard_traces(void)
         long retry_at = chrg_retry_at;
         trace(true, schedule[n]*HZ - 1);
         assert(TIME_BEFORE(current_tick, retry_at));
-        assert(chrg_backoff && chrg_triggers == n + 1);
+        assert(chrg_backoff && chrg_triggers == n + 2);
         trace(true, 1);
         power_input_status();
         assert(!chrg_backoff && chrg_monitor_tmo.active);
-        assert(chrg_triggers == n + 1 && chrg_count == 0);
+        assert(chrg_triggers == n + 2 && chrg_count == 0);
         expect_current(500);
     }
     /* Recovery restores the first delay only after sustained low !CHRG. */
@@ -413,7 +421,7 @@ static void run_guard_traces(void)
     usb_charging_enable(USB_CHARGING_ENABLE);
     assert(!chrg_backoff && !chrg_count && !chrg_triggers);
     expect_current(500);
-    pulses(8, 5*HZ);
+    pulses(16, 5*HZ);
     assert(chrg_backoff);
     usb_core_bus_suspend(true);
     expect_current(0);

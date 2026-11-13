@@ -307,51 +307,57 @@ void fatal_error(int err)
 }
 
 #if (CONFIG_STORAGE & STORAGE_ATA)
-extern unsigned short battery_level_disksafe;
+enum battery_trap_limits {
+    BATTERY_TRICKLE_BELOW_MV = 3250,
+    BATTERY_BOOT_MIN_MV = 3400,
+    BATTERY_VSYSOK_MIN_MV = 3200,
+    BATTERY_VSYSOK_3200 = 0xA,
+    BATTERY_TRICKLE_LIMIT_MA = 100,
+    BATTERY_FAST_LIMIT_MA = 1000,
+};
+
 static void battery_trap(void)
 {
     int vbat, old_verb;
-    int th = 50;
 
     old_verb = verbose;
     verbose = true;
 
-    usb_charging_maxcurrent_change(100);
+    /* The target charge gate otherwise inherits USB_CHARGING_DISABLE. */
+    usb_charging_enable(USB_CHARGING_ENABLE);
+    usb_charging_maxcurrent_change(BATTERY_TRICKLE_LIMIT_MA);
 
     while (1)
     {
         vbat = _battery_voltage();
 
-        /*  Two reasons to use this threshold (may require adjustments):
-         *  - when USB (or wall adaptor) is plugged/unplugged, Vbat readings
-         *    differ as much as more than 200 mV when charge current is at
-         *    maximum (~340 mA).
-         *  - RB uses some sort of average/compensation for battery voltage
-         *    measurements, battery icon blinks at battery_level_disksafe,
-         *    when the HDD is used heavily (large database) the level drops
-         *    to battery_level_shutoff quickly.
-         */
-        if (vbat >= battery_level_disksafe + th)
+        /* This is the live ADC voltage, not an unloaded-cell reading.
+         * Maximum charge can lift it by about 200 mV. */
+        if (vbat >= BATTERY_BOOT_MIN_MV)
             break;
-        th = 200;
 
         if (power_input_status() != POWER_INPUT_NONE) {
+            usb_charging_maxcurrent_change(vbat < BATTERY_TRICKLE_BELOW_MV ?
+                BATTERY_TRICKLE_LIMIT_MA : BATTERY_FAST_LIMIT_MA);
             lcd_set_foreground(LCD_RBYELLOW);
             printf("Low battery: %d mV, charging...     ", vbat);
             sleep(HZ*3);
         }
         else {
+            usb_charging_maxcurrent_change(BATTERY_TRICKLE_LIMIT_MA);
             /* Wait for the user to insert a charger */
             int tmo = 10;
             lcd_set_foreground(LCD_REDORANGE);
             while (1) {
                 vbat = _battery_voltage();
+                if (vbat >= BATTERY_BOOT_MIN_MV)
+                    break;
                 printf("Low battery: %d mV, power off in %d ", vbat, tmo);
                 if (!tmo--) {
                     /* Raise Vsysok (hyst=0.02*Vsysok) to avoid PMU
                        standby<->active looping */
-                    if (vbat < 3200)
-                        pmu_write(PCF5063X_REG_SVMCTL, 0xA /*3200mV*/);
+                    if (vbat < BATTERY_VSYSOK_MIN_MV)
+                        pmu_write(PCF5063X_REG_SVMCTL, BATTERY_VSYSOK_3200);
                     power_off();
                 }
                 sleep(HZ*1);

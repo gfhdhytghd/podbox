@@ -703,7 +703,7 @@ static bool view_battery(void)
 #else
                 lcd_putsf(0, 3, "Charger: %s",
                          charger_inserted() ? "present" : "absent");
-                lcd_putsf(0, 4, "USB current limit: %d mA",
+                lcd_putsf(0, 4, "USB budget: %d mA",
                           usb_charging_maxcurrent());
 #if defined(IPOD_6G)
                 /* Read output latches as well as software policy: an input
@@ -721,8 +721,10 @@ static bool view_battery(void)
                           usb_charging_get_mode() == USB_CHARGING_DISABLE ?
                           "off" : usb_charging_get_mode() == USB_CHARGING_FORCE ?
                           "force" : "on");
-                lcd_putsf(0, 9, "SUSP: %d HPWR: %d",
-                          !!(gpio_b & 0x80), !!(gpio_b & 0x40));
+                int input_limit = (gpio_b & 0x80) ? 0 :
+                    ((gpio_b & 0x40) ? 500 : 100) * ((gpio_c & 1) ? 2 : 1);
+                lcd_putsf(0, 9, "Input: %dmA C0:%d S:%d H:%d", input_limit,
+                          !!(gpio_c & 1), !!(gpio_b & 0x80), !!(gpio_b & 0x40));
                 lcd_putsf(0, 10, "Battery: %d mV", y);
                 lcd_putsf(0, 11, "USB state: %d (0=D 1=A 2=C)",
                           usb_core_get_state());
@@ -734,8 +736,8 @@ static bool view_battery(void)
                           guard.dropouts, guard.triggers);
                 lcd_putsf(0, 14, "Backoff: %us Next: %us",
                           guard.backoff_seconds, guard.next_backoff_seconds);
-                lcd_putsf(0, 15, "Last trigger: %lds (boot)",
-                          guard.last_trigger_tick / HZ);
+                lcd_putsf(0, 15, "Last: %lds Cap: %dmA",
+                          guard.last_trigger_tick / HZ, guard.input_ceiling_ma);
 #endif
 #endif /* target type */
                 break;
