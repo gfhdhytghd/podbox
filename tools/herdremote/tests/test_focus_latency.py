@@ -119,6 +119,19 @@ class Scheduling(unittest.TestCase):
         self.daemon.send_detail(hrproto.detail('p1', dict(now='done', say='Summary', state_age_s=-2)))
         self.assertEqual(len(self.messages), 3)
 
+    def test_working_timer_alone_does_not_resend_until_it_is_stale(self):
+        self.daemon.detail_pane = 'p1'
+        def send(now, say='Out'):
+            self.daemon.send_detail(hrproto.detail('p1', dict(now=now, say=say, state_age_s=1)))
+        for sec in range(1, 6):
+            send('Working 5m %02ds' % sec)
+        self.assertEqual(len(self.messages), 1)
+        send('Working 5m 06s', say='New output')
+        self.assertEqual(len(self.messages), 2)
+        self.daemon.sent_detail_at -= 20
+        send('Working 5m 30s', say='New output')
+        self.assertEqual(len(self.messages), 3)
+
     def test_changed_agent_metadata_discards_an_old_detail_result(self):
         self.ready()
         meta = dict(kind='claude', status='working', title='Task')

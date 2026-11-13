@@ -17,6 +17,7 @@ from concurrent.futures import ThreadPoolExecutor
 import logging
 import os
 import queue
+import re
 import signal
 import sys
 import threading
@@ -43,6 +44,10 @@ CONFIRM_SECONDS = 5.0
 DETAIL_SECONDS = 1.0
 DETAIL_RECENT_LINES = 240
 DETAIL_KEY_SETTLE_SECONDS = 0.075
+# A live timer or token count in the working line changes every second and
+# must not redraw the player's view; the line still refreshes this often.
+DETAIL_VOLATILE_SECONDS = 15.0
+VOLATILE = re.compile(rb"\d+(?:\.\d+)?[kKmM]? tokens|\d+(?:\.\d+)?[hms]\b(?: \d+[ms]\b)*")
 
 log = logging.getLogger("herdremote")
 
@@ -158,6 +163,7 @@ class Daemon:
         self.detail_pane = None
         self.sent_detail = None
         self.sent_detail_key = None
+        self.sent_detail_at = 0.0
         self.next_detail = 0.0
         self.detail_fast_due = None
         self.detail_edit_revision = getattr(self, "detail_edit_revision", 0) + 1
@@ -256,12 +262,16 @@ class Daemon:
         # The player advances a known age locally; elapsed seconds alone do
         # not cause a frame. A known/unknown/fallback transition still does.
         mode = b"known" if int(fields[2]) >= 0 else fields[2]
-        key = (tuple(fields[:2] + fields[3:]), mode,
-               self.detail_context(self.detail_pane)["status"])
-        if key != self.sent_detail_key:
+        stable = fields[:2] + fields[3:]
+        stable[3] = VOLATILE.sub(b"#", stable[3])  # the working line, timers masked
+        key = (tuple(stable), mode, self.detail_context(self.detail_pane)["status"])
+        now = time.monotonic()
+        if key != self.sent_detail_key or (
+                payload != self.sent_detail and now - self.sent_detail_at >= DETAIL_VOLATILE_SECONDS):
             self.send(payload)
             self.sent_detail = payload
             self.sent_detail_key = key
+            self.sent_detail_at = now
 
     def pump_reads(self):
         """Publish complete snapshots on the link thread, with bounded work.
