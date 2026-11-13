@@ -217,10 +217,16 @@ unsigned int remote_log_format(const struct remote_log_record *r,
     {
         struct remote_volume_trace v;
         memcpy(&v, r->data, sizeof(v));
-        n = snprintf(out, size,
-            "LOG VOL %lu tick=%lu previous=%02X target=%02X dir=%d "
-            "decision=%c source=DOCK", v.sequence, v.tick, v.echo, v.target,
-            v.direction, v.decision);
+        if (v.decision == 'I')
+            n = snprintf(out, size,
+                "LOG VOL %lu tick=%lu previous=%02X target=%02X dir=%d "
+                "decision=ignored-pc-connected source=DOCK",
+                v.sequence, v.tick, v.echo, v.target, v.direction);
+        else
+            n = snprintf(out, size,
+                "LOG VOL %lu tick=%lu previous=%02X target=%02X dir=%d "
+                "decision=%c source=DOCK", v.sequence, v.tick, v.echo, v.target,
+                v.direction, v.decision);
     }
     else if (r->kind == REMOTE_LOG_LOST)
         n = snprintf(out, size, "LOG LOST %lu", r->a);
@@ -254,7 +260,9 @@ unsigned int remote_log_format(const struct remote_log_record *r,
                      (r->a & 2) ? "PC" : "DOCK",
                      (r->a & 1) ? "VOL+" : "VOL-",
                      r->b == 0 ? "used" : r->b == 1 ? "fallback" :
-                     r->b == 2 ? "dropped-dup" : "ignored-outside-or-stale",
+                     r->b == 4 ? "ignored-pc-connected" :
+                     r->b == 5 ? "ignored-usage-host-keys" :
+                     "ignored-outside-or-disconnected",
                      pair.press, pc_tick, dock_tick);
     }
     else if (r->kind == REMOTE_LOG_PAGE)

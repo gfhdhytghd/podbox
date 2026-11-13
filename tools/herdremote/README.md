@@ -580,3 +580,66 @@ host's unknown-TEXT parser ignores LOG frames without executing commands or
 replying. LOG frames never enter HerdRemote's application command parser,
 subscriptions, detail display or voice path. They do not change Agents' cached
 return behavior or the foreground lease.
+
+## Usage remote arrow keys (Follow-up 15 S2)
+
+This replaces the initial FU15 Usage audio-volume decision. In connected
+Usage, neither Dock volume nor PC EP0 volume changes iPod audio or pages.
+PC EP0 reports in other Agents views still page one step each. With neither
+computer signal, Usage retains its original Dock audio-volume setter.
+
+The player sends `vw\t1` (Usage) or `vw\t0` (any other Agents view), as a
+single PodLink TEXT frame. A direct, nonqueued refresh runs every 250 ms;
+a view change sends immediately on the next UI loop and exit sends 0.
+Failed sends retry without enqueueing old leases. HerdRemote accepts only
+those two exact records, requires an introduced open Agents session, and
+invalidates on reset, foreground loss, link close or shutdown. Older hosts
+ignore vw; old firmware sends no lease, so S2 stays inactive.
+
+HerdRemote owns `$XDG_RUNTIME_DIR/podbox-usage-keys/` (0700; default root
+`/run/user/<uid>`). It atomically publishes `view.json`: version 1, boolean
+usage, random per-view/session token and monotonic expiry, 750 ms after the
+last valid view record. `keys.sock` is a nonblocking Unix datagram endpoint,
+0600. An exclusive owner.lock prevents a second daemon from removing an
+active endpoint. The bridge reads this state for each counted volume
+report, and sends nothing when absent, malformed, false or expired. It sends
+`UK1 <token> <monotonic-send-time> <left|right|up|down> <count>` to the socket.
+HerdRemote rechecks token, open session, view expiry and report age under
+100 ms, including immediately before a deferred key worker starts. Buffered
+old datagrams are discarded; no command queue/retry or stale replay exists.
+Lost view-leave messages expire within 750 ms; detected link loss disables
+immediately. A stopped/hung daemon cannot turn a fresh state file into keys.
+
+Each full volume frame starts a new hold and sends exactly one horizontal
+tap. The first REPEAT is skipped (`VOL_IGNORE_FIRST_REPEATS = 1`). Every
+later associated REPEAT produces one batch by age from the full frame's
+first IR edge. Final named thresholds in usb_remote_key.py are:
+
+| Hold age | Batch per counted report | Constant starting tier |
+| --- | --- | --- |
+| <0.5 s | 1 Left/Right | initial |
+| 0.5–1.0 s | 3 Left/Right | USAGE_THREE_CHARS_SECONDS = 0.5 |
+| 1.0–4.0 s | 10 Left/Right | USAGE_TEN_CHARS_SECONDS = 1.0 |
+| 4.0–7.0 s | 1 Up/Down | USAGE_VERTICAL_SECONDS = 4.0 |
+| >=7.0 s | 3 Up/Down (cap) | USAGE_THREE_LINES_SECONDS = 7.0 |
+
+Vol+ selects Left/Up; Vol- selects Right/Down. A new full frame resets age
+and repeat skip even during rapid taps. Silence/orphan repeats do nothing.
+The same KeyTaps/KeyTool worker as Usage k performs one tool call per
+accepted batch at the current desktop focus (ydotool, wtype fallback).
+These batches bypass --key-scale to preserve exact counts. No herdr focus
+or pane.send_keys call is involved. A busy worker drops new batches; it
+never queues them. A running bounded tool call may finish after release;
+an unstarted worker expires before the 150 ms IR release timeout. Error
+cleanup sends releases only, with no retry of the batch.
+
+Host files to deploy together, from this ZIP:
+- tools/usb_remote_key/usb_remote_key.py and its README.md;
+- tools/herdremote/herdremote.py, hrproto.py, hrkeys.py, new hrusagekeys.py,
+  and README.md;
+- docs/herdremote-protocol.md (this document).
+
+The existing remaining HerdRemote siblings, podlink.py, units, requirements
+and udev rules remain compatible and are bundled. The IR serial open remains
+O_RDONLY. No installation, key injection, device access or service operation
+is performed by the offline build/tests.

@@ -176,6 +176,13 @@ void usb_confirm_reply(uint32_t epoch, bool connect)
                epoch);
 }
 
+#ifdef HAVE_USB_PODLINK
+void usb_confirm_reopen(void)
+{
+    queue_post(&usb_queue, USB_CONFIRM_REOPEN, usb_consent.epoch);
+}
+#endif
+
 static int usb_confirm_tmo_cb(struct timeout *tmo)
 {
     queue_post(&usb_queue, USB_CONFIRM_READY, tmo->data);
@@ -996,6 +1003,27 @@ static void NORETURN_ATTR usb_thread(void)
                     ))
                 button_queue_post(SYS_USB_CONFIRM, usb_consent.epoch);
             break;
+#ifdef HAVE_USB_PODLINK
+        case USB_CONFIRM_REOPEN:
+            /* The UI has finished a MENU exit. Keep 2AA and the cached
+             * Agents session unless the user explicitly chooses the disk. */
+            if ((uint32_t)ev.data != usb_consent.epoch ||
+                usb_detect() != USB_INSERTED || !usb_host_present ||
+                !usb_confirm_has_config || !podlink_requested ||
+                exclusive_storage_enabled || exclusive_storage_requested ||
+                usb_host_probe_on ||
+                usb_consent.state == USB_CONSENT_PROMPT ||
+                usb_consent.state == USB_CONSENT_ACCESSORY)
+                break;
+#ifdef USB_ENABLE_IAP
+            if (usb_iap2_car_seen()) break;
+#endif
+            timeout_cancel(&usb_confirm_tmo);
+            usb_consent_begin(&usb_consent, false, false);
+            if (usb_consent_observe(&usb_consent, true, true, false))
+                button_queue_post(SYS_USB_CONFIRM, usb_consent.epoch);
+            break;
+#endif
         case USB_CONFIRM_CONNECT:
         case USB_CONFIRM_CHARGE:
             if (usb_detect() != USB_INSERTED ||

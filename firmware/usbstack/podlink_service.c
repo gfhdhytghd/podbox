@@ -5,6 +5,7 @@
 #include "kernel.h"
 #include "thread.h"
 #include "remote_log.h"
+#include "system.h"
 #include <string.h>
 
 #define INBOX 16
@@ -250,6 +251,15 @@ enum podlink_connection podlink_state(void)
         started ? podlink_session_state() : PODLINK_WAIT_USB;
     mutex_unlock(&service_mutex);
     return result;
+}
+
+bool podlink_host_connected(void)
+{
+    int level = disable_irq_save();
+    bool connected = initialized && running && started &&
+                     usb_podlink_active() && podlink_session_host_connected();
+    restore_irq(level);
+    return connected;
 }
 
 uint32_t podlink_generation(void)

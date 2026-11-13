@@ -28,6 +28,8 @@ int usb_serial_write(const unsigned char *data, int length);
 bool usb_serial_connected(void);
 /* Atomic snapshot of connection state and byte-stream lifetime. */
 bool usb_serial_get_state(uint32_t *generation);
+/* Nonblocking lifetime check, safe from an IRQ-masked input callback. */
+bool usb_serial_generation_current(uint32_t generation);
 void usb_serial_wait(int ticks);
 
 void usb_serial_send(const unsigned char *data, int length);

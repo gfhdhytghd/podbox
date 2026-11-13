@@ -469,6 +469,14 @@ bool usb_serial_connected(void)
     return usb_serial_get_state(&generation);
 }
 
+bool usb_serial_generation_current(uint32_t generation)
+{
+    int level = disable_irq_save();
+    bool connected = active && stream_generation == generation;
+    restore_irq(level);
+    return connected;
+}
+
 int usb_serial_write(const unsigned char *data, int length)
 {
     if (!data || length <= 0)

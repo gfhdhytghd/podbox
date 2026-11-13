@@ -29,6 +29,8 @@ pre=r'''
 #define UP (BUTTON_RC_VOL_UP|BUTTON_REL|BUTTON_REPEAT)
 #define DOWN (BUTTON_RC_VOL_DOWN|BUTTON_REL|BUTTON_REPEAT)
 static long current_tick;
+static bool test_link;
+bool podlink_host_connected(void){return test_link;}
 bool remote_input_active;
 static int wakeups;
 static bool button_queue_try_post(long b,int data){(void)b;(void)data;wakeups++;return true;}

@@ -103,46 +103,115 @@ Unknown keys reset the volume repeat context; orphan/stale repeats do nothing.
 
 Valid receiver STATE/EDGE records allow one EP0 heartbeat per second. An
 open serial fd alone is insufficient. After three seconds without a
-heartbeat the player uses the original Dock behavior. With a fresh
-heartbeat, PC volume reports work only in Agents, including Usage and the
-talk band. Usage changes real audio volume; the other views page. No PC
+heartbeat, the resident PodLink host signal still keeps Dock input disabled.
+With both signals absent, the player uses the original Dock behavior.
+With a connected computer as defined below, PC volume reports work only
+in Agents, including Usage and the talk band. S2 handles Usage as host arrow keys; the other views page. No PC
 volume is merged into the ordinary sampled button state outside Agents.
 
-Dock L3/0E uses the original direction/clamp/300 ms press grouping as a
-fallback. A new unmatched Dock press waits `AGENTS_VOLUME_ARBITRATION_MS`
-(currently **80 ms**, provisional) for the matching PC report. Matching
-reports suppress its Dock candidate; PC steps bypass Dock's repeat/acceleration
-heuristics. A PC-first event can match a new Dock press within that window.
-An unmatched Dock press falls back to the old initial page and 600/250 ms
-hold-repeat schedule. Native input is never delayed for arbitration. A
-bounded 64-step FIFO preserves rapid PC reports and direction changes.
+With Follow-up 15, Agents ignores Dock L3/0E volume completely while a
+computer is connected. This includes Usage, where S2 now sends host arrow keys. The only connection predicate is
+`computer_connected(now)`: the resident PodLink host session is up on the
+current configured 2AA byte stream, OR the bridge heartbeat is fresh.
+The resident signal does not depend on which foreground client is attached.
+A stale heartbeat cannot re-enable Dock input while PodLink remains up.
 
-The 80 ms constant is a design bound, **not a measured PC/Dock path skew**.
-The available live log has Dock volume and Menu EP0, but no paired PC volume
-events. Captured full IR frames decode in about 68.4 ms, repeats in 11.9 ms,
-with 108.6 ms repeat spacing; Dock volume intervals are about 100 ms. These
-cadences do not establish relative arrival latency. The user accepted this provisional window for this package; paired-volume
-calibration can be performed after installation. A collapsed Dock stream cannot
-identify separate physical presses that neither receiver exposed distinctly.
+There is no 80 ms wait, per-press arbitration, Dock fallback or Dock hold
+repeat in connected Agents. The PC's 64-report FIFO remains. When both
+signals are absent, normal Dock behavior is restored: the original 300 ms
+press grouping and 600/250 ms repeat schedule for paging, and the original
+absolute audio-volume setter in disconnected Usage. Outside Agents behavior is unchanged.
+The heartbeat retains its existing three-second freshness interval; that
+signal can keep the logical connection true briefly after USB disconnect.
+A charger/USB profile request alone is not a resident host session.
 
-Live KEY records include `source=PC`/`source=DOCK`,
-`decision=used`/`fallback`/`dropped-dup`, and `press`, `pc_tick`, `dock_tick`.
-The ticks are the PC EP0 event and the matched Dock L3/0E handler event,
-both on the iPod's HZ=100 clock used by arbitration. A missing counterpart
-is `-`; tick `0` is valid. `press` identifies the Dock's 300 ms group in
-this Agents session; a PC report not yet associated with a Dock group has
-press 0. PC-first/Dock-first matches both produce a record with both ticks.
-Paired fields retain the first matched events of the group, even on later
-repeat-suppression rows; the outer `tick` is that row's decision/event time.
-A Dock fallback contains its original event tick, not the later timeout tick.
-The Dock handler tick may follow the raw serial-capture tick (existing live
-trace: 0-20 ms); compare the explicit handler/EP0 ticks to calibrate the
-80 ms arbitration window, rather than subtracting host receipt times. Raw/VOL/PAGE records retain source
-tags, and EP0 names identify frame/repeat/heartbeat. HerdRemote's existing
-LOG writer needs no runtime change. Deploy `usb_remote_key.py` with this
-firmware; keep the matching README/tests. No service deployment is performed
-by an offline build/package task.
+Live volume KEY and VOL records use `decision=ignored-pc-connected`
+for ignored Dock input in connected Agents. PC steps retain `source=PC` and
+`decision=used`; page emits identify the selected source. The existing
+`pc_tick`/`dock_tick` fields record independent source events; Follow-up 15
+performs no pairing. There is no measured/matched 80 ms window to calibrate.
+The LOG writer is unchanged. S2 below requires both bridge and HerdRemote
+runtime updates. No service deployment is performed by this offline task.
 
 ```sh
 python3 tools/tests/agents_volume_sources_test.py build-usbkey/sources
 ```
+
+## Agents MENU exit and USB consent (Follow-up 15 S1)
+
+A confirmed MENU exit from Agents reopens the ordinary USB popup on a
+configured computer connection: SELECT enters Disk Mode; MENU keeps charge
+only. The existing Agents leave-confirmation remains. Wheel MENU and the
+forwarded remote Menu use the same exit path. Remote Play double-tap and
+SELECT+PLAY use the music-switch result and do not reopen the popup.
+
+Reopening or cancelling this popup does not detach USB, reset the resident
+PodLink session, or invalidate the cached Agents view. Selecting Disk Mode
+uses the existing exclusive-storage transition. Unplugged, charger-only,
+stale cable-epoch, accessory and already-prompting cases do not reopen it.
+FU8 made client close leave the resident USB profile intact; that removed
+the former close/re-enumeration prompt. S1 explicitly re-arms consent only
+after a MENU exit, without relying on a transport reset.
+
+## Usage remote arrow keys (Follow-up 15 S2)
+
+This replaces the initial FU15 Usage audio-volume decision. In connected
+Usage, neither Dock volume nor PC EP0 volume changes iPod audio or pages.
+PC EP0 reports in other Agents views still page one step each. With neither
+computer signal, Usage retains its original Dock audio-volume setter.
+
+The player sends `vw\t1` (Usage) or `vw\t0` (any other Agents view), as a
+single PodLink TEXT frame. A direct, nonqueued refresh runs every 250 ms;
+a view change sends immediately on the next UI loop and exit sends 0.
+Failed sends retry without enqueueing old leases. HerdRemote accepts only
+those two exact records, requires an introduced open Agents session, and
+invalidates on reset, foreground loss, link close or shutdown. Older hosts
+ignore vw; old firmware sends no lease, so S2 stays inactive.
+
+HerdRemote owns `$XDG_RUNTIME_DIR/podbox-usage-keys/` (0700; default root
+`/run/user/<uid>`). It atomically publishes `view.json`: version 1, boolean
+usage, random per-view/session token and monotonic expiry, 750 ms after the
+last valid view record. `keys.sock` is a nonblocking Unix datagram endpoint,
+0600. An exclusive owner.lock prevents a second daemon from removing an
+active endpoint. The bridge reads this state for each counted volume
+report, and sends nothing when absent, malformed, false or expired. It sends
+`UK1 <token> <monotonic-send-time> <left|right|up|down> <count>` to the socket.
+HerdRemote rechecks token, open session, view expiry and report age under
+100 ms, including immediately before a deferred key worker starts. Buffered
+old datagrams are discarded; no command queue/retry or stale replay exists.
+Lost view-leave messages expire within 750 ms; detected link loss disables
+immediately. A stopped/hung daemon cannot turn a fresh state file into keys.
+
+Each full volume frame starts a new hold and sends exactly one horizontal
+tap. The first REPEAT is skipped (`VOL_IGNORE_FIRST_REPEATS = 1`). Every
+later associated REPEAT produces one batch by age from the full frame's
+first IR edge. Final named thresholds in usb_remote_key.py are:
+
+| Hold age | Batch per counted report | Constant starting tier |
+| --- | --- | --- |
+| <0.5 s | 1 Left/Right | initial |
+| 0.5–1.0 s | 3 Left/Right | USAGE_THREE_CHARS_SECONDS = 0.5 |
+| 1.0–4.0 s | 10 Left/Right | USAGE_TEN_CHARS_SECONDS = 1.0 |
+| 4.0–7.0 s | 1 Up/Down | USAGE_VERTICAL_SECONDS = 4.0 |
+| >=7.0 s | 3 Up/Down (cap) | USAGE_THREE_LINES_SECONDS = 7.0 |
+
+Vol+ selects Left/Up; Vol- selects Right/Down. A new full frame resets age
+and repeat skip even during rapid taps. Silence/orphan repeats do nothing.
+The same KeyTaps/KeyTool worker as Usage k performs one tool call per
+accepted batch at the current desktop focus (ydotool, wtype fallback).
+These batches bypass --key-scale to preserve exact counts. No herdr focus
+or pane.send_keys call is involved. A busy worker drops new batches; it
+never queues them. A running bounded tool call may finish after release;
+an unstarted worker expires before the 150 ms IR release timeout. Error
+cleanup sends releases only, with no retry of the batch.
+
+Host files to deploy together, from this ZIP:
+- tools/usb_remote_key/usb_remote_key.py and its README.md;
+- tools/herdremote/herdremote.py, hrproto.py, hrkeys.py, new hrusagekeys.py,
+  and README.md;
+- docs/herdremote-protocol.md (this document).
+
+The existing remaining HerdRemote siblings, podlink.py, units, requirements
+and udev rules remain compatible and are bundled. The IR serial open remains
+O_RDONLY. No installation, key injection, device access or service operation
+is performed by the offline build/tests.

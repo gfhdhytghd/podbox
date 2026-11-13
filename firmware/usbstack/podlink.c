@@ -119,6 +119,14 @@ enum podlink_connection podlink_session_state(void)
 {
     return state;
 }
+bool podlink_session_host_connected(void)
+{
+    int level = disable_irq_save();
+    bool connected = leased && had_usb && state == PODLINK_CONNECTED &&
+                     usb_serial_generation_current(transport_generation);
+    restore_irq(level);
+    return connected;
+}
 unsigned int podlink_session_max_message(void)
 {
     return peer_max;

@@ -48,14 +48,23 @@ static void work(void)
 }
 int main(void)
 {
+    assert(!podlink_host_connected());
     usb_serial_init();podlink_init();lease=true;service_step();
-    insert();work();handshake(PODLINK_MAX_MESSAGE,1);work();
+    assert(!podlink_host_connected());
+    insert();work();assert(!podlink_host_connected());
+    handshake(PODLINK_MAX_MESSAGE,1);work();assert(podlink_host_connected());
+    /* The input callback must not try either mutex, even if the worker or
+     * USB thread was interrupted while holding it. */
+    mutex_lock(&service_mutex);mutex_lock(&serial_mtx);
+    assert(podlink_host_connected());
+    mutex_unlock(&serial_mtx);mutex_unlock(&service_mutex);
     uint32_t revision=podlink_session_revision();
     input_frame(PODLINK_TEXT,2,"HR\t1\thost",9);work();
     assert(podlink_open_agents(background));work();
     struct podlink_message greeting;
     assert(podlink_poll(&greeting)&&greeting.type==PODLINK_TEXT&&greeting.length==9);
     assert(podlink_state()==PODLINK_CONNECTED);podlink_close();work();
+    assert(podlink_state()==PODLINK_CLOSED&&podlink_host_connected());
     const char *list="W\t1\nw1\t-\t1\t0\t0\t0\tCached";
     input_frame(PODLINK_TEXT,50,list,strlen(list));work();
     assert(updates>=1&&cached.nws==1);
@@ -157,7 +166,14 @@ int main(void)
     bool greeting_after_pressure=false;
     while(podlink_poll(&m))if(m.type==PODLINK_TEXT&&m.length>=3&&!memcmp(m.data,"HR\t",3))greeting_after_pressure=true;
     assert(greeting_after_pressure);podlink_close();work();
-    lease=false;work();assert(losses>0&&!started);
+    /* Disconnect/reset invalidates the snapshot before a worker poll. */
+    assert(podlink_host_connected());remove_usb();
+    assert(!podlink_host_connected());
+    insert();assert(!podlink_host_connected());
+    work();assert(!podlink_host_connected());
+    lease=false;assert(!podlink_host_connected());
+    work();assert(losses>0&&!started);
     puts("resident real wire: 500 attach/switch/MENU exits; no OPEN/CLOSE/HELLO; cached first frame zero round trips; background list; client exclusion; payload lifetime; unplug PASS");
     puts("remote log real wire: prefixed TEXT in foreground 0/1/2; default/off no TEXT; no reconnect/client ownership change PASS");
+    puts("resident host snapshot: configured current generation + OPEN; background independent; IRQ-safe/no mutex; immediate USB disconnect/reset invalidation PASS");
 }

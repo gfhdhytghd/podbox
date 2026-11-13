@@ -348,6 +348,25 @@ static void flush_outbox(void)
     }
 }
 
+#define USAGE_VIEW_SIGNAL_TICKS MAX(1, HZ / 4)
+static unsigned long usage_view_signal_at;
+static bool usage_view_signal_value;
+
+/* Direct, expiring lease: never enqueue old view heartbeats behind commands. */
+static void signal_usage_view(bool active, bool force)
+{
+    if (!force && active == usage_view_signal_value &&
+        TIME_BEFORE(current_tick, usage_view_signal_at))
+        return;
+    const char *text = active ? "vw\t1" : "vw\t0";
+    if (podlink_state() == PODLINK_CONNECTED &&
+        podlink_send(PODLINK_TEXT, text, strlen(text)) == PODLINK_SENT)
+    {
+        usage_view_signal_value = active;
+        usage_view_signal_at = (unsigned long)current_tick + USAGE_VIEW_SIGNAL_TICKS;
+    }
+}
+
 static const struct hr_question *current_question(void)
 {
     return hr_model_question_for(&model, question_pane);
@@ -2363,10 +2382,19 @@ static bool agents_play_down(void)
     return (button_status() & mask) != 0;
 }
 
+static void agents_usb_exit(int result)
+{
+#ifdef HAVE_USB_CONFIRM
+    if (result == AGENTS_EXIT_MENU) usb_confirm_reopen();
+#else
+    (void)result;
+#endif
+}
+
 int agents_screen(void)
 {
     struct gui_synclist list;
-    int action, ret = 0;
+    int action, ret = AGENTS_EXIT_MENU;
     char buf[48];
 
     if (!podlink_open_agents(background_link))
@@ -2447,6 +2475,7 @@ int agents_screen(void)
                 hr_popped_add(&popped, q->id);
         }
         pop_question(&list);
+        signal_usage_view(view == VIEW_USAGE, false);
         /* Status rows count seconds, so they redraw once a second */
         const char *t = trouble(buf, sizeof buf);
         if (view == VIEW_USAGE)
@@ -2759,6 +2788,7 @@ int agents_screen(void)
     }
 
     /* A hold ends with the screen */
+    signal_usage_view(false, true);
     finish_talk(false);
     flush_outbox();
     /* The resident service owns the connection; exit keeps the cached view. */
@@ -2796,5 +2826,6 @@ int agents_screen(void)
     native_play_pending = false;
     FOR_NB_SCREENS(i)
         viewportmanager_theme_undo(i, false);
+    agents_usb_exit(ret);
     return ret;
 }

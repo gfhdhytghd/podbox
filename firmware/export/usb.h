@@ -29,6 +29,10 @@
 /* UI requests carry the cable epoch, so an old choice cannot accept a replug. */
 bool usb_confirm_pending(uint32_t epoch);
 void usb_confirm_reply(uint32_t epoch, bool connect);
+#ifdef HAVE_USB_PODLINK
+/* Explicit Agents MENU exit; re-ask without resetting the resident link. */
+void usb_confirm_reopen(void);
+#endif
 #ifdef HAVE_USBSTACK
 bool usb_confirm_blocked(void);
 void usb_confirm_configured(bool configured, bool accessory, bool probe_iap);
@@ -155,6 +159,9 @@ enum
     USB_CONFIRM_READY,
     USB_CONFIRM_CONNECT,
     USB_CONFIRM_CHARGE,
+#ifdef HAVE_USB_PODLINK
+    USB_CONFIRM_REOPEN,
+#endif
 #endif
 #endif
 #ifdef USB_FIREWIRE_HANDLING

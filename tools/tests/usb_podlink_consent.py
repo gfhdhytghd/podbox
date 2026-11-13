@@ -10,6 +10,22 @@ profiles=s[s.index('static inline void usb_configure_drivers(int for_state)'):s.
 events=s[s.index('        case USB_CONFIRM_READY:'):s.index('#endif\n\n#ifdef HAVE_USB_PODLINK',s.index('        case USB_CONFIRM_READY:'))]
 clients=s[s.index('bool usb_podlink_open(void)'):s.index('bool usb_podlink_active(void)')]
 mode_events=s[s.index('        case USB_PODLINK_OPEN:'):s.index('#endif\n        case USB_INSERTED:',s.index('        case USB_PODLINK_OPEN:'))]
+
+import re
+screen=(S/'apps-ipod/screens/system/agents_screen.c').read_text()
+widget=(S/'apps-ipod/widgets/usb_confirm.c').read_text()
+def function(text,name):
+ m=re.search(r'(?m)^[\w *]+\b'+name+r'\([^;{}]*\)\s*\{',text)
+ assert m,name
+ end=m.end();depth=1
+ while depth:
+  depth+=(text[end]=='{')-(text[end]=='}');end+=1
+ return text[m.start():end]
+exit_hook=function(screen,'agents_usb_exit') if 'static void agents_usb_exit(' in screen else 'static void agents_usb_exit(int result){(void)result;}'
+if 'static void agents_usb_exit(' in screen:
+ assert re.search(r'viewportmanager_theme_undo\(i, false\);\s*agents_usb_exit\(ret\);\s*return ret;',screen)
+ assert re.search(r'case ACTION_AGENTS_SWITCH:.*?ret = AGENTS_SWITCH_WPS;.*?done = true;',screen,re.S)
+popup=function(widget,'confirm_action')
 pre=r"""
 #include <assert.h>
 #include <stdbool.h>
@@ -28,7 +44,7 @@ pre=r"""
 #define USB_ENABLE_CHARGING_ONLY
 #define USB_MODE_DRIVE_ONLY 2
 enum { USB_EXTRACTED, USB_INSERTED, USB_POWERED, USB_CONFIRM_READY,
-       USB_CONFIRM_CONNECT, USB_CONFIRM_CHARGE, USB_PODLINK_CLOSE,SYS_USB_CONFIRM,USB_PODLINK_OPEN };
+       USB_CONFIRM_CONNECT, USB_CONFIRM_CHARGE,USB_CONFIRM_REOPEN, USB_PODLINK_CLOSE,SYS_USB_CONFIRM,USB_PODLINK_OPEN };
 enum {USB_MODE_MASS_STORAGE,USB_MODE_CHARGE};
 enum {USB_DRIVER_MASS_STORAGE,USB_DRIVER_SERIAL,USB_DRIVER_CHARGING_ONLY,
       USB_DRIVER_HID,USB_DRIVER_AUDIO,USB_DRIVER_IAP,USB_NUM_DRIVERS};
@@ -92,6 +108,34 @@ static void begin(int mode)
 static char serial(void){unsigned int mask=0;for(int i=0;i<USB_NUM_DRIVERS;i++)if(enabled[i])mask|=1u<<i;return usb_profile_serial_prefix(mask);}
 int main(void)
 {
+
+ /* S1: confirmed MENU exit reopens consent without resetting resident USB. */
+ begin(0);usb_confirm_configured(true,false,false);drain();
+ usb_confirm_reply(usb_consent.epoch,false);drain();
+ int old_prompts=prompts,old_attach=attached,old_detach=detached;
+ agents_usb_exit(0);agents_usb_exit(0);drain();assert(prompts==old_prompts+1);
+ assert(usb_confirm_pending(usb_consent.epoch));
+ struct dialog dialog={true};uint32_t answer=usb_consent.epoch;
+ assert(confirm_action(&dialog,ACTION_STD_CANCEL,&answer)==DIALOG_ACCEPT);drain();
+ assert(usb_consent.state==USB_CONSENT_CHARGE&&serial()=='2');
+ assert(podlink_requested&&attached==old_attach&&detached==old_detach);
+ old_prompts=prompts;assert(usb_podlink_open());drain();usb_podlink_close();drain();
+ assert(prompts==old_prompts&&serial()=='2'&&podlink_requested);
+ assert(attached==old_attach&&detached==old_detach);
+ old_prompts=prompts;agents_usb_exit(AGENTS_SWITCH_WPS);drain();
+ agents_usb_exit(AGENTS_SWITCH_WPS);drain();assert(prompts==old_prompts);
+ agents_usb_exit(0);drain();answer=usb_consent.epoch;
+ assert(confirm_action(&dialog,ACTION_STD_OK,&answer)==DIALOG_ACCEPT);drain();
+ assert(enabled[USB_DRIVER_MASS_STORAGE]&&!podlink_requested&&serial()=='1');
+ begin(0);usb_confirm_configured(true,false,false);drain();
+ usb_confirm_reply(usb_consent.epoch,false);drain();
+ agents_usb_exit(0);cable=false;old_prompts=prompts;drain();assert(prompts==old_prompts);
+ begin(0);usb_confirm_configured(true,false,false);drain();
+ usb_confirm_reply(usb_consent.epoch,false);drain();old_prompts=prompts;
+ queue_post(&usb_queue,USB_CONFIRM_REOPEN,usb_consent.epoch-1);drain();
+ assert(prompts==old_prompts&&usb_consent.state==USB_CONSENT_CHARGE);
+ car=true;agents_usb_exit(0);drain();assert(prompts==old_prompts);car=false;
+ usb_host_present=false;agents_usb_exit(0);drain();assert(prompts==old_prompts);
  for(int mode=0;mode<3;mode++)for(int probe=0;probe<2;probe++){
   begin(mode);assert(!enabled[USB_DRIVER_MASS_STORAGE]);
   assert(serial()==(mode==USB_MODE_CHARGE?'4':'2'));
@@ -127,9 +171,11 @@ int main(void)
  usb_mode=USB_MODE_MASS_STORAGE;queue_post(&usb_queue,USB_PODLINK_OPEN,usb_mode);drain();
  assert(serial()=='2'&&!enabled[USB_DRIVER_MASS_STORAGE]);
  usb_confirm_configured(true,false,false);drain();assert(prompts==1);
+ puts("S1: MENU re-prompt; duplicate/stale/unplug safety; WPS switch silent; popup MENU keeps resident 2AA; SELECT enters disk PASS");
  puts("resident USB: first consent/MENU/500 switches stable 2AA/no attach or detach/no second popup/disk exclusive/pure Charge/stale reply/unplug PASS");
 }
 """.replace('EVENTS',events+'\n'+mode_events).replace('CLIENTS',clients)
-f=O/'lease.c';f.write_text(pre+api+profiles+post)
+post=post.replace('int main(void)',exit_hook+'\n'+popup+'\nint main(void)')
+f=O/'lease.c';f.write_text(pre+'\n#define AGENTS_SWITCH_WPS 2\n#define AGENTS_EXIT_MENU 0\n#define ACTION_STD_OK 100\n#define ACTION_STD_CANCEL 101\n#define ACTION_WPS_PLAY 102\n#define BUTTON_MULTIMEDIA_PLAYPAUSE 103\n#define AUDIO_STATUS_PLAY 1\n#define AUDIO_STATUS_PAUSE 2\n#define DIALOG_ABORT -1\n#define DIALOG_ACCEPT 1\n#define DIALOG_CONTINUE 0\n#define SYS_EVENT 0x80000000u\n#define BUTTON_MULTIMEDIA 0x10000000u\nstruct dialog {bool backlight_on;};\nstatic int audio_status(void){return 0;}\nstatic void unpause_action(bool on){(void)on;}\nstatic void pause_action(bool on){(void)on;}\nstatic void default_event_handler(int action){(void)action;}\n'+api+profiles+post)
 cmd=['cc','-std=gnu11','-Wall','-Wextra','-Werror','-g','-fsanitize=address,undefined','-fno-pie','-no-pie','-I'+str(R/'firmware/export'),str(f),'-o',str(O/'lease')]
 subprocess.run(cmd,check=True);subprocess.run([str(O/'lease')],check=True)

@@ -243,6 +243,8 @@ def parse_command(payload):
         return None
     fields = records[0]
     name, args = fields[0], fields[1:]
+    if name == "vw":
+        return (name, args) if len(records) == 1 and args in (["0"], ["1"]) else None
     shapes = {"hr": 1, "sub": 1, "fw": 2, "fp": 2, "a": 3, "us": 0,
               "vd": 2, "vu": 1, "vc": 1, "k": 2, "ft": 3, "det": 1}
     if name in ("sub", "ft", "det"):

@@ -2,11 +2,13 @@
 """Forward Apple IR Menu and volume to EP0. IR serial is read-only."""
 import argparse
 import glob
+import json
 import logging
 import os
 import re
 import select
 import signal
+import socket
 import termios
 import time
 
@@ -19,6 +21,11 @@ VOL_DOWN = 4
 HEARTBEAT = 5
 HEARTBEAT_SECONDS = 1.0
 VOL_IGNORE_FIRST_REPEATS = 1
+USAGE_THREE_CHARS_SECONDS = 0.5
+USAGE_TEN_CHARS_SECONDS = 1.0
+USAGE_VERTICAL_SECONDS = 4.0
+USAGE_THREE_LINES_SECONDS = 7.0
+USAGE_VIEW_LEASE_SECONDS = 0.75
 MENU_HOLD_SECONDS = 0.300
 MENU_HOLD_REPEATS = 3
 RECEIVER_SERIAL = '2543030725032a2a'
@@ -137,15 +144,50 @@ class MenuForwarder:
             self.release(now)
 
 
+class UsageVolume:
+    """Nonblocking local batches; only HerdRemote can execute keyboard tools."""
+    def __init__(self, directory=None):
+        root = os.environ.get('XDG_RUNTIME_DIR', '/run/user/%d' % os.getuid())
+        self.directory = directory or os.path.join(root, 'podbox-usage-keys')
+
+    def report(self, direction, age, now):
+        try:
+            with open(os.path.join(self.directory, 'view.json')) as stream:
+                state = json.load(stream)
+            token = state['token']
+            if (state['version'] != 1 or state['usage'] is not True or
+                    not isinstance(token, str) or not re.fullmatch('[0-9a-f]{32}', token) or
+                    not now < state['expires'] <= now + USAGE_VIEW_LEASE_SECONDS):
+                return
+            if age < USAGE_THREE_CHARS_SECONDS:
+                count = 1
+            elif age < USAGE_TEN_CHARS_SECONDS:
+                count = 3
+            elif age < USAGE_VERTICAL_SECONDS:
+                count = 10
+            else:
+                count = 1 if age < USAGE_THREE_LINES_SECONDS else 3
+            key = ('left' if direction == VOL_UP else 'right') if age < USAGE_VERTICAL_SECONDS else (
+                   'up' if direction == VOL_UP else 'down')
+            data = f'UK1 {token} {now!r} {key} {count}'.encode('ascii')
+            with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as channel:
+                channel.setblocking(False)
+                channel.sendto(data, os.path.join(self.directory, 'keys.sock'))
+        except (OSError, ValueError, KeyError, TypeError):
+            return  # Missing daemon, stale/unknown state or busy socket: no keys.
+
+
 class VolumeForwarder:
     """One step per decoded report, except the named initial repeat skip."""
-    def __init__(self, usb):
+    def __init__(self, usb, usage=None):
         self.usb = usb
+        self.usage = usage
         self.key = None
         self.last = float('-inf')
         self.repeats = 0
+        self.first = 0.0
 
-    def frame(self, frame, now):
+    def frame(self, frame, now, span_seconds=0.0):
         if frame is None:
             return
         if frame:
@@ -153,12 +195,17 @@ class VolumeForwarder:
                         if len(frame) == 4 and frame[:2] == b'\xee\x87'
                         else None)
             self.repeats = 0
+            self.first = now - span_seconds
             if self.key is not None:
                 self.usb.send(1, now, self.key)
+                if self.usage is not None:
+                    self.usage.report(self.key, 0.0, now)
         elif self.key is not None and now - self.last < RELEASE_SECONDS:
             self.repeats += 1
             if self.repeats > VOL_IGNORE_FIRST_REPEATS:
                 self.usb.send(2, now, self.key)
+                if self.usage is not None:
+                    self.usage.report(self.key, max(0.0, now - self.first), now)
         else:
             self.key = None
         self.last = now
@@ -258,7 +305,8 @@ def main():
     import usb.util
     remote = USBRemote(usb.core, usb.util)
     forwarder = MenuForwarder(remote)
-    volume = VolumeForwarder(remote)
+    usage_volume = UsageVolume()
+    volume = VolumeForwarder(remote, usage_volume)
     heartbeat = ReceiverHeartbeat(remote)
     stopped = False
 
@@ -305,13 +353,13 @@ def main():
                     frame = decoder.line(line)
                     at = time.monotonic()
                     forwarder.frame(frame, at, decoder.span_us / 1e6)
-                    volume.frame(frame, at)
+                    volume.frame(frame, at, decoder.span_us / 1e6)
             except OSError as exc:
                 LOG.warning('IR unavailable: %s', exc)
                 forwarder.release(time.monotonic())
                 os.close(fd)
                 fd, buffer, decoder = None, b'', NECDecoder()
-                volume = VolumeForwarder(remote)
+                volume = VolumeForwarder(remote, usage_volume)
     finally:
         forwarder.release(time.monotonic())
         remote.close()

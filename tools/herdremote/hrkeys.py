@@ -14,7 +14,8 @@ import threading
 TOOLS = ("auto", "ydotool", "wtype")
 KEYS = {"bs": (14, "BackSpace"), "left": (105, "Left"),
         "right": (106, "Right"), "enter": (28, "Return"),
-        "wleft": (105, "Left"), "wright": (106, "Right")}
+        "wleft": (105, "Left"), "wright": (106, "Right"),
+        "up": (103, "Up"), "down": (108, "Down")}
 WORD_KEYS = frozenset(("wleft", "wright"))
 MAX_COUNT = 32
 KEY_DELAY_MS = 2
@@ -145,7 +146,7 @@ class KeyTaps:
         self.generation = 0
         self.results = queue.Queue()
 
-    def request(self, req, key, count=1):
+    def request(self, req, key, count=1, *, scaled=True, guard=None, silent=False):
         """None means accepted asynchronously; otherwise (ok, error text)."""
         if key not in KEYS:
             return False, "Unsupported key"
@@ -153,7 +154,7 @@ class KeyTaps:
             count = tap_count(count)
         except KeyInputError as error:
             return False, str(error)
-        if key in ("left", "right"):
+        if scaled and key in ("left", "right"):
             count = min(MAX_COUNT, count * self.key_scale)
         with self.lock:
             if self.busy:
@@ -161,17 +162,17 @@ class KeyTaps:
             self.busy = True
             generation = self.generation
         try:
-            self.worker(target=self._tap, args=(generation, req, key, count), daemon=True).start()
+            self.worker(target=self._tap, args=(generation, req, key, count, guard, silent), daemon=True).start()
         except RuntimeError:
             with self.lock:
                 self.busy = False
             return False, "Key tool unavailable"
         return None
 
-    def _tap(self, generation, req, key, count):
+    def _tap(self, generation, req, key, count, guard, silent):
         try:
             with self.lock:
-                if generation != self.generation:
+                if generation != self.generation or (guard is not None and not guard()):
                     return
             self.tool.tap(key, count)
             ok, text = True, None  # exact silent wire result: R <req> ok
@@ -180,7 +181,8 @@ class KeyTaps:
         finally:
             with self.lock:
                 self.busy = False
-        self.results.put((generation, req, ok, text))
+        if not silent:
+            self.results.put((generation, req, ok, text))
 
     def reset(self):
         """Cancel unstarted work and invalidate old replies on reset/loss/exit.

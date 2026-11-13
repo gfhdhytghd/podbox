@@ -34,6 +34,7 @@ import hrproto  # noqa: E402
 import hrusage  # noqa: E402
 import hrvoice  # noqa: E402
 import hrkeys  # noqa: E402
+import hrusagekeys  # noqa: E402
 import hrsession  # noqa: E402
 import hrappserver  # noqa: E402
 import hrremotelog  # noqa: E402
@@ -141,6 +142,9 @@ class Daemon:
         self.usage = hrusage.UsageCache()
         self.keys = hrkeys.KeyTaps(hrkeys.KeyTool(getattr(args, "key_tool", None)),
                                   key_scale=getattr(args, "key_scale", None))
+        self.usage_keys = hrusagekeys.UsageKeys(self.keys, lambda:
+            bool(self.link and self.link.opened and self.sent_ws is not None and
+                 self.foreground in (None, 1)))
         self.voice = hrvoice.HoldToTalk(
             self.voice_focus_target,
             voice_focus=getattr(args, "voice_focus", False),
@@ -179,6 +183,7 @@ class Daemon:
         self.key_details = {}
         self.next_tick = 0.0
         self.foreground = None
+        self.usage_keys.update(False)
 
     # --- herdr ---------------------------------------------------------
     def refresh(self):
@@ -322,6 +327,7 @@ class Daemon:
             # Keep subscriptions and the last sent picture; only changes go out.
             self.next_detail = 0.0
         if value != 1:
+            self.usage_keys.update(False)
             self.detail_fast_due = None
             self.pending_detail = None
 
@@ -507,6 +513,8 @@ class Daemon:
         elif name == "us":
             self.send(hrproto.usage(self.usage.snapshot(), time.time()))
             self.usage.request()
+        elif name == "vw":
+            self.usage_keys.update(args[0] == "1")
         elif name in ("fw", "fp", "ft"):
             self.focus(name, *args)
         elif name in ("vd", "vu", "vc"):
@@ -581,6 +589,7 @@ class Daemon:
             log.warning("focus %s failed: %s", target, error)
 
     def run(self):
+        self.usage_keys.start()
         self.usage.start()
         hrherdr.Watcher(self.herdr, self.changed).start()
         self.answerer.start()
@@ -590,6 +599,7 @@ class Daemon:
         finally:
             self.stopping.set()
             self.remote_log.close()
+            self.usage_keys.close()
             self.keys.reset()
             self.voice.stop()
             if self.link:
@@ -616,6 +626,7 @@ class Daemon:
                     if frame.type == podlink.TEXT:
                         self.command(frame.payload)
                 self.adopt_foreground()
+                self.usage_keys.poll()
                 self.flush_replies()
                 self.pump_reads()
                 self.push()

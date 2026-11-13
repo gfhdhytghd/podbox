@@ -71,6 +71,9 @@ int podlink_poll(struct podlink_message *message);
 /* Maximum outgoing payload negotiated with the peer. */
 unsigned int podlink_max_message(void);
 enum podlink_connection podlink_state(void);
+/* Resident host session, independent of the foreground client. No mutexes;
+ * safe from IRQ-masked input callbacks. Also checks current configured USB. */
+bool podlink_host_connected(void);
 void podlink_close(void);
 /* Optional screen idle wait; wakes on transport progress, bounded by ticks. */
 void podlink_wait(int ticks);
