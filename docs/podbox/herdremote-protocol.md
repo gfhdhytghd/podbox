@@ -813,3 +813,32 @@ hrkeys.py backend and other runtime siblings remain compatible and bundled.
 No serial-write, service-operation or installation step is part of this
 build-only package. All hardware/desktop gesture delivery requires separately
 authorized acceptance; local tests use mocked keys and private IPC endpoints.
+
+## Native Cover Flow chord and real Dock replay (Follow-up 17)
+
+SELECT+MENU on the iPod body invokes the same Cover Flow toggle as remote
+Play triple-tap in Agents, Now Playing and Cover Flow. Both native buttons
+down fire once. The chord consumes their repeats and both releases, even
+if the latest held sample is already zero while releases remain queued.
+Cover Flow returns to its caller/origin. Agents exits silently with its
+cache and resident PodLink preserved; ordinary MENU exit keeps S1 consent.
+The original SELECT+PLAY chord implementation and remote tap decoder are
+unchanged. A three-key combination retains SELECT+PLAY precedence.
+
+Use a short SELECT+MENU press. Holding it roughly six seconds causes the
+hardware reset; holding through the bootloader for roughly twelve seconds
+can enter DFU. Firmware cannot inhibit either hardware action. Software
+repeat suppression does not protect against those actions.
+
+The reported failed triple was running the older 64bf49d6bf image, per the
+user's version/uptime correction. Exact captured RAW/HELD timelines from
+remote-live.log, including 130 ms taps, fast gaps and the captured third
+pulse, pass the FU16 decoder in offline replay. It emits one triple with
+no preceding double. Thresholds and remote behavior therefore remain as
+FU16: 200 ms inclusive inter-tap window; double commits only after the
+third-tap window expires. No merged third press is present in those traces.
+This is replay evidence, not physical acceptance of a rebooted FU16 image.
+
+No host runtime or wire-protocol update is required. Continue using the
+matching FU16 bridge and HerdRemote files. This firmware-only package omits
+unchanged host runtimes and includes this updated protocol/control document.

@@ -48,6 +48,7 @@
 #include "root_menu.h"
 #include "kernel.h"
 static struct agents_shortcut_state shortcut;
+static struct agents_cover_chord_state cover_chord;
 static bool shortcut_talking;
 static unsigned long shortcut_talking_at;
 void agents_shortcut_talking(bool talking)
@@ -331,8 +332,8 @@ static int remote_poll(int timeout, int context)
 #ifdef HAVE_USB_PODLINK
 int agents_shortcut_get_button(int timeout)
 {
-#ifdef IPOD_ACCESSORY_PROTOCOL
     int activity = get_current_activity();
+#ifdef IPOD_ACCESSORY_PROTOCOL
     int context = activity == ACTIVITY_AGENTS ? REMOTE_AGENTS :
                   activity == ACTIVITY_WPS ? REMOTE_WPS :
                   activity == ACTIVITY_ALBUMCOVERS ? REMOTE_COVERS : REMOTE_OTHER;
@@ -341,6 +342,10 @@ int agents_shortcut_get_button(int timeout)
     int button = button_get_w_tmo(timeout);
 #endif
     bool fire;
+    button = agents_cover_chord_button(&cover_chord, button, button_status(),
+        activity == ACTIVITY_AGENTS || activity == ACTIVITY_WPS ||
+        activity == ACTIVITY_ALBUMCOVERS, &fire);
+    if (fire) return REMOTE_COVERS_BUTTON;
     button = agents_shortcut_button(&shortcut, button, button_status(),
                                     shortcut_talking &&
                                     (unsigned long)current_tick -
@@ -373,6 +378,18 @@ static inline bool action_poll_button(action_last_t *last, action_cur_t *cur)
 #endif
 #ifdef HAVE_USB_PODLINK
     bool fire;
+    int activity = get_current_activity();
+    *button = agents_cover_chord_button(&cover_chord, *button, button_status(),
+        activity == ACTIVITY_AGENTS || activity == ACTIVITY_WPS ||
+        activity == ACTIVITY_ALBUMCOVERS, &fire);
+    if (fire)
+    {
+        last->button = BUTTON_REL;
+        last->action = ACTION_NONE;
+        last->wait_for_release = false;
+        *button = ACTION_AGENTS_COVERS;
+        return true;
+    }
     *button = agents_shortcut_button(&shortcut, *button, button_status(),
                                      shortcut_talking &&
                                      (unsigned long)current_tick -

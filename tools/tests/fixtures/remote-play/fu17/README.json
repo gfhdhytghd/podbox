@@ -1,0 +1,21 @@
+{
+  "source": "~/.local/state/podbox/remote-live.log (read-only regular file snapshot)",
+  "source_snapshot": "remote-live-update.log",
+  "firmware_running": "64bf49d6bf per user correction; NOT a FU16 device trace",
+  "ranges_mono": [
+    [
+      335398,
+      335408
+    ],
+    [
+      338288,
+      338294
+    ],
+    [
+      286404,
+      286408
+    ]
+  ],
+  "ticks_hz": 100,
+  "notes": "Exact captured lines. Assertions use iPod ticks, not host delivery time. Context is held fixed during FU16 replay because its delayed double must not switch before the third tap."
+}

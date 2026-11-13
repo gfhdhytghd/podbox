@@ -16,6 +16,14 @@ void root_menu_cover_shortcut(void);
 struct agents_shortcut_state {
     bool latched, ignored, select_held;
 };
+struct agents_cover_chord_state {
+    bool latched;
+    unsigned int remaining;
+};
+/* SELECT+MENU owns its down/repeat/releases until both keys are released.
+ * This does not and cannot inhibit the hardware reset/DFU chord. */
+int agents_cover_chord_button(struct agents_cover_chord_state *s, int button,
+                              int held, bool enabled, bool *fire);
 /* A fire result consumes the entire chord until both keys are released. */
 int agents_shortcut_button(struct agents_shortcut_state *s, int button,
                            int held, bool talking, bool *fire);

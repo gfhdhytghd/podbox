@@ -491,6 +491,7 @@ hookpre='''
 #define ACTIVITY_ALBUMCOVERS 3
 #define TIMEOUT_NOBLOCK 0
 struct agents_shortcut_state shortcut;
+static struct agents_cover_chord_state cover_chord;
 static bool shortcut_talking;
 static unsigned long shortcut_talking_at;
 bool remote_input_active;
@@ -568,6 +569,25 @@ int main(void) {
     }
     remote=(struct agents_remote_state){.tap_pending=true,.taps=2,.released=100};
     current_tick=120;queued_button=held_button=0;remote_poll(50,REMOTE_WPS);assert(waited==1);
+    /* Native SELECT+MENU routes identically to triple in all three screens. */
+    const int views[]={ACTIVITY_AGENTS,ACTIVITY_WPS,ACTIVITY_ALBUMCOVERS};
+    for(int i=0;i<3;i++){
+      activity=views[i];cur.context=i==0?CONTEXT_AGENTS:i==1?CONTEXT_WPS:99;
+      cover_chord=(struct agents_cover_chord_state){0};remote=(struct agents_remote_state){0};
+      shortcut=(struct agents_shortcut_state){0};
+      queued_button=held_button=BUTTON_SELECT|BUTTON_MENU;
+      assert(action_poll_button(&last,&cur)&&cur.button==ACTION_AGENTS_COVERS);
+      queued_button=held_button|BUTTON_REPEAT;
+      assert(action_poll_button(&last,&cur)&&!cur.button);
+      queued_button=BUTTON_SELECT|BUTTON_REL;held_button=0;
+      assert(action_poll_button(&last,&cur)&&!cur.button);assert(cover_chord.latched);
+      queued_button=BUTTON_MENU|BUTTON_REL;
+      assert(action_poll_button(&last,&cur)&&!cur.button);assert(!cover_chord.latched);
+      queued_button=held_button=BUTTON_SELECT|BUTTON_MENU;
+      assert(agents_shortcut_get_button(5)==REMOTE_COVERS_BUTTON);
+      queued_button=BUTTON_MENU|BUTTON_SELECT|BUTTON_REL;held_button=0;
+      assert(!agents_shortcut_get_button(5));
+    }
     puts("input polling hook: native-only chord/remote PLAY isolation/native SELECT timing PASS");
 }
 '''

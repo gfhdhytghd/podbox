@@ -51,3 +51,33 @@ int agents_shortcut_button(struct agents_shortcut_state *s, int button,
     }
     return button;
 }
+
+int agents_cover_chord_button(struct agents_cover_chord_state *s, int button,
+                              int held, bool enabled, bool *fire)
+{
+    const unsigned int chord = BUTTON_SELECT | BUTTON_MENU;
+    *fire = false;
+    if (button & (SYS_EVENT | BUTTON_MULTIMEDIA | BUTTON_REDRAW | BUTTON_REMOTE))
+        return button;
+    if (s->latched)
+    {
+        bool blocked = (button & chord) != 0;
+        if (button & BUTTON_REL) s->remaining &= ~(button & chord);
+        else s->remaining |= button & chord;
+        /* Latest sampled held may already be zero while releases remain
+         * queued. Consume both releases before un-latching. */
+        if (!s->remaining && !(held & chord)) s->latched = false;
+        return blocked ? BUTTON_NONE : button;
+    }
+    unsigned int pressed = button & BUTTON_REL ? 0 : button & BUTTON_MAIN;
+    /* Preserve SELECT+PLAY precedence for a three-key combination. */
+    if (enabled && !((held | pressed) & BUTTON_PLAY) &&
+        (((unsigned int)held & chord) == chord || (pressed & chord) == chord))
+    {
+        s->latched = true;
+        s->remaining = chord;
+        *fire = true;
+        return BUTTON_NONE;
+    }
+    return button;
+}

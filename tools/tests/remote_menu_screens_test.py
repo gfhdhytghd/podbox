@@ -45,6 +45,7 @@ pre = r'''
 #include "apps-ipod/input/agents_shortcut.h"
 #define TIME_BEFORE(a,b) ((long)((unsigned long)(a)-(unsigned long)(b)) < 0)
 static struct agents_shortcut_state shortcut;
+static struct agents_cover_chord_state cover_chord;
 static bool shortcut_talking, remote_input_active;
 static unsigned long shortcut_talking_at, current_tick;
 static struct agents_remote_state remote;
