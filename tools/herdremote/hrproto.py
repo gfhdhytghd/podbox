@@ -244,7 +244,15 @@ def parse_command(payload):
     fields = records[0]
     name, args = fields[0], fields[1:]
     if name == "vw":
-        return (name, args) if len(records) == 1 and args in (["0"], ["1"]) else None
+        if len(records) != 1:
+            return None
+        if args in (["0"], ["1"]):
+            return name, args
+        if (len(args) == 2 and args[0] == "detail" and args[1] and
+                len(args[1].encode('utf-8')) <= 15 and
+                not any(ord(c) < 32 or ord(c) == 127 for c in args[1])):
+            return name, args
+        return None
     shapes = {"hr": 1, "sub": 1, "fw": 2, "fp": 2, "a": 3, "us": 0,
               "vd": 2, "vu": 1, "vc": 1, "k": 2, "ft": 3, "det": 1}
     if name in ("sub", "ft", "det"):

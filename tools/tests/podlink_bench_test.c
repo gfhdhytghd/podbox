@@ -140,3 +140,5 @@ int main(void)
         }
     return 0;
 }
+
+void root_menu_cover_shortcut(void) { assert(!"unexpected covers shortcut"); }

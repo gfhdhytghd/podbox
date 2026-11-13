@@ -153,3 +153,50 @@ class UsageKeysTests(unittest.TestCase):
         daemon.command(b'vw\t1');self.assertTrue(self.gate.active)
         daemon.command(b'vw\t0');self.assertFalse(self.gate.active)
         daemon.command(b'vw\t1');daemon.reset_session();self.assertFalse(self.gate.active)
+
+    def test_detail_wire_and_versioned_state_reuse_exact_usage_batches(self):
+        self.assertEqual(hrproto.parse_command(b'vw\tdetail\tw1:p1'),('vw',['detail','w1:p1']))
+        for data in (b'vw\tdetail',b'vw\tdetail\t',b'vw\tdetail\tp\textra',
+                     b'vw\tdetail\t1234567890123456',b'vw\tdetail\tp\nextra'):
+            self.assertIsNone(hrproto.parse_command(data))
+        self.gate.update(True,view='detail',pane='w1:p1')
+        state=json.loads((self.gate.directory/'view.json').read_text())
+        self.assertEqual((state['version'],state['usage'],state['view']),(2,False,'detail'))
+        # A FU15 bridge rejects version 2 / usage false; a new bridge handles it.
+        for direction,key in ((bridge.VOL_UP,'up'),(bridge.VOL_DOWN,'down')):
+            self.report(direction,7);self.tool.tap.assert_called_with(key,3)
+        old=self.gate.token
+        self.gate.update(True,view='detail',pane='w1:p2')
+        self.assertNotEqual(self.gate.token,old)
+        self.gate.update(True)
+        state=json.loads((self.gate.directory/'view.json').read_text())
+        self.assertEqual((state['version'],state['usage']),(1,True))
+
+    def test_detail_focus_gate_denies_pending_failed_other_pane_and_reset(self):
+        args=argparse.Namespace(socket=None,state=str(Path(self.temp.name)/'order'))
+        daemon=herdremote.Daemon(args)
+        self.addCleanup(daemon.remote_log.close)
+        daemon.link=mock.Mock(opened=True);daemon.sent_ws=b''
+        daemon.send=mock.Mock();daemon.herdr=mock.Mock()
+        daemon.usage_keys.directory=Path(self.temp.name)/'detail-runtime'
+        daemon.usage_keys.start();self.addCleanup(daemon.usage_keys.close)
+        daemon.command(b'det\tw1:p1')
+        daemon.command(b'vw\tdetail\tw1:p1');self.assertFalse(daemon.usage_keys.active)
+        daemon.herdr.focus_pane.side_effect=herdremote.hrherdr.HerdrError('failed')
+        daemon.command(b'fp\tf1\tw1:p1');daemon.command(b'vw\tdetail\tw1:p1')
+        self.assertFalse(daemon.usage_keys.active)
+        daemon.herdr.focus_pane.side_effect=None
+        daemon.command(b'fp\tf2\tw1:p2');daemon.command(b'vw\tdetail\tw1:p1')
+        self.assertFalse(daemon.usage_keys.active)
+        daemon.command(b'fp\tf3\tw1:p1');daemon.command(b'vw\tdetail\tw1:p1')
+        self.assertTrue(daemon.usage_keys.active)
+        token=daemon.usage_keys.token;at=daemon.usage_keys.clock()
+        self.assertTrue(daemon.usage_keys.valid(token,at))
+        daemon.detail_keys_pane=None
+        self.assertFalse(daemon.usage_keys.valid(token,at))  # Worker gate rechecks.
+        daemon.command(b'fp\tf4\tw1:p1');daemon.command(b'vw\tdetail\tw1:p1')
+        daemon.command(b'det\tw1:p2');self.assertFalse(daemon.usage_keys.active)
+        daemon.command(b'fp\tf5\tw1:p2');daemon.command(b'vw\tdetail\tw1:p2')
+        self.assertTrue(daemon.usage_keys.active)
+        daemon.reset_session();self.assertFalse(daemon.usage_keys.active)
+        daemon.herdr.call.assert_not_called()

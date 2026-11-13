@@ -7,5 +7,6 @@
 #define AGENTS_SCREEN_H
 #define AGENTS_EXIT_MENU 0
 #define AGENTS_SWITCH_WPS 2
+#define AGENTS_SWITCH_COVERS 3
 int agents_screen(void);
 #endif

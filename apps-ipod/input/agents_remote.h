@@ -4,8 +4,10 @@
 #include <stdbool.h>
 #define REMOTE_WPS_BUTTON (BUTTON_REDRAW | 0x100)
 #define REMOTE_SWITCH_BUTTON (BUTTON_REDRAW | BUTTON_SELECT | BUTTON_PLAY)
+#define REMOTE_COVERS_BUTTON (BUTTON_REDRAW | 0x200)
+#define REMOTE_TAP_WINDOW_TICKS ((HZ + 4) / 5)
 enum agents_remote_context {
-    REMOTE_OTHER, REMOTE_AGENTS, REMOTE_WPS
+    REMOTE_OTHER, REMOTE_AGENTS, REMOTE_WPS, REMOTE_COVERS
 };
 struct agents_remote_hold {
     bool down, fired;
@@ -16,6 +18,7 @@ struct agents_remote_state {
     /* A pending tap, a newly classified hold, release and native key. */
     int replay[6];
     unsigned int queued;
+    unsigned int taps;
     bool tap_pending, second;
     unsigned long released;
     int play_context;

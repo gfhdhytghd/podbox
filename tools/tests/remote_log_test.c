@@ -59,7 +59,7 @@ int main(void)
     assert(button_usb_remote_request(&req)); expect("SELECT up");
     req.wValue=6; assert(!button_usb_remote_request(&req));
     assert(!remote_log_read(line, sizeof(line)));
-    for (int c=REMOTE_OTHER; c<=REMOTE_WPS; c++)
+    for (int c=REMOTE_OTHER; c<=REMOTE_COVERS; c++)
     {
         struct agents_remote_state s = {0};
         gesture(&s,c,BUTTON_RC_PLAY,BUTTON_RC_PLAY,100);
@@ -69,10 +69,18 @@ int main(void)
         gesture(&s,c,BUTTON_RC_PLAY|BUTTON_REL,0,210);
         gesture(&s,c,BUTTON_RC_PLAY,BUTTON_RC_PLAY,220);
         gesture(&s,c,BUTTON_RC_PLAY|BUTTON_REL,0,225);
-        expect("PLAY tick=225 double");
+        gesture(&s,c,0,0,246);
+        expect("PLAY tick=246 double");
         gesture(&s,c,BUTTON_RC_PLAY,BUTTON_RC_PLAY,300);
         gesture(&s,c,0,BUTTON_RC_PLAY,360); expect("PLAY tick=360 hold");
         gesture(&s,c,BUTTON_RC_PLAY|BUTTON_REL,0,361);
+        gesture(&s,c,BUTTON_RC_PLAY,BUTTON_RC_PLAY,500);
+        gesture(&s,c,BUTTON_RC_PLAY|BUTTON_REL,0,510);
+        gesture(&s,c,BUTTON_RC_PLAY,BUTTON_RC_PLAY,520);
+        gesture(&s,c,BUTTON_RC_PLAY|BUTTON_REL,0,530);
+        gesture(&s,c,BUTTON_RC_PLAY,BUTTON_RC_PLAY,540);
+        gesture(&s,c,BUTTON_RC_PLAY|BUTTON_REL,0,550);
+        expect("PLAY tick=550 triple");
     }
     struct agents_remote_state s = {0};
     gesture(&s,REMOTE_AGENTS,BUTTON_RC_VOL_UP|BUTTON_REL|BUTTON_REPEAT,0,400);
@@ -101,5 +109,5 @@ int main(void)
     assert(!remote_log_read(line,sizeof(line)));
     remote_log_enable(true, remote_log_format);
     assert(!remote_log_read(line,sizeof(line)));
-    puts("remote stream: exact RAW/BAD/TRUNC/VOL, held, Play in 3 contexts, EP0 validation, page, bounded overflow/LOST fairness, off/reset PASS");
+    puts("remote stream: exact RAW/BAD/TRUNC/VOL, held, Play in 4 contexts, EP0 validation, page, bounded overflow/LOST fairness, off/reset PASS");
 }

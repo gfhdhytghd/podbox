@@ -350,19 +350,36 @@ static void flush_outbox(void)
 
 #define USAGE_VIEW_SIGNAL_TICKS MAX(1, HZ / 4)
 static unsigned long usage_view_signal_at;
-static bool usage_view_signal_value;
+static int usage_view_signal_value;
+static char usage_view_signal_pane[16];
 
 /* Direct, expiring lease: never enqueue old view heartbeats behind commands. */
-static void signal_usage_view(bool active, bool force)
+static void signal_usage_view(int active, bool force)
 {
+    /* Detail is armed only after its matching pane-focus reply succeeded. */
+    if (active == 2 && (!detail_ready || focus_req[0])) active = 0;
+    const char *pane = active == 2 ? detail_pane : "";
     if (!force && active == usage_view_signal_value &&
+        !strcmp(pane, usage_view_signal_pane) &&
         TIME_BEFORE(current_tick, usage_view_signal_at))
         return;
-    const char *text = active ? "vw\t1" : "vw\t0";
+    char text[32];
+    if (active == 2) snprintf(text, sizeof text, "vw\tdetail\t%s", pane);
+    else strcpy(text, active ? "vw\t1" : "vw\t0");
+    /* Old daemons reject detail records. Revoke any earlier Usage lease
+     * first so a mixed-version pair cannot retain it while detail opens. */
+    if (active == 2 &&
+        (usage_view_signal_value != 2 || strcmp(pane, usage_view_signal_pane)))
+    {
+        if (podlink_state() != PODLINK_CONNECTED ||
+            podlink_send(PODLINK_TEXT, "vw\t0", 4) != PODLINK_SENT)
+            return;
+    }
     if (podlink_state() == PODLINK_CONNECTED &&
         podlink_send(PODLINK_TEXT, text, strlen(text)) == PODLINK_SENT)
     {
         usage_view_signal_value = active;
+        strcpy(usage_view_signal_pane, pane);
         usage_view_signal_at = (unsigned long)current_tick + USAGE_VIEW_SIGNAL_TICKS;
     }
 }
@@ -1985,6 +2002,9 @@ static void update_volume_mode(void)
         iap_agents_volume_enable(want);
         volume_paging = want;
     }
+    iap_agents_volume_host_keys(view == VIEW_DETAIL || view == VIEW_USAGE ||
+        (view == VIEW_CONFIRM &&
+         (confirm_from == VIEW_DETAIL || confirm_from == VIEW_USAGE)));
 #endif
 }
 
@@ -2475,7 +2495,7 @@ int agents_screen(void)
                 hr_popped_add(&popped, q->id);
         }
         pop_question(&list);
-        signal_usage_view(view == VIEW_USAGE, false);
+        signal_usage_view(view == VIEW_USAGE ? 1 : view == VIEW_DETAIL ? 2 : 0, false);
         /* Status rows count seconds, so they redraw once a second */
         const char *t = trouble(buf, sizeof buf);
         if (view == VIEW_USAGE)
@@ -2765,6 +2785,12 @@ int agents_screen(void)
                 break;
             case ACTION_AGENTS_DISCARD:
                 finish_talk(true);
+                break;
+            case ACTION_AGENTS_COVERS:
+                native_play_pending = false;
+                finish_talk(true);
+                ret = AGENTS_SWITCH_COVERS;
+                done = true;
                 break;
             case ACTION_AGENTS_SWITCH:
                 native_play_pending = false;

@@ -144,7 +144,9 @@ class Daemon:
                                   key_scale=getattr(args, "key_scale", None))
         self.usage_keys = hrusagekeys.UsageKeys(self.keys, lambda:
             bool(self.link and self.link.opened and self.sent_ws is not None and
-                 self.foreground in (None, 1)))
+                 self.foreground in (None, 1) and
+                 (self.usage_keys.view != 'detail' or
+                  self.detail_keys_pane == self.usage_keys.pane == self.detail_pane)))
         self.voice = hrvoice.HoldToTalk(
             self.voice_focus_target,
             voice_focus=getattr(args, "voice_focus", False),
@@ -171,6 +173,7 @@ class Daemon:
         self.subscribed = None
         self.subscribed_tab = None
         self.detail_pane = None
+        self.detail_keys_pane = None
         self.sent_detail = None
         self.sent_detail_key = None
         self.sent_detail_at = 0.0
@@ -504,6 +507,8 @@ class Daemon:
         elif name == "det":
             pane = None if args[0] == "-" else args[0]
             if pane != self.detail_pane:
+                self.detail_keys_pane = None
+                self.usage_keys.update(False)
                 self.sent_detail = None
                 self.sent_detail_key = None
                 self.pending_detail = None
@@ -514,7 +519,12 @@ class Daemon:
             self.send(hrproto.usage(self.usage.snapshot(), time.time()))
             self.usage.request()
         elif name == "vw":
-            self.usage_keys.update(args[0] == "1")
+            if args[0] == 'detail':
+                pane = args[1]
+                self.usage_keys.update(pane == self.detail_pane == self.detail_keys_pane,
+                                       view='detail', pane=pane)
+            else:
+                self.usage_keys.update(args[0] == "1")
         elif name in ("fw", "fp", "ft"):
             self.focus(name, *args)
         elif name in ("vd", "vu", "vc"):
@@ -562,6 +572,8 @@ class Daemon:
         self.send(hrproto.result(req, *result))
 
     def focus(self, name, req, target, tab_id=None):
+        self.detail_keys_pane = None
+        self.usage_keys.update(False)
         try:
             if name in ("fw", "ft"):
                 ws = next((w for w in self.model["workspaces"]
@@ -581,6 +593,8 @@ class Daemon:
                     text = "Focused " + ws["label"]
             else:
                 self.herdr.focus_pane(target)
+                if target == self.detail_pane:
+                    self.detail_keys_pane = target
                 text = "Focused pane"
             self.send(hrproto.result(req, True, text))
             log.debug("%s %s", text, target)

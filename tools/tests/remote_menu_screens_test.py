@@ -48,7 +48,7 @@ static struct agents_shortcut_state shortcut;
 static bool shortcut_talking, remote_input_active;
 static unsigned long shortcut_talking_at, current_tick;
 static struct agents_remote_state remote;
-enum {ACTIVITY_AGENTS,ACTIVITY_WPS,ACTIVITY_OTHER};
+enum {ACTIVITY_AGENTS,ACTIVITY_WPS,ACTIVITY_OTHER,ACTIVITY_ALBUMCOVERS};
 static int raw, held, activity=ACTIVITY_OTHER;
 static int get_current_activity(void) {return activity;}
 static int button_status(void) {return held;}

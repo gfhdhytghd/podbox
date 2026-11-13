@@ -643,3 +643,54 @@ The existing remaining HerdRemote siblings, podlink.py, units, requirements
 and udev rules remain compatible and are bundled. The IR serial open remains
 O_RDONLY. No installation, key injection, device access or service operation
 is performed by the offline build/tests.
+
+## Detail host keys and Cover Flow gestures (Follow-up 16)
+
+T1 extends the FU15 host-arrow lease to detail. The player sends
+`vw\tdetail\t<pane-id>` only after that detail's pane-focus reply succeeds;
+focus pending/failed, another view and exit send `vw\t0`. Usage still sends
+`vw\t1`. Refresh/expiry/report bounds remain 250/750/100 ms. HerdRemote
+also requires a successful fp for the currently subscribed detail pane,
+invalidates on focus attempts, pane changes and session resets, and rechecks
+this authorization before starting a batch. Keys use the same current-focus
+backend and exact 0.5/1/4/7 s Usage acceleration, with no herdr send_keys.
+
+The player sends legacy vw=0 before entering/changing detail, revoking an
+earlier Usage lease even on an old daemon. The new detail record is
+deliberately rejected by FU15 daemons. Detail
+view.json uses version 2, view=detail, pane=<id>, usage=false. FU15 bridges
+reject it; the new bridge handles it and still accepts version 1 Usage.
+The token rotates between Usage/detail/panes, so queued reports cannot cross
+a view/focus boundary. Old firmware still supplies Usage only. Connected
+detail ignores PC EP0 volume locally and never pages; disconnected detail
+retains FU13 Dock paging. List one-item steps remain as installed.
+
+T2' replaces the proposed three-screen cycle. Remote Play double-tap keeps
+Agents <-> Now Playing. Three short taps, each next press beginning within
+200 ms of the previous release, toggle Cover Flow. Triple in Cover Flow
+returns to its caller: cached Agents view/selection after normal client
+cleanup/reopen, or the existing WPS album-modal helper's Now Playing frame.
+Other action-based screens and raw viewers suspend their caller as well.
+Both music switches leave Agents silently without USB consent; MENU exit
+still uses S1's popup. SELECT+PLAY retains its existing Agents/WPS toggle
+and open-Agents shortcut elsewhere.
+
+A second short release waits for the third-tap window before firing double.
+That adds a 200 ms classification window; at HZ=100 the strict inclusive
+boundary commits at the first tick after it (210 ms), plus scheduling.
+The input timeout is bounded by that deadline, rather than adding another
+100 ms poll interval. A third short release commits triple immediately.
+Single taps keep their meanings except T3: in ACTIVITY_ALBUMCOVERS a remote
+Play tap emits the same native SELECT press/release as the wheel. Double
+there opens Agents, and triple returns to the origin. The existing 600 ms
+remote Play hold there still opens Now Playing; native Play hold still
+performs the carousel's original random-spin action. Agents' 300 ms remote
+hold and native 150 ms recording classification are unchanged. LOG PLAY now
+also reports triple with its context; older record-kind numbers are retained.
+
+Deploy matching usb_remote_key.py, herdremote.py, hrproto.py and
+hrusagekeys.py, with the two READMEs and this protocol document. The existing
+hrkeys.py backend and other runtime siblings remain compatible and bundled.
+No serial-write, service-operation or installation step is part of this
+build-only package. All hardware/desktop gesture delivery requires separately
+authorized acceptance; local tests use mocked keys and private IPC endpoints.

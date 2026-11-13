@@ -219,6 +219,12 @@ int podlink_screen(void)
             draw_at = current_tick + HZ / 4;
         }
         int button = agents_shortcut_get_button(TIMEOUT_NOBLOCK);
+        if (button == REMOTE_COVERS_BUTTON)
+        {
+            root_menu_cover_shortcut();
+            draw_at = 0;
+            continue;
+        }
         if (button == AGENTS_SHORTCUT_BUTTON) shortcut = 1;
         if (button == REMOTE_WPS_BUTTON) shortcut = 2;
         if ((button == BUTTON_MENU || shortcut) && !exiting)

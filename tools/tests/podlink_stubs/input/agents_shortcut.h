@@ -6,3 +6,6 @@ void root_menu_agents_shortcut(void);
 
 #define REMOTE_WPS_BUTTON 0x20000100
 void root_menu_wps_shortcut(void);
+
+#define REMOTE_COVERS_BUTTON 0x20000200
+void root_menu_cover_shortcut(void);

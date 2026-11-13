@@ -155,7 +155,9 @@ class UsageVolume:
             with open(os.path.join(self.directory, 'view.json')) as stream:
                 state = json.load(stream)
             token = state['token']
-            if (state['version'] != 1 or state['usage'] is not True or
+            enabled = ((state['version'] == 1 and state['usage'] is True) or
+                       (state['version'] == 2 and state.get('view') == 'detail'))
+            if (not enabled or
                     not isinstance(token, str) or not re.fullmatch('[0-9a-f]{32}', token) or
                     not now < state['expires'] <= now + USAGE_VIEW_LEASE_SECONDS):
                 return

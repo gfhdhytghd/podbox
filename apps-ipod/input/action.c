@@ -310,6 +310,13 @@ static int remote_poll(int timeout, int context)
     if (remote.queued) return BUTTON_NONE;
     if (agents_remote_pending(&remote) && (timeout < 0 || timeout > HZ / 10))
         timeout = HZ / 10;
+    if (remote.tap_pending && !remote.second)
+    {
+        unsigned long age = (unsigned long)current_tick - remote.released;
+        int left = age > REMOTE_TAP_WINDOW_TICKS ? 0 :
+                   REMOTE_TAP_WINDOW_TICKS - age + 1;
+        if (timeout < 0 || timeout > left) timeout = left;
+    }
     int button = button_get_w_tmo(TIMEOUT_NOBLOCK);
     if (button == BUTTON_NONE && context == REMOTE_AGENTS)
         button = iap_agents_volume_take();
@@ -327,7 +334,8 @@ int agents_shortcut_get_button(int timeout)
 #ifdef IPOD_ACCESSORY_PROTOCOL
     int activity = get_current_activity();
     int context = activity == ACTIVITY_AGENTS ? REMOTE_AGENTS :
-                  activity == ACTIVITY_WPS ? REMOTE_WPS : REMOTE_OTHER;
+                  activity == ACTIVITY_WPS ? REMOTE_WPS :
+                  activity == ACTIVITY_ALBUMCOVERS ? REMOTE_COVERS : REMOTE_OTHER;
     int button = remote_poll(timeout, context);
 #else
     int button = button_get_w_tmo(timeout);
@@ -356,7 +364,9 @@ static inline bool action_poll_button(action_last_t *last, action_cur_t *cur)
 
 #if defined(IPOD_ACCESSORY_PROTOCOL) && defined(HAVE_USB_PODLINK)
     int context = cur->context == CONTEXT_AGENTS ? REMOTE_AGENTS :
-                  cur->context == CONTEXT_WPS ? REMOTE_WPS : REMOTE_OTHER;
+                  cur->context == CONTEXT_WPS ? REMOTE_WPS :
+                  get_current_activity() == ACTIVITY_ALBUMCOVERS ?
+                  REMOTE_COVERS : REMOTE_OTHER;
     *button = remote_poll(cur->timeout, context);
 #else
     *button = button_get_w_tmo(cur->timeout);
@@ -393,6 +403,14 @@ static inline bool action_poll_button(action_last_t *last, action_cur_t *cur)
         last->action = ACTION_NONE;
         last->wait_for_release = false;
         *button = ACTION_AGENTS_SWITCH;
+        return true;
+    }
+    if (*button == REMOTE_COVERS_BUTTON)
+    {
+        last->button = BUTTON_REL;
+        last->action = ACTION_NONE;
+        last->wait_for_release = false;
+        *button = ACTION_AGENTS_COVERS;
         return true;
     }
 #endif
@@ -962,13 +980,17 @@ int get_action(int context, int timeout)
 #ifdef HAVE_USB_PODLINK
     if (action == ACTION_REMOTE_WPS ||
         (action == ACTION_AGENTS_SWITCH && context != CONTEXT_WPS &&
-         context != CONTEXT_AGENTS))
+         context != CONTEXT_AGENTS) ||
+        (action == ACTION_AGENTS_COVERS && context != CONTEXT_WPS &&
+         context != CONTEXT_AGENTS &&
+         get_current_activity() != ACTIVITY_ALBUMCOVERS))
     {
 #ifdef IPOD_ACCESSORY_PROTOCOL
         bool capture = remote_input_active;
         remote_input_active = false;
 #endif
         if (action == ACTION_REMOTE_WPS) root_menu_wps_shortcut();
+        else if (action == ACTION_AGENTS_COVERS) root_menu_cover_shortcut();
         else root_menu_agents_shortcut();
 #ifdef IPOD_ACCESSORY_PROTOCOL
         remote_input_active = capture;
@@ -1085,13 +1107,17 @@ int get_custom_action(int context,int timeout,
 #ifdef HAVE_USB_PODLINK
     if (action == ACTION_REMOTE_WPS ||
         (action == ACTION_AGENTS_SWITCH && context != CONTEXT_WPS &&
-         context != CONTEXT_AGENTS))
+         context != CONTEXT_AGENTS) ||
+        (action == ACTION_AGENTS_COVERS && context != CONTEXT_WPS &&
+         context != CONTEXT_AGENTS &&
+         get_current_activity() != ACTIVITY_ALBUMCOVERS))
     {
 #ifdef IPOD_ACCESSORY_PROTOCOL
         bool capture = remote_input_active;
         remote_input_active = false;
 #endif
         if (action == ACTION_REMOTE_WPS) root_menu_wps_shortcut();
+        else if (action == ACTION_AGENTS_COVERS) root_menu_cover_shortcut();
         else root_menu_agents_shortcut();
 #ifdef IPOD_ACCESSORY_PROTOCOL
         remote_input_active = capture;

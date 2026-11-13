@@ -21,7 +21,7 @@ static void reset_sources(bool paging)
 {
     current_tick=0;wakeups=0;activity=0;
     bridge_seen=false;test_link=false;
-    global_status.volume=12;iap_agents_volume_enable(paging);activity=ACTIVITY_AGENTS;
+    global_status.volume=12;iap_agents_volume_enable(paging);iap_agents_volume_host_keys(false);activity=ACTIVITY_AGENTS;
     remote_log_enable(true,remote_log_format);
 }
 #include "apps-ipod/input/agents_remote.h"
@@ -90,6 +90,15 @@ int main(void)
     assert(global_status.volume==12);
     test_link=false;assert(!dock(103,18));assert(global_status.volume==18);
     assert(!take_at(103));
+    /* FU16 detail delegates connected PC reports, keeps disconnected pages. */
+    reset_sources(true);test_link=true;pc(100,1,true);
+    iap_agents_volume_host_keys(true);assert(!take_at(100));
+    pc(101,1,true);pc(102,-1,false);assert(!take_at(102));
+    assert(dock(103,15));assert(!take_at(103)&&global_status.volume==12);
+    test_link=false;assert(dock(104,18));assert(take_at(104)==UP);
+    assert(global_status.volume==12);
+    iap_agents_volume_host_keys(false);test_link=true;pc(105,-1,true);
+    assert(take_at(105)==DOWN);
     /* Outside Agents no new PC volume behavior and original real Dock volume. */
     reset_sources(false);activity=0;test_link=true;heartbeat(100);pc(101,1,true);
     assert(!dock(102,15));assert(global_status.volume==15&&!take_at(102));

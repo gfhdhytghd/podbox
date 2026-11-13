@@ -60,8 +60,10 @@ pre = r'''
 #define ACTION_AGENTS_REMOTE_TALK 11
 #define ACTION_AGENTS_DISCARD 12
 #define ACTION_AGENTS_SWITCH 13
+#define ACTION_AGENTS_COVERS 15
 #define ACTION_AGENTS_TALK_END 14
 #define AGENTS_SWITCH_WPS 2
+#define AGENTS_SWITCH_COVERS 3
 static unsigned long current_tick,shortcut_talking_at;
 static bool shortcut_talking,talk_held,talk_remote,talk_discarded,talk_req_up,talk_failed;
 static long talk_since,talk_until;
@@ -173,7 +175,7 @@ int main(void){
  reset();rc(BUTTON_RC_PLAY,BUTTON_RC_PLAY,100);model.voice='t';assert(!talk_wanted());
  rc(BUTTON_RC_PLAY|BUTTON_REL,0,113);assert(!talk_wanted());
  rc(BUTTON_RC_PLAY,BUTTON_RC_PLAY,118);model.voice='t';assert(!talk_wanted());
- rc(BUTTON_RC_PLAY|BUTTON_REL,0,131);assert(switches==1&&!talk_wanted());
+ rc(BUTTON_RC_PLAY|BUTTON_REL,0,131);assert(!switches);rc(0,0,152);assert(switches==1&&!talk_wanted());
  /* A delayed successful vc result cannot display Sent or Talking. */
  reset();rc(BUTTON_RC_PLAY,BUTTON_RC_PLAY,100);rc(BUTTON_RC_PLAY|BUTTON_REL,0,113);
  strcpy(model.result_req,talk_req);strcpy(model.result_text,"Discarded");model.result_ok=true;

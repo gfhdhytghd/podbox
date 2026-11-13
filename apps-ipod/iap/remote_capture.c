@@ -261,7 +261,7 @@ unsigned int remote_log_format(const struct remote_log_record *r,
                      (r->a & 1) ? "VOL+" : "VOL-",
                      r->b == 0 ? "used" : r->b == 1 ? "fallback" :
                      r->b == 4 ? "ignored-pc-connected" :
-                     r->b == 5 ? "ignored-usage-host-keys" :
+                     r->b == 5 ? "ignored-view-host-keys" :
                      "ignored-outside-or-disconnected",
                      pair.press, pc_tick, dock_tick);
     }
@@ -273,6 +273,7 @@ unsigned int remote_log_format(const struct remote_log_record *r,
     else
         n = snprintf(out, size, "LOG PLAY tick=%lu %s context=%lu", r->tick,
                      r->kind == REMOTE_LOG_TAP ? "tap" :
-                     r->kind == REMOTE_LOG_DOUBLE ? "double" : "hold", r->a);
+                     r->kind == REMOTE_LOG_DOUBLE ? "double" :
+                     r->kind == REMOTE_LOG_TRIPLE ? "triple" : "hold", r->a);
     return n > 0 && (unsigned int)n < size ? (unsigned int)n : 0;
 }

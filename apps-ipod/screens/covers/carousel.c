@@ -4526,6 +4526,10 @@ static int album_covers_loop(void)
         }
 
         switch (button) {
+#ifdef HAVE_USB_PODLINK
+        case ACTION_AGENTS_COVERS:
+            return GO_TO_PREVIOUS;
+#endif
         case PF_QUIT:
             return GO_TO_PREVIOUS;
         case PF_WPS:

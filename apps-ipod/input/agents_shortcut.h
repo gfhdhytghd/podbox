@@ -9,6 +9,7 @@
 int agents_shortcut_get_button(int timeout);
 void root_menu_agents_shortcut(void);
 void root_menu_wps_shortcut(void);
+void root_menu_cover_shortcut(void);
 #else
 #define agents_shortcut_get_button button_get_w_tmo
 #endif

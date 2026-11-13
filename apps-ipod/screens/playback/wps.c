@@ -640,6 +640,9 @@ static long do_party_mode(long action)
             case ACTION_WPS_NEXT_ALBUM:
             case ACTION_WPS_PREV_ALBUM:
             case ACTION_WPS_STOP:
+#ifdef HAVE_USB_PODLINK
+            case ACTION_AGENTS_COVERS:
+#endif
                 return ACTION_NONE;
                 break;
             default:

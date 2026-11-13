@@ -24,6 +24,7 @@ class UsageKeys:
         self.directory = Path(directory) if directory else runtime_dir()
         self.socket = self.lockfile = None
         self.active, self.expires = False, 0.0
+        self.view, self.pane = 'off', None
         self.token = uuid.uuid4().hex
 
     def start(self):
@@ -53,17 +54,20 @@ class UsageKeys:
             log.warning('Usage keys disabled: %s', error)
             self.close()
 
-    def update(self, active):
+    def update(self, active, *, view='usage', pane=None):
         active = bool(active and self.alive())
-        if active != self.active:
+        view, pane = (view, pane) if active else ('off', None)
+        if (active, view, pane) != (self.active, self.view, self.pane):
             self.token = uuid.uuid4().hex
         self.active = active
+        self.view, self.pane = view, pane
         self.expires = self.clock() + VIEW_LEASE_SECONDS if active else 0.0
         if self.socket is not None:
             try:
                 temporary = self.directory / 'view.tmp'
-                temporary.write_text(json.dumps(dict(version=1, token=self.token,
-                    expires=self.expires, usage=active)))
+                temporary.write_text(json.dumps(dict(version=2 if view == 'detail' else 1,
+                    token=self.token, expires=self.expires,
+                    usage=active and view == 'usage', view=view, pane=pane)))
                 temporary.replace(self.directory / 'view.json')
             except OSError as error:
                 self.active = False

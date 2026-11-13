@@ -977,9 +977,10 @@ static int row_session(bool *again)
                       speak_due ? (left > 0 ? left : 0) : TIMEOUT_BLOCK);
 #ifdef HAVE_USB_PODLINK
             if (btn == AGENTS_SHORTCUT_BUTTON ||
-                btn == REMOTE_WPS_BUTTON)
+                btn == REMOTE_WPS_BUTTON || btn == REMOTE_COVERS_BUTTON)
             {
                 if (btn == REMOTE_WPS_BUTTON) root_menu_wps_shortcut();
+                else if (btn == REMOTE_COVERS_BUTTON) root_menu_cover_shortcut();
                 else root_menu_agents_shortcut();
                 repaint(year);
                 continue;

@@ -198,3 +198,5 @@ int main(void)
     puts("PASS: rejected BENCH commands preserve upload/download state");
     return 0;
 }
+
+void root_menu_cover_shortcut(void) { assert(!"unexpected covers shortcut"); }

@@ -74,6 +74,7 @@ int main(void) {
         reset();
         /* Captured 290 ms + 130 ms taps, with a 150 ms release-to-press gap. */
         for(int i=0;i<11;i++) feed(modes[c],captured[i].button,captured[i].held,captured[i].tick);
+        assert(!count);feed(modes[c],0,0,captured[10].tick+21);
         assert(count==1&&output[0]==SWITCH);
         feed(modes[c],0,0,64860);assert(count==1);
         /* New 130 ms taps in Agents; old 400 ms taps elsewhere, slow gaps. */
@@ -92,7 +93,7 @@ int main(void) {
             feed(modes[c],BUTTON_RC_PLAY|BUTTON_REL,0,129);
             feed(modes[c],BUTTON_RC_PLAY,BUTTON_RC_PLAY,129+gap);
             feed(modes[c],BUTTON_RC_PLAY|BUTTON_REL,0,142+gap);
-            if(gap<=20) assert(count==1&&output[0]==SWITCH);
+            if(gap<=20) {assert(!count);feed(modes[c],0,0,163+gap);assert(count==1&&output[0]==SWITCH);}
             else {feed(modes[c],0,0,180+gap);assert(count==4);}
         }
     }
@@ -141,6 +142,7 @@ int main(void) {
     feed(REMOTE_OTHER,BUTTON_RC_PLAY|BUTTON_REL,0,ULONG_MAX-10);
     feed(REMOTE_OTHER,BUTTON_RC_PLAY,BUTTON_RC_PLAY,9);
     feed(REMOTE_OTHER,BUTTON_RC_PLAY|BUTTON_REL,0,19);
+    assert(!count);feed(REMOTE_OTHER,0,0,40);
     assert(count==1&&output[0]==SWITCH);
     reset();feed(REMOTE_AGENTS,BUTTON_PLAY,BUTTON_PLAY,100);
     feed(REMOTE_AGENTS,BUTTON_PLAY|BUTTON_REPEAT,BUTTON_PLAY,115);

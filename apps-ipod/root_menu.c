@@ -970,7 +970,13 @@ static int settings_scrn(void * param)
 static int agents_scrn(void *param)
 {
     (void)param;
-    int ret = agents_screen();
+    int ret;
+    while ((ret = agents_screen()) == AGENTS_SWITCH_COVERS)
+    {
+        int destination = album_covers_scrn(NULL);
+        if (destination != GO_TO_PREVIOUS) return destination;
+        /* A triple inside the carousel resumes the cached Agents client. */
+    }
     wps_return_agents = ret == AGENTS_SWITCH_WPS;
     return ret == AGENTS_SWITCH_WPS ? GO_TO_WPS : GO_TO_PREVIOUS;
 }
@@ -984,8 +990,8 @@ void root_menu_agents_shortcut(void)
     while (true)
     {
         button_set_sw_poweroff_state(poweroff);
-        int ret = agents ? agents_screen() : wpsscrn(NULL);
-        if ((agents && ret != AGENTS_SWITCH_WPS) ||
+        int ret = agents ? agents_scrn(NULL) : wpsscrn(NULL);
+        if ((agents && ret != GO_TO_WPS) ||
             (!agents && ret != GO_TO_AGENTS))
             break;
         if (agents)
@@ -1002,6 +1008,15 @@ void root_menu_wps_shortcut(void)
     button_set_sw_poweroff_state(true);
     if (wpsscrn(NULL) == GO_TO_AGENTS)
         root_menu_agents_shortcut();
+    button_set_sw_poweroff_state(poweroff);
+}
+
+void root_menu_cover_shortcut(void)
+{
+    bool poweroff = button_get_sw_poweroff_state();
+    int ret = album_covers_scrn(NULL);
+    if (ret == GO_TO_WPS) root_menu_wps_shortcut();
+    else if (ret == GO_TO_AGENTS) root_menu_agents_shortcut();
     button_set_sw_poweroff_state(poweroff);
 }
 #endif

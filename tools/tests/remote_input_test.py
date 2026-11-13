@@ -449,11 +449,13 @@ navpre='''
 #define GO_TO_ROOT -1
 #define GO_TO_PREVIOUS -2
 #define AGENTS_SWITCH_WPS 2
+#define AGENTS_SWITCH_COVERS 3
 static int agents_return, a_calls, w_calls;
 static bool wps_return_agents,was_agents;
 static bool poweroff=true;
 static bool button_get_sw_poweroff_state(void) {return poweroff;}
 static void button_set_sw_poweroff_state(bool on) {poweroff=on;}
+static int album_covers_scrn(void *p) {(void)p;return GO_TO_PREVIOUS;}
 static int agents_screen(void) {a_calls++;return a_calls==1?agents_return:0;}
 static int wpsscrn(void *p) {(void)p;w_calls++;was_agents=wps_return_agents;wps_return_agents=false;return GO_TO_AGENTS;}
 '''
@@ -480,23 +482,26 @@ hookpre='''
 #define ACTION_NONE 0
 #define ACTION_REDRAW 1
 #define ACTION_AGENTS_SWITCH 400
+#define ACTION_AGENTS_COVERS 402
 #define CONTEXT_AGENTS 1
 #define CONTEXT_WPS 2
 #define ACTION_REMOTE_WPS 401
 #define ACTIVITY_AGENTS 1
 #define ACTIVITY_WPS 2
+#define ACTIVITY_ALBUMCOVERS 3
 #define TIMEOUT_NOBLOCK 0
 struct agents_shortcut_state shortcut;
 static bool shortcut_talking;
 static unsigned long shortcut_talking_at;
 bool remote_input_active;
 static struct agents_remote_state remote;
-static int get_current_activity(void) {return 0;}
+static int activity;
+static int get_current_activity(void) {return activity;}
 static int fake_page;
 static int iap_agents_volume_take(void) {int b=fake_page;fake_page=0;return b;}
 static long current_tick;
-static int queued_button, held_button, polls;
-static int button_get_w_tmo(int t) {(void)t;polls++;return queued_button;}
+static int queued_button, held_button, polls,waited;
+static int button_get_w_tmo(int t) {waited=t;polls++;return queued_button;}
 static int button_status(void) {return held_button;}
 static bool has_flag(int a,int b) {return (a&b)==b;}
 typedef struct {int button,action,context;bool wait_for_release;} action_last_t;
@@ -540,8 +545,29 @@ int main(void) {
     current_tick=118;queued_button=held_button=BUTTON_RC_PLAY;
     assert(action_poll_button(&last,&cur)&&!cur.button);
     current_tick=131;queued_button=BUTTON_RC_PLAY|BUTTON_REL;held_button=0;
+    assert(action_poll_button(&last,&cur)&&!cur.button);
+    current_tick=152;queued_button=held_button=0;
     assert(action_poll_button(&last,&cur)&&cur.button==ACTION_AGENTS_SWITCH);
     assert(last.button==BUTTON_REL&&last.action==ACTION_NONE&&!last.wait_for_release);
+    /* Cover Flow's custom context uses its activity, not CONTEXT_WPS. */
+    remote=(struct agents_remote_state){0};activity=ACTIVITY_ALBUMCOVERS;cur.context=99;
+    current_tick=300;queued_button=held_button=BUTTON_RC_PLAY;
+    assert(action_poll_button(&last,&cur)&&!cur.button);
+    current_tick=313;queued_button=BUTTON_RC_PLAY|BUTTON_REL;held_button=0;
+    assert(action_poll_button(&last,&cur)&&!cur.button);
+    current_tick=334;queued_button=held_button=0;
+    assert(!action_poll_button(&last,&cur)&&cur.button==BUTTON_SELECT);
+    assert(!action_poll_button(&last,&cur)&&cur.button==(BUTTON_SELECT|BUTTON_REL));
+    remote=(struct agents_remote_state){0};
+    for(int tap=0;tap<3;tap++) {
+      current_tick=400+tap*18;queued_button=held_button=BUTTON_RC_PLAY;
+      assert(action_poll_button(&last,&cur)&&!cur.button);
+      current_tick+=13;queued_button=BUTTON_RC_PLAY|BUTTON_REL;held_button=0;
+      assert(action_poll_button(&last,&cur));
+      assert(cur.button==(tap==2?ACTION_AGENTS_COVERS:BUTTON_NONE));
+    }
+    remote=(struct agents_remote_state){.tap_pending=true,.taps=2,.released=100};
+    current_tick=120;queued_button=held_button=0;remote_poll(50,REMOTE_WPS);assert(waited==1);
     puts("input polling hook: native-only chord/remote PLAY isolation/native SELECT timing PASS");
 }
 '''

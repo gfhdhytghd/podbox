@@ -27,7 +27,7 @@ static struct {
 } source;
 
 static struct {
-    bool enabled, mute;
+    bool enabled, mute, host_keys;
     unsigned char volume;
     signed char pending;
     unsigned long next_page, step_at;
@@ -65,9 +65,9 @@ static void pc_volume(int direction, bool frame, unsigned long now)
         source_log(direction, true, 3, now);
         return;
     }
-    if (!volume_keys.enabled)
+    if (!volume_keys.enabled || volume_keys.host_keys)
     {
-        /* Usage is handled on the computer, never by iPod page/audio keys. */
+        /* Usage/detail are handled on the computer, never by iPod page keys. */
         source_log(direction, true, 5, now);
         return;
     }
@@ -96,6 +96,14 @@ void iap_agents_volume_enable(bool enabled)
     /* View changes keep accepted PC reports. Entry/exit and Debug clear them. */
     if (get_current_activity() != ACTIVITY_AGENTS)
         source.first = source.used = 0;
+    restore_irq(level);
+}
+
+void iap_agents_volume_host_keys(bool host_keys)
+{
+    int level = disable_irq_save();
+    volume_keys.host_keys = host_keys;
+    if (host_keys) source.first = source.used = 0;
     restore_irq(level);
 }
 

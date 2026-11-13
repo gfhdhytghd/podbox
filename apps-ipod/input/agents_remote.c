@@ -30,7 +30,7 @@ static void play_tap(struct agents_remote_state *s, unsigned long now)
 {
     remote_log_event(REMOTE_LOG_TAP, now, s->play_context, 0, NULL, 0);
     /* Agents already discarded the short recording on physical release. */
-    if (s->play_context == REMOTE_AGENTS)
+    if (s->play_context == REMOTE_AGENTS || s->play_context == REMOTE_COVERS)
     {
         emit(s, BUTTON_SELECT);
         emit(s, BUTTON_SELECT | BUTTON_REL);
@@ -41,6 +41,19 @@ static void play_tap(struct agents_remote_state *s, unsigned long now)
         emit(s, BUTTON_RC_PLAY | BUTTON_REL);
     }
     s->tap_pending = false;
+    s->taps = 0;
+}
+
+static void play_taps(struct agents_remote_state *s, unsigned long now)
+{
+    if (s->taps == 2)
+    {
+        remote_log_event(REMOTE_LOG_DOUBLE, now, s->play_context, 0, NULL, 0);
+        emit(s, REMOTE_SWITCH_BUTTON);
+        s->tap_pending = false;
+        s->taps = 0;
+    }
+    else play_tap(s, now);
 }
 
 static bool play_button(struct agents_remote_state *s, int context, int button,
@@ -49,16 +62,17 @@ static bool play_button(struct agents_remote_state *s, int context, int button,
     struct agents_remote_hold *h = &s->hold[3];
     bool event = (button & BUTTON_REMOTE) == BUTTON_RC_PLAY;
     bool release = event && (button & BUTTON_REL);
-    unsigned long window = (HZ + 4) / 5;
+    unsigned long window = REMOTE_TAP_WINDOW_TICKS;
     unsigned long threshold = context == REMOTE_AGENTS ? (3 * HZ + 9) / 10 :
                                                        (3 * HZ + 4) / 5;
     if (context != s->play_context)
     {
         s->tap_pending = s->second = false;
+        s->taps = 0;
         if (h->down) h->fired = true;
     }
     if (s->tap_pending && !s->second && now - s->released > window)
-        play_tap(s, now);
+        play_taps(s, now);
     if (!h->down && event && !release)
     {
         h->down = true;
@@ -74,11 +88,11 @@ static bool play_button(struct agents_remote_state *s, int context, int button,
         bool ended = release || !(held & BUTTON_RC_PLAY);
         if (!h->fired && now - h->at >= threshold)
         {
-            if (s->tap_pending) play_tap(s, now);
+            if (s->tap_pending) play_taps(s, now);
             remote_log_event(REMOTE_LOG_HOLD, now, context, 0, NULL, 0);
             s->second = false;
             h->fired = true;
-            if (context == REMOTE_OTHER)
+            if (context == REMOTE_OTHER || context == REMOTE_COVERS)
                 emit(s, REMOTE_WPS_BUTTON);
             else if (context == REMOTE_WPS)
             {
@@ -93,15 +107,18 @@ static bool play_button(struct agents_remote_state *s, int context, int button,
             {
                 if (context == REMOTE_AGENTS)
                     emit(s, BUTTON_RC_PLAY | BUTTON_REL | BUTTON_REPEAT);
-                if (s->second)
+                if (s->second && s->taps == 2)
                 {
-                    remote_log_event(REMOTE_LOG_DOUBLE, now, context, 0,
+                    remote_log_event(REMOTE_LOG_TRIPLE, now, context, 0,
                                      NULL, 0);
                     s->tap_pending = s->second = false;
-                    emit(s, REMOTE_SWITCH_BUTTON);
+                    s->taps = 0;
+                    emit(s, REMOTE_COVERS_BUTTON);
                 }
                 else
                 {
+                    s->taps = s->second ? 2 : 1;
+                    s->second = false;
                     s->tap_pending = true;
                     s->released = now;
                 }
