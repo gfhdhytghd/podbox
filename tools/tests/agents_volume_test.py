@@ -43,6 +43,10 @@ pre=r'''
 #include <stdbool.h>
 #define REMOTE_LOG_DISABLE
 #include "firmware/export/remote_log.h"
+#include "apps-ipod/iap/agents_volume.h"
+static bool button_usb_remote_bridge_fresh(unsigned long now){(void)now;return false;}
+static void button_usb_remote_volume_handler(void (*handler)(int,bool,unsigned long)) {(void)handler;}
+static bool button_queue_try_post(long b,int data){(void)b;(void)data;return true;}
 static bool streaming;
 #define remote_log_enabled() streaming
 #include <stdio.h>

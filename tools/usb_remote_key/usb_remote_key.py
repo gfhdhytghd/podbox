@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Forward Apple IR Menu to PodBox EP0. The IR serial port is read-only."""
+"""Forward Apple IR Menu and volume to EP0. IR serial is read-only."""
 import argparse
 import glob
 import logging
@@ -14,6 +14,11 @@ LOG = logging.getLogger('podbox-usbkey')
 REQUEST = 0x5B
 MENU = 1
 SELECT = 2
+VOL_UP = 3
+VOL_DOWN = 4
+HEARTBEAT = 5
+HEARTBEAT_SECONDS = 1.0
+VOL_IGNORE_FIRST_REPEATS = 1
 MENU_HOLD_SECONDS = 0.300
 MENU_HOLD_REPEATS = 3
 RECEIVER_SERIAL = '2543030725032a2a'
@@ -132,6 +137,33 @@ class MenuForwarder:
             self.release(now)
 
 
+class VolumeForwarder:
+    """One step per decoded report, except the named initial repeat skip."""
+    def __init__(self, usb):
+        self.usb = usb
+        self.key = None
+        self.last = float('-inf')
+        self.repeats = 0
+
+    def frame(self, frame, now):
+        if frame is None:
+            return
+        if frame:
+            self.key = ({0x0b: VOL_UP, 0x0d: VOL_DOWN}.get(frame[2])
+                        if len(frame) == 4 and frame[:2] == b'\xee\x87'
+                        else None)
+            self.repeats = 0
+            if self.key is not None:
+                self.usb.send(1, now, self.key)
+        elif self.key is not None and now - self.last < RELEASE_SECONDS:
+            self.repeats += 1
+            if self.repeats > VOL_IGNORE_FIRST_REPEATS:
+                self.usb.send(2, now, self.key)
+        else:
+            self.key = None
+        self.last = now
+
+
 class USBRemote:
     def __init__(self, core, util):
         self.core, self.util = core, util
@@ -176,6 +208,25 @@ class USBRemote:
             return False
 
 
+class ReceiverHeartbeat:
+    def __init__(self, usb):
+        self.usb = usb
+        self.next_at = float('-inf')
+
+    def line(self, line, now):
+        fields = line.split()
+        if len(fields) != 3 or fields[0] not in (b'STATE', b'EDGE'):
+            return
+        try:
+            if int(fields[1]) < 0 or int(fields[2]) not in (0, 1):
+                return
+        except ValueError:
+            return
+        if now >= self.next_at:
+            self.usb.send(1, now, HEARTBEAT)
+            self.next_at = now + HEARTBEAT_SECONDS
+
+
 def receiver_path():
     paths = sorted(glob.glob('/dev/serial/by-id/*' + RECEIVER_SERIAL + '*'))
     return paths[0] if paths else None
@@ -207,6 +258,8 @@ def main():
     import usb.util
     remote = USBRemote(usb.core, usb.util)
     forwarder = MenuForwarder(remote)
+    volume = VolumeForwarder(remote)
+    heartbeat = ReceiverHeartbeat(remote)
     stopped = False
 
     def stop(signum, frame):
@@ -234,6 +287,9 @@ def main():
                 time.sleep(.02)
                 continue
             try:
+                # STATE records emitted by the receiver prove it is alive,
+                # even when no IR button is being pressed. An open but dead
+                # serial fd must not keep firmware's heartbeat fresh.
                 if not select.select([fd], [], [], .02)[0]:
                     continue
                 chunk = os.read(fd, 4096)
@@ -245,13 +301,17 @@ def main():
                 if len(buffer) > 128:
                     buffer = b''
                 for line in lines:
+                    heartbeat.line(line, now)
                     frame = decoder.line(line)
-                    forwarder.frame(frame, time.monotonic(), decoder.span_us / 1e6)
+                    at = time.monotonic()
+                    forwarder.frame(frame, at, decoder.span_us / 1e6)
+                    volume.frame(frame, at)
             except OSError as exc:
                 LOG.warning('IR unavailable: %s', exc)
                 forwarder.release(time.monotonic())
                 os.close(fd)
                 fd, buffer, decoder = None, b'', NECDecoder()
+                volume = VolumeForwarder(remote)
     finally:
         forwarder.release(time.monotonic())
         remote.close()

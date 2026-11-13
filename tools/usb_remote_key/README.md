@@ -1,9 +1,9 @@
-# Apple Remote Menu over USB
+# Apple Remote Menu and volume over USB
 
 This Linux bridge reads `EDGE <microseconds> <level>` from the IR receiver
-with serial `2543030725032a2a`. It forwards only Apple (`ee 87`) Menu
-commands `02` and `03`; the fourth byte may contain any remote pairing ID.
-Other keys continue through the dock. It never writes to or flashes the IR
+with serial `2543030725032a2a`. It forwards Apple (`ee 87`) Menu commands
+`02` and `03`, Vol+ `0b` and Vol- `0d`; the fourth byte may contain any
+remote pairing ID. Left/Right/Play continue through the Dock unchanged. It never writes to or flashes the IR
 receiver. Stop any other reader of that receiver before starting this bridge.
 
 Install on the computer connected to the dock:
@@ -56,9 +56,9 @@ A stopped stream cannot become Select just because time passes.
 feed these through the production decoder, separating the initial full
 frame and repeat even when `ir-gestures.log` reports them together as 72
 edges. The fixtures cover Menu taps, collapsed doubles and five one-second
-Menu holds. The bridge continues to ignore Play and other dock commands.
-Deploy this bridge with firmware accepting key ID 2; older firmware stalls
-Select. The firmware keeps a short EP0 pulse down for at least 50 ms so the
+Menu holds. The bridge continues to ignore Play and Left/Right commands.
+Deploy this bridge with matching Follow-up 14 firmware accepting IDs
+1 through 5; older firmware stalls the new volume/heartbeat IDs. The firmware keeps a short EP0 pulse down for at least 50 ms so the
 button sampler cannot lose its back-to-back down/up requests. Its one-second
 safety release still covers a missing up request.
 
@@ -70,8 +70,10 @@ The firmware protocol is independent of interfaces and USB configurations:
 | --- | --- |
 | bmRequestType | `0x40` (vendor, device, OUT) |
 | bRequest | `0x5b` |
-| wValue | `1` (Menu), `2` (Select) |
-| wIndex | `1` (down/keepalive) or `0` (up) |
+| wValue | `1` Menu, `2` Select, `3` volume up, `4` volume down, `5` heartbeat |
+| wIndex, Menu/Select | `1` down/keepalive or `0` up (unchanged) |
+| wIndex, volume | `1` full-frame step or `2` repeat step; no down/up pair |
+| wIndex, heartbeat | `1` alive |
 | wLength | `0` |
 
 Only configured normal iPod Classic firmware accepts the request. All other
@@ -86,4 +88,61 @@ Run offline tests without opening either device:
 ```sh
 python3 -m unittest discover -s tools/usb_remote_key/tests -v
 python3 tools/tests/usb_remote_key_test.py build-usbkey/probe
+```
+
+## Volume reports and fallback
+
+Each complete volume IR frame sends one EP0 step immediately. Every later
+REPEAT is also a step except the first `VOL_IGNORE_FIRST_REPEATS = 1`
+repeat after each full frame. There is no volume tap/hold classifier,
+hold threshold or rate shaping. Full frames always reset the skipped-repeat
+count, even when they arrive rapidly. Setting the constant to **0** makes
+the first repeat a step too: a tap carrying one repeat produces two steps.
+A hold produces one step plus one per later repeat, roughly nine per second.
+Unknown keys reset the volume repeat context; orphan/stale repeats do nothing.
+
+Valid receiver STATE/EDGE records allow one EP0 heartbeat per second. An
+open serial fd alone is insufficient. After three seconds without a
+heartbeat the player uses the original Dock behavior. With a fresh
+heartbeat, PC volume reports work only in Agents, including Usage and the
+talk band. Usage changes real audio volume; the other views page. No PC
+volume is merged into the ordinary sampled button state outside Agents.
+
+Dock L3/0E uses the original direction/clamp/300 ms press grouping as a
+fallback. A new unmatched Dock press waits `AGENTS_VOLUME_ARBITRATION_MS`
+(currently **80 ms**, provisional) for the matching PC report. Matching
+reports suppress its Dock candidate; PC steps bypass Dock's repeat/acceleration
+heuristics. A PC-first event can match a new Dock press within that window.
+An unmatched Dock press falls back to the old initial page and 600/250 ms
+hold-repeat schedule. Native input is never delayed for arbitration. A
+bounded 64-step FIFO preserves rapid PC reports and direction changes.
+
+The 80 ms constant is a design bound, **not a measured PC/Dock path skew**.
+The available live log has Dock volume and Menu EP0, but no paired PC volume
+events. Captured full IR frames decode in about 68.4 ms, repeats in 11.9 ms,
+with 108.6 ms repeat spacing; Dock volume intervals are about 100 ms. These
+cadences do not establish relative arrival latency. The user accepted this provisional window for this package; paired-volume
+calibration can be performed after installation. A collapsed Dock stream cannot
+identify separate physical presses that neither receiver exposed distinctly.
+
+Live KEY records include `source=PC`/`source=DOCK`,
+`decision=used`/`fallback`/`dropped-dup`, and `press`, `pc_tick`, `dock_tick`.
+The ticks are the PC EP0 event and the matched Dock L3/0E handler event,
+both on the iPod's HZ=100 clock used by arbitration. A missing counterpart
+is `-`; tick `0` is valid. `press` identifies the Dock's 300 ms group in
+this Agents session; a PC report not yet associated with a Dock group has
+press 0. PC-first/Dock-first matches both produce a record with both ticks.
+Paired fields retain the first matched events of the group, even on later
+repeat-suppression rows; the outer `tick` is that row's decision/event time.
+A Dock fallback contains its original event tick, not the later timeout tick.
+The Dock handler tick may follow the raw serial-capture tick (existing live
+trace: 0-20 ms); compare the explicit handler/EP0 ticks to calibrate the
+80 ms arbitration window, rather than subtracting host receipt times. Raw/VOL/PAGE records retain source
+tags, and EP0 names identify frame/repeat/heartbeat. HerdRemote's existing
+LOG writer needs no runtime change. Deploy `usb_remote_key.py` with this
+firmware; keep the matching README/tests. No service deployment is performed
+by an offline build/package task.
+
+```sh
+python3 tools/tests/agents_volume_sources_test.py build-usbkey/sources
 ```

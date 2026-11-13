@@ -645,3 +645,23 @@ appends UTC wall and monotonic receipt times to
 backup. Payload control characters are escaped. Old hosts safely ignore
 unknown TEXT with no action/reply; old firmware emits none. Deploy the
 matching `hrremotelog.py` with `herdremote.py` and the existing runtime files.
+
+## Volume source diagnostics (Follow-up 14)
+
+The existing LOG TEXT channel carries `LOG KEY tick=... source=PC|DOCK
+key=VOL+|VOL- decision=used|fallback|dropped-dup press=N pc_tick=P dock_tick=D`.
+P/D use the iPod clock (HZ=100): the EP0 event tick and matching L3/0E
+handler tick. Missing counterparts are `-`, not zero. The Dock press/group
+number binds paired rows; an unmatched PC event initially uses group 0.
+Matched-group anchors are retained on repeat rows; `tick` remains the row's
+own event/decision tick. PC-first and Dock-first matches both expose P/D;
+a fallback retains its original Dock event tick. These are the timestamps
+used by the named, user-accepted 80 ms window. No host-time subtraction or
+cross-session alignment is required for later calibration. EP0 volume reports identify
+`frame`/`repeat`; heartbeat reports identify `alive`. Raw serial frames and
+VOL traces identify DOCK, and PAGE emits identify the selected PC/DOCK
+source. Outside-Agents/stale PC volume reports are logged as ignored.
+HerdRemote routes these through its existing log writer, without a command,
+voice or tty ownership change. See `tools/usb_remote_key/README.md` for EP0
+IDs 3/4 (volume steps), 5 (receiver heartbeat), fallback timing and matching
+bridge/firmware deployment. Left/Right/Play remain Dock-only.

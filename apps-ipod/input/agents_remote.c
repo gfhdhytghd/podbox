@@ -126,13 +126,6 @@ int agents_remote_button(struct agents_remote_state *s, int context,
 {
     if (s->queued) return take(s);
     if (play_button(s, context, button, held, now)) return take(s);
-    if (context == REMOTE_AGENTS &&
-        ((button & BUTTON_REMOTE) == BUTTON_RC_VOL_UP ||
-         (button & BUTTON_REMOTE) == BUTTON_RC_VOL_DOWN) &&
-        (!(button & BUTTON_REL) || (button & BUTTON_REPEAT)))
-        remote_log_event(REMOTE_LOG_PAGE, now,
-                         (button & BUTTON_REMOTE) == BUTTON_RC_VOL_UP,
-                         (unsigned int)button, NULL, 0);
     /* Menu/Select are already classified by the host IR bridge. Direction
      * keys retain their normal press/repeat/release meanings everywhere. */
     if (context == REMOTE_AGENTS &&

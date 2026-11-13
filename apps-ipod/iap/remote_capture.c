@@ -182,6 +182,8 @@ _Static_assert(sizeof(struct remote_frame) <= REMOTE_LOG_DATA,
                "remote frame fits diagnostic record");
 _Static_assert(sizeof(struct remote_volume_trace) <= REMOTE_LOG_DATA,
                "volume trace fits diagnostic record");
+_Static_assert(sizeof(struct remote_volume_pair) <= REMOTE_LOG_DATA,
+               "volume pair fits diagnostic record");
 
 /* Called only by the resident worker, never by an ISR or the UI. */
 unsigned int remote_log_format(const struct remote_log_record *r,
@@ -209,7 +211,7 @@ unsigned int remote_log_format(const struct remote_log_record *r,
             (f.flags & REMOTE_TRUNC) ? "TRUNC " : "");
         for (unsigned int i = 0; i < remote_frame_stored(&f); i++)
             n += snprintf(out + n, size - n, "%02X ", f.data[i]);
-        n += snprintf(out + n, size - n, " %s", names);
+        n += snprintf(out + n, size - n, " %s source=DOCK", names);
     }
     else if (r->kind == REMOTE_LOG_VOL)
     {
@@ -217,7 +219,7 @@ unsigned int remote_log_format(const struct remote_log_record *r,
         memcpy(&v, r->data, sizeof(v));
         n = snprintf(out, size,
             "LOG VOL %lu tick=%lu previous=%02X target=%02X dir=%d "
-            "decision=%c", v.sequence, v.tick, v.echo, v.target,
+            "decision=%c source=DOCK", v.sequence, v.tick, v.echo, v.target,
             v.direction, v.decision);
     }
     else if (r->kind == REMOTE_LOG_LOST)
@@ -228,11 +230,38 @@ unsigned int remote_log_format(const struct remote_log_record *r,
         n = snprintf(out, size, "LOG HELD tick=%lu %s", r->tick, names);
     }
     else if (r->kind == REMOTE_LOG_EP0)
-        n = snprintf(out, size, "LOG EP0 tick=%lu %s %s", r->tick,
-                     r->a == 1 ? "MENU" : "SELECT", r->b ? "down" : "up");
+        n = snprintf(out, size, "LOG EP0 tick=%lu %s %s source=PC", r->tick,
+                     r->a == 1 ? "MENU" : r->a == 2 ? "SELECT" :
+                     r->a == 3 ? "VOL+" : r->a == 4 ? "VOL-" : "HEARTBEAT",
+                     r->a <= 2 ? (r->b ? "down" : "up") :
+                     r->a == 5 ? "alive" : r->b == 1 ? "frame" : "repeat");
+    else if (r->kind == REMOTE_LOG_VOLUME_KEY)
+    {
+        struct remote_volume_pair pair;
+        char pc_tick[24], dock_tick[24];
+        memcpy(&pair, r->data, sizeof(pair));
+        if (pair.present & 1)
+            snprintf(pc_tick, sizeof(pc_tick), "%lu", pair.pc_tick);
+        else
+            snprintf(pc_tick, sizeof(pc_tick), "-");
+        if (pair.present & 2)
+            snprintf(dock_tick, sizeof(dock_tick), "%lu", pair.dock_tick);
+        else
+            snprintf(dock_tick, sizeof(dock_tick), "-");
+        n = snprintf(out, size,
+                     "LOG KEY tick=%lu source=%s key=%s decision=%s "
+                     "press=%lu pc_tick=%s dock_tick=%s", r->tick,
+                     (r->a & 2) ? "PC" : "DOCK",
+                     (r->a & 1) ? "VOL+" : "VOL-",
+                     r->b == 0 ? "used" : r->b == 1 ? "fallback" :
+                     r->b == 2 ? "dropped-dup" : "ignored-outside-or-stale",
+                     pair.press, pc_tick, dock_tick);
+    }
     else if (r->kind == REMOTE_LOG_PAGE)
-        n = snprintf(out, size, "LOG PAGE tick=%lu %s button=%08lX",
-                     r->tick, r->a ? "up" : "down", r->b);
+        n = snprintf(out, size,
+                     "LOG PAGE tick=%lu %s button=%08lX source=%s",
+                     r->tick, (r->a & 1) ? "up" : "down", r->b,
+                     (r->a & 2) ? "PC" : "DOCK");
     else
         n = snprintf(out, size, "LOG PLAY tick=%lu %s context=%lu", r->tick,
                      r->kind == REMOTE_LOG_TAP ? "tap" :

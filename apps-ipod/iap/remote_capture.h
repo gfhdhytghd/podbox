@@ -50,6 +50,11 @@ struct remote_volume_trace {
     signed char direction;
     char decision;
 };
+/* Tick zero is valid; presence bits distinguish missing counterparts. */
+struct remote_volume_pair {
+    unsigned long press, pc_tick, dock_tick;
+    unsigned int present; /* bit 0: PC; bit 1: Dock */
+};
 void remote_volume_log(unsigned long tick, unsigned char echo,
                        unsigned char target, int direction, char decision);
 unsigned long remote_volume_count(void);

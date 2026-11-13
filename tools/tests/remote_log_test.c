@@ -57,7 +57,7 @@ int main(void)
     expect("EP0 tick=32 MENU down");
     req.wValue=2; req.wIndex=0;
     assert(button_usb_remote_request(&req)); expect("SELECT up");
-    req.wValue=3; assert(!button_usb_remote_request(&req));
+    req.wValue=6; assert(!button_usb_remote_request(&req));
     assert(!remote_log_read(line, sizeof(line)));
     for (int c=REMOTE_OTHER; c<=REMOTE_WPS; c++)
     {
@@ -76,8 +76,10 @@ int main(void)
     }
     struct agents_remote_state s = {0};
     gesture(&s,REMOTE_AGENTS,BUTTON_RC_VOL_UP|BUTTON_REL|BUTTON_REPEAT,0,400);
+    remote_log_event(REMOTE_LOG_PAGE,400,3,0,NULL,0);
     expect("PAGE tick=400 up");
     gesture(&s,REMOTE_AGENTS,BUTTON_RC_VOL_DOWN,0,401);
+    remote_log_event(REMOTE_LOG_PAGE,401,0,0,NULL,0);
     expect("PAGE tick=401 down");
     gesture(&s,REMOTE_WPS,BUTTON_RC_VOL_UP,0,402);
     assert(!remote_log_read(line, sizeof(line)));

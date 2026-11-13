@@ -494,6 +494,7 @@ static struct agents_remote_state remote;
 static int get_current_activity(void) {return 0;}
 static int fake_page;
 static int iap_agents_volume_take(void) {int b=fake_page;fake_page=0;return b;}
+static int iap_agents_volume_timeout(int timeout) {return timeout;}
 static long current_tick;
 static int queued_button, held_button, polls;
 static int button_get_w_tmo(int t) {(void)t;polls++;return queued_button;}

@@ -59,6 +59,10 @@ preamble = r'''
 #define USB_REMOTE_KEY_REQUEST 0x5b
 #define USB_REMOTE_KEY_MENU 1
 #define USB_REMOTE_KEY_SELECT 2
+#define USB_REMOTE_KEY_VOL_UP 3
+#define USB_REMOTE_KEY_VOL_DOWN 4
+#define USB_REMOTE_KEY_HEARTBEAT 5
+#define USB_REMOTE_BRIDGE_TIMEOUT (3 * HZ)
 #define TIME_BEFORE(a,b) ((long)((unsigned long)(a)-(unsigned long)(b)) < 0)
 struct usb_ctrlrequest { uint8_t bRequestType, bRequest; uint16_t wValue, wIndex, wLength; };
 static unsigned long current_tick;
@@ -113,7 +117,7 @@ static void gesture(int context,unsigned long start,int id) {
 int main(void) {
     for(int type=0;type<256;type++) if(type!=0x40)
         request(type,1,1,0,USB_CONTROL_STALL);
-    for(int key=0;key<65536;key++) if(key!=1&&key!=2)
+    for(int key=0;key<65536;key++) if(key<1||key>5)
         request(0x40,key,1,0,USB_CONTROL_STALL);
     request(0x40,1,2,0,USB_CONTROL_STALL);
     request(0x40,1,1,1,USB_CONTROL_STALL);
@@ -137,7 +141,7 @@ int main(void) {
     current_tick=600;request(0x40,1,1,0,USB_CONTROL_ACK);tick(601);tick(602);
     current_tick=699;request(0x40,1,1,0,USB_CONTROL_ACK);
     tick(700);assert(lastbtn);
-    current_tick=798;request(0x40,3,1,0,USB_CONTROL_STALL);
+    current_tick=798;request(0x40,6,1,0,USB_CONTROL_STALL);
     tick(798);assert(lastbtn);tick(799);tick(800);assert(!lastbtn);
     for(int c=REMOTE_OTHER;c<=REMOTE_WPS;c++)for(int id=1;id<=2;id++)
         gesture(c,1000+c*200+id*50,id);

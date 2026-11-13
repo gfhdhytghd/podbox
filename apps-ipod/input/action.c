@@ -313,8 +313,12 @@ static int remote_poll(int timeout, int context)
     int button = button_get_w_tmo(TIMEOUT_NOBLOCK);
     if (button == BUTTON_NONE && context == REMOTE_AGENTS)
         button = iap_agents_volume_take();
+    if (context == REMOTE_AGENTS)
+        timeout = iap_agents_volume_timeout(timeout);
     if (button == BUTTON_NONE && timeout != TIMEOUT_NOBLOCK)
         button = button_get_w_tmo(timeout);
+    if (button == BUTTON_NONE && context == REMOTE_AGENTS)
+        button = iap_agents_volume_take();
     return button;
 }
 #endif
