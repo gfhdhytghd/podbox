@@ -137,6 +137,9 @@ enum
     USB_NOTIFY_SET_CONFIG,   /* Event */
     USB_NOTIFY_BUS_RESET,    /* Event */
     USB_PODLINK_CLOSE,       /* Restore normal descriptors in USB thread */
+#ifdef HAVE_USB_PODLINK
+    USB_PODLINK_OPEN,        /* Take a non-disk connection in USB thread */
+#endif
     USB_NOTIFY_CLASS_DRIVER, /* Event - notify_event() of specified class driver */
     USB_HOST_PROBE,          /* Event - data: port to the host probe or back */
 #ifdef HAVE_USB_HOST_AUDIO

@@ -4,5 +4,6 @@
 #include <stdbool.h>
 void iap_agents_volume_enable(bool enabled);
 bool iap_agents_volume(unsigned char level, bool mute);
+bool iap_agents_volume_get(unsigned char *level, bool *mute);
 int iap_agents_volume_take(void);
 #endif

@@ -289,6 +289,7 @@ bool iap_skip_to(uint32_t index);
 
 /* Volume as the protocol's 0-255 over the codec's own range, and back */
 unsigned char iap_volume_to_byte(int volume);
+void iap_get_volume(unsigned char *level, bool *mute);
 int iap_byte_to_volume(unsigned char level);
 /* Muted, the codec is at its minimum and the volume setting kept */
 void iap_set_mute(bool mute);

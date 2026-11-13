@@ -1,4 +1,5 @@
 """Offline IR/USB tests. No serial, USB, service or input device access."""
+import fnmatch
 import importlib.util
 from pathlib import Path
 from types import SimpleNamespace
@@ -189,14 +190,18 @@ class USBTests(unittest.TestCase):
                                      for state in (1, 0)])
 
     def test_exact_identity_and_configured_only(self):
-        for prefix in ('1AA', '2AA', '9AA'):
+        for prefix in [chr(n)+'AA' for n in range(128)]:
             with self.subTest(prefix=prefix):
                 self.setUp()
-                bad = [Device('3AA0000000000360'),
+                bad = [Device('AA0000000000360'),
+                       Device('44AA0000000000360'),
+                       Device('4AB0000000000360'),
+                       Device('4AA0000000000360extra'),
+                       Device('4AA0000000000360\n'),
                        Device('2AA1111111110360'),
                        Device('9AA1111111110360')]
                 bad += [Device(p+'0000000000360', configured=False)
-                        for p in ('1AA', '2AA', '9AA')]
+                        for p in ('1AA', '2AA', '4AA', '9AA', 'FAA')]
                 good = Device(prefix+'0000000000360')
                 self.devices = bad+[good]
                 self.assertTrue(self.usb.send(True, 1))
@@ -206,6 +211,23 @@ class USBTests(unittest.TestCase):
                 self.assertEqual(good.calls,
                                  [((0x40, 0x5b, 1, state, b''),
                                    dict(timeout=100)) for state in (1, 0)])
+
+    def test_udev_serial_wildcard_matches_bridge(self):
+        rules = (ROOT/'70-podbox-usbkey.rules').read_text().splitlines()
+        usb = [line for line in rules if line.startswith('SUBSYSTEM=="usb"')]
+        self.assertEqual(len(usb), 1)
+        self.assertIn('ATTR{idVendor}=="05ac"', usb[0])
+        self.assertIn('ATTR{idProduct}=="1261"', usb[0])
+        self.assertIn('ATTR{serial}=="?AA0000000000360"', usb[0])
+        serials = [chr(n)+'AA0000000000360' for n in range(128)]
+        serials += ['AA0000000000360', '44AA0000000000360',
+                    '4AB0000000000360', '4AA1111111110360',
+                    '4AA0000000000360extra', '4AA0000000000360\n']
+        for serial in serials:
+            self.assertEqual(bool(k.IPOD_SERIAL.fullmatch(serial)),
+                             fnmatch.fnmatchcase(serial, '?AA0000000000360'))
+        self.assertTrue(any('ATTRS{serial}=="2543030725032a2a"' in line
+                            for line in rules))
 
     def test_disconnect_stall_profile_recovery(self):
         old = Device('1AA0000000000360', fail=True)

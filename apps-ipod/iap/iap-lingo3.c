@@ -272,9 +272,7 @@ void iap_handlepkt_mode3(const unsigned int len, const unsigned char *buf)
             device.track_index = iap_get_trackindex();
             device.chapter_index = UINT32_MAX;
             device.play_status = audio_status();
-            device.volume = device.mute ? 0
-                          : iap_volume_to_byte(global_status.volume);
-            device.volume_mute = device.mute;
+            iap_get_volume(&device.volume, &device.volume_mute);
             device.power_state = charger_input_state;
             device.battery_level = battery_level();
             /* TODO: Fix this */
@@ -447,11 +445,14 @@ void iap_handlepkt_mode3(const unsigned int len, const unsigned char *buf)
                  */
                 case 0x04:
                 {
-                    if (device.mute == false) {
+                    unsigned char level;
+                    bool mute;
+                    iap_get_volume(&level, &mute);
+                    if (!mute) {
                         /* Mute status False*/
                         IAP_TX_PUT(0x00);
                         /* Volume */
-                        IAP_TX_PUT(iap_volume_to_byte(global_status.volume));
+                        IAP_TX_PUT(level);
 
                     } else {
                         /* Mute status True*/
@@ -637,12 +638,15 @@ void iap_handlepkt_mode3(const unsigned int len, const unsigned char *buf)
                  */
                 case 0x10:
                 {
-                    if (device.mute == false) {
+                    unsigned char level;
+                    bool mute;
+                    iap_get_volume(&level, &mute);
+                    if (!mute) {
                         /* Mute status False*/
                         IAP_TX_PUT(0x00);
                         /* Volume */
-                        IAP_TX_PUT(iap_volume_to_byte(global_status.volume));
-                        IAP_TX_PUT(iap_volume_to_byte(global_status.volume));
+                        IAP_TX_PUT(level);
+                        IAP_TX_PUT(level);
 
                     } else {
                         /* Mute status True*/

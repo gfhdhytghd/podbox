@@ -27,9 +27,10 @@ active local login; this is not a headless-machine rule. This service is
 independent of HerdRemote and does not change it.
 
 The bridge automatically finds the receiver's `/dev/serial/by-id/` entry.
-It accepts only VID `05ac`, PID `1261`, and serial
-`1AA0000000000360`, `2AA0000000000360` (the PodLink profile used by Agents),
-or `9AA0000000000360`. The udev rule covers all three serials. It retries
+It accepts only VID `05ac`, PID `1261`, and serial matching
+`?AA0000000000360`: exactly one leading character, then the fixed suffix.
+This includes charge-only `4AA0000000000360` and PodLink `2AA0000000000360`.
+The udev rule uses the same single-character wildcard. It retries
 after absence, USB reset, unplug or disk mode. It never selects a USB
 configuration, claims an interface, detaches a driver, or sends a key saved
 while disconnected.

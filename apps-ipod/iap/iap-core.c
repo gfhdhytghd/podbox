@@ -59,6 +59,9 @@
 #include "iap-library.h"
 #include "iap-artwork.h"
 #include "iap/remote_capture.h"
+#ifdef HAVE_USB_PODLINK
+#include "iap/agents_volume.h"
+#endif
 #include "sound.h"
 #include "action.h"
 #include "powermgmt.h"
@@ -544,11 +547,25 @@ static void iap_tick_stop_if_idle(void)
 
 void iap_set_remote_volume(void)
 {
+    unsigned char level = iap_volume_to_byte(global_status.volume);
+    bool mute = false;
+#ifdef HAVE_USB_PODLINK
+    iap_agents_volume_get(&level, &mute);
+#endif
     IAP_TX_INIT(0x03, 0x0D);
     IAP_TX_PUT(0x04);
-    IAP_TX_PUT(0x00);
-    IAP_TX_PUT(iap_volume_to_byte(global_status.volume));
+    IAP_TX_PUT(mute ? 0x01 : 0x00);
+    IAP_TX_PUT(level);
     iap_send_tx();
+}
+
+void iap_get_volume(unsigned char *level, bool *mute)
+{
+    *mute = device.mute;
+    *level = *mute ? 0 : iap_volume_to_byte(global_status.volume);
+#ifdef HAVE_USB_PODLINK
+    iap_agents_volume_get(level, mute);
+#endif
 }
 
 unsigned char iap_volume_to_byte(int volume)
@@ -1458,18 +1475,19 @@ void iap_periodic(void)
 
     /* Volume: looked at every 100ms, sent only on a change */
     if (device.notifications & (BIT_N(4) | BIT_N(16))) {
-        unsigned char level = device.mute ? 0
-                            : iap_volume_to_byte(global_status.volume);
+        unsigned char level;
+        bool mute;
+        iap_get_volume(&level, &mute);
 
-        if (level != device.volume || device.mute != device.volume_mute) {
+        if (level != device.volume || mute != device.volume_mute) {
             device.volume = level;
-            device.volume_mute = device.mute;
+            device.volume_mute = mute;
             /* Mute/UI volume, and Mute/UI/Absolute: each to the
              * accessory that asked, both to one that asked for both */
             if (device.notifications & BIT_N(4)) {
                 IAP_TX_INIT(0x03, 0x09);
                 IAP_TX_PUT(0x04);
-                IAP_TX_PUT(device.mute ? 0x01 : 0x00);
+                IAP_TX_PUT(mute ? 0x01 : 0x00);
                 IAP_TX_PUT(level);
                 device.changed_notifications |= BIT_N(4);
                 iap_send_tx();
@@ -1477,7 +1495,7 @@ void iap_periodic(void)
             if (device.notifications & BIT_N(16)) {
                 IAP_TX_INIT(0x03, 0x09);
                 IAP_TX_PUT(0x10);
-                IAP_TX_PUT(device.mute ? 0x01 : 0x00);
+                IAP_TX_PUT(mute ? 0x01 : 0x00);
                 IAP_TX_PUT(level);
                 IAP_TX_PUT(level);
                 device.changed_notifications |= BIT_N(16);

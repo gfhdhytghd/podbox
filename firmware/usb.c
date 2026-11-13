@@ -154,6 +154,10 @@ bool usb_confirm_blocked(void)
 
 bool usb_confirm_pending(uint32_t epoch)
 {
+#ifdef HAVE_USB_PODLINK
+    if (usb_podlink_active())
+        return false;
+#endif
     return usb_detect() == USB_INSERTED && epoch == usb_consent.epoch &&
            usb_consent.state == USB_CONSENT_PROMPT;
 }
@@ -387,7 +391,8 @@ static inline void usb_configure_drivers(int for_state)
     usb_audio = global_settings.usb_audio;
 #endif
 #ifdef HAVE_USB_PODLINK
-    if (podlink_requested && for_state == USB_INSERTED)
+    if (podlink_requested && (for_state == USB_INSERTED ||
+                             for_state == USB_POWERED))
     {
         /* A complete CDC-ACM function; never hand storage to the host. */
         for (int i = 0; i < USB_NUM_DRIVERS; ++i)
@@ -945,6 +950,10 @@ static void NORETURN_ATTR usb_thread(void)
 
 #ifdef HAVE_USB_CONFIRM
         case USB_CONFIRM_READY:
+#ifdef HAVE_USB_PODLINK
+            if (podlink_requested)
+                break;
+#endif
             if ((uint32_t)ev.data == usb_consent.epoch &&
                 usb_detect() == USB_INSERTED && usb_host_present &&
                 usb_confirm_has_config &&
@@ -959,6 +968,10 @@ static void NORETURN_ATTR usb_thread(void)
             break;
         case USB_CONFIRM_CONNECT:
         case USB_CONFIRM_CHARGE:
+#ifdef HAVE_USB_PODLINK
+            if (podlink_requested)
+                break;
+#endif
             if (usb_detect() != USB_INSERTED ||
                 !usb_consent_reply(&usb_consent, (uint32_t)ev.data,
                                    ev.id == USB_CONFIRM_CONNECT))
@@ -977,6 +990,25 @@ static void NORETURN_ATTR usb_thread(void)
 #endif
 
 #ifdef HAVE_USB_PODLINK
+        case USB_PODLINK_OPEN:
+            if (!usb_profile_close_matches(podlink_requested, podlink_epoch,
+                                            (uint32_t)ev.data) ||
+                usb_detect() != USB_INSERTED)
+                break;
+#ifdef HAVE_USB_CONFIRM
+            timeout_cancel(&usb_confirm_tmo);
+            usb_consent_begin(&usb_consent, false, true);
+            usb_confirm_has_config = false;
+#endif
+            usb_stack_enable(false);
+            sleep(HZ / 5);
+            if (usb_detect() == USB_INSERTED &&
+                (usb_state == USB_INSERTED || usb_state == USB_POWERED))
+            {
+                usb_stack_enable(true);
+                usb_configure_drivers(USB_INSERTED);
+            }
+            break;
         case USB_PODLINK_CLOSE:
             if (usb_profile_close_matches(podlink_requested, podlink_epoch,
                                            (uint32_t)ev.data))
@@ -1683,13 +1715,22 @@ void usb_car_found(void)
 #ifdef HAVE_USB_PODLINK
 bool usb_podlink_open(void)
 {
-    /* Never take storage away from a mounted host. Screen UI calls serialize
-     * open/close; the USB thread alone acts on the close event. */
-    if (podlink_requested || usb_detect() != USB_EXTRACTED || usb_host_probe_on)
+    /* Reserving the lease also blocks storage requests until the USB thread
+     * switches profiles. Never interrupt an existing storage handover. */
+    int level = disable_irq_save();
+    if (podlink_requested || usb_host_probe_on || exclusive_storage_enabled ||
+        exclusive_storage_requested)
+    {
+        restore_irq(level);
         return false;
+    }
     ++podlink_epoch;
     if (!podlink_epoch) ++podlink_epoch;
     podlink_requested = true;
+    uint32_t epoch = podlink_epoch;
+    restore_irq(level);
+    if (usb_detect() == USB_INSERTED)
+        queue_post(&usb_queue, USB_PODLINK_OPEN, epoch);
     return true;
 }
 

@@ -1,3 +1,8 @@
+- **Agents and PodLink can open with USB already connected.** A charging
+  connection switches to PodLink without unplugging. A disk in use by the
+  computer stays with it. Leaving asks for disk access again; USB Mode
+  Charge keeps charging without a popup. Dock volume keys page Agents at
+  up to four pages per second and leave the player's volume unchanged.
 - **Dock remote controls now have tap and hold actions.** Hold Left for
   Menu or Right for Select for 0.6 seconds. A tap keeps its existing action;
   a hold sends no Left/Right action and no longer seeks in Now Playing.

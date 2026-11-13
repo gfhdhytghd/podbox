@@ -2,10 +2,13 @@
 from pathlib import Path
 import subprocess,sys
 R=Path(__file__).resolve().parents[2];O=Path(sys.argv[1]).resolve();O.mkdir(parents=True,exist_ok=True)
-s=(R/'firmware/usb.c').read_text()
+S=Path(sys.argv[2]).resolve() if len(sys.argv)>2 else R
+s=(S/'firmware/usb.c').read_text()
 api=s[s.index('bool usb_confirm_blocked(void)'):s.index('#endif\n#ifdef USB_ENABLE_HID',s.index('bool usb_confirm_blocked(void)'))]
 profiles=s[s.index('static inline void usb_configure_drivers(int for_state)'):s.index('static inline void usb_slave_mode',s.index('static inline void usb_configure_drivers(int for_state)'))]
 confirm=s[s.index('        case USB_CONFIRM_READY:'):s.index('#endif\n\n#ifdef HAVE_USB_PODLINK',s.index('        case USB_CONFIRM_READY:'))]
+open_event=s[s.index('        case USB_PODLINK_OPEN:'):s.index('        case USB_PODLINK_CLOSE:')] if '        case USB_PODLINK_OPEN:' in s else ''
+open_api=s[s.index('bool usb_podlink_open(void)'):s.index('void usb_podlink_close(void)')]
 close=s[s.index('        case USB_PODLINK_CLOSE:'):s.index('#endif\n        case USB_INSERTED:',s.index('        case USB_PODLINK_CLOSE:'))]
 pre=r'''
 #include <assert.h>
@@ -25,7 +28,7 @@ pre=r'''
 #define USB_ENABLE_CHARGING_ONLY
 #define USB_MODE_DRIVE_ONLY 2
 enum { USB_EXTRACTED, USB_INSERTED, USB_POWERED, USB_CONFIRM_READY,
-       USB_CONFIRM_CONNECT, USB_CONFIRM_CHARGE, USB_PODLINK_CLOSE,SYS_USB_CONFIRM };
+       USB_CONFIRM_CONNECT, USB_CONFIRM_CHARGE, USB_PODLINK_CLOSE,SYS_USB_CONFIRM,USB_PODLINK_OPEN };
 enum {USB_MODE_MASS_STORAGE,USB_MODE_CHARGE};
 enum {USB_DRIVER_MASS_STORAGE,USB_DRIVER_HID,USB_DRIVER_AUDIO,USB_DRIVER_SERIAL,
       USB_DRIVER_IAP,USB_DRIVER_CHARGING_ONLY,USB_NUM_DRIVERS};
@@ -37,9 +40,13 @@ static struct usb_consent usb_consent;
 static bool usb_confirm_has_config,usb_host_present,cable,car,unplug_during_sleep;
 static bool podlink_requested,usb_power_only,usb_drive_only_now;
 static uint32_t podlink_epoch;
+static bool exclusive_storage_enabled,exclusive_storage_requested,usb_host_probe_on;
+static inline int disable_irq_save(void){return 0;}
+static inline void restore_irq(int n){(void)n;}
 static int usb_state,usb_mode;
 static bool enabled[USB_NUM_DRIVERS],usb_hid,usb_serial,usb_iap=true,usb_car_no_audio;
 static int usb_audio;static struct {int usb_audio;}global_settings;
+static bool usb_podlink_active(void){return podlink_requested;}
 static int usb_detect(void){return cable?USB_INSERTED:USB_EXTRACTED;}
 static bool usb_iap2_car_seen(void){return car;}
 static bool usb_iap_answer_iap2(void){return car;}
@@ -71,6 +78,7 @@ static void event(int id,intptr_t data)
 static void drain(void){while(head<tail){struct event ev=pending[head++];switch(ev.id){
 EVENTS
  default:assert(0);}}head=tail=0;}
+OPEN_API
 static uint32_t begin(int mode)
 {
  head=tail=prompts=attached=detached=0;car=unplug_during_sleep=false;
@@ -109,9 +117,38 @@ int main(void)
  old=begin(0);event(USB_PODLINK_CLOSE,podlink_epoch);drain();
  int count=attached;event(USB_PODLINK_CLOSE,podlink_epoch);drain();assert(count==attached);
  assert(usb_consent.epoch!=old);
+ for(int mode=0;mode<3;mode++)for(int state=USB_CONSENT_BYPASS;state<=USB_CONSENT_ACCESSORY;state++)for(int link=USB_INSERTED;link<=USB_POWERED;link++) {
+  begin(mode);podlink_requested=false;usb_consent.state=state;usb_state=link;
+  usb_host_present=link==USB_INSERTED;
+  usb_configure_drivers(USB_POWERED);int prior_epoch=usb_consent.epoch;
+  uint32_t old_lease=podlink_epoch;
+  event(USB_CONFIRM_CONNECT,prior_epoch);event(USB_CONFIRM_READY,prior_epoch);
+  assert(usb_podlink_open());assert(podlink_requested&&podlink_epoch!=old_lease);
+  assert(!usb_confirm_pending(prior_epoch));
+  event(USB_CONFIRM_CONNECT,prior_epoch);event(USB_CONFIRM_READY,prior_epoch);drain();
+  assert(!enabled[USB_DRIVER_MASS_STORAGE]&&enabled[USB_DRIVER_SERIAL]);
+  assert(usb_consent.epoch!=(uint32_t)prior_epoch&&!prompts);
+  assert(detached==1);usb_host_present=true;usb_state=USB_INSERTED;usb_confirm_configured(true,false,false);drain();assert(!prompts);
+  assert(!usb_podlink_open());
+  event(USB_PODLINK_CLOSE,podlink_epoch);drain();assert(!enabled[USB_DRIVER_MASS_STORAGE]);
+  usb_confirm_configured(true,false,false);drain();
+  assert(prompts==(mode==USB_MODE_CHARGE?0:1));
+ }
+ begin(0);podlink_requested=false;exclusive_storage_enabled=true;
+ assert(!usb_podlink_open());exclusive_storage_enabled=false;
+ exclusive_storage_requested=true;assert(!usb_podlink_open());exclusive_storage_requested=false;
+ usb_host_probe_on=true;assert(!usb_podlink_open());usb_host_probe_on=false;
+ begin(0);podlink_requested=false;unplug_during_sleep=true;
+ assert(usb_podlink_open());drain();assert(usb_state==USB_EXTRACTED&&!enabled[USB_DRIVER_MASS_STORAGE]);
+ begin(0);podlink_requested=false;assert(usb_podlink_open());uint32_t first=podlink_epoch;
+ event(USB_PODLINK_CLOSE,first);drain();
+ assert(usb_podlink_open());event(USB_PODLINK_OPEN,first);event(USB_PODLINK_CLOSE,first);drain();
+ assert(podlink_requested&&enabled[USB_DRIVER_SERIAL]&&!enabled[USB_DRIVER_MASS_STORAGE]);
+ puts("open while plugged: all consent states/Charge/Drive-only/lease+disk refusal/stale events/unplug PASS");
  puts("lease release: disk hidden/fresh epoch/SELECT/MENU/Charge/Drive-only/stale close+choice/unplug PASS");
 }
-'''.replace('EVENTS',confirm+'\n'+close)
+'''.replace('EVENTS',confirm+'\n'+open_event+'\n'+close)
+post=post.replace('OPEN_API',open_api)
 f=O/'lease.c';f.write_text(pre+api+profiles+post)
 cmd=['cc','-std=gnu11','-Wall','-Wextra','-Werror','-g','-fsanitize=address,undefined','-fno-sanitize-recover=all','-fno-pie','-no-pie','-I'+str(R/'firmware/export'),str(f),'-o',str(O/'lease')]
 subprocess.run(cmd,check=True);subprocess.run([str(O/'lease')],check=True)
