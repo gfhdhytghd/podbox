@@ -1,0 +1,12 @@
+[Unit]
+Description=Apple Remote Menu to PodBox USB EP0
+After=default.target
+
+[Service]
+ExecStart=%h/.local/share/podbox-usbkey/venv/bin/python %h/data/PodJS/podbox.wt-usbkey/tools/usb_remote_key/usb_remote_key.py
+Environment=PYTHONUNBUFFERED=1
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target

@@ -417,6 +417,9 @@ backlight-sw-fading.c
 drivers/led.c
 drivers/button.c
 drivers/button_queue.c
+#if defined(IPOD_6G) && !defined(BOOTLOADER) && !defined(SIMULATOR)
+drivers/button_usb_remote.c
+#endif
 #if (CONFIG_PLATFORM & PLATFORM_NATIVE)
 #ifdef HAVE_DAC3550A
 drivers/audio/dac3550a.c

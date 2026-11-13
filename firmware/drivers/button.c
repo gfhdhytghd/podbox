@@ -27,6 +27,7 @@
 #include "system.h"
 #include "button.h"
 #include "button_chord.h"
+#include "button_usb_remote.h"
 #include "kernel.h"
 #include "thread.h"
 #include "backlight.h"
@@ -589,6 +590,11 @@ static int button_read(int *data)
     int btn = button_read_device();
 #endif
     int retval;
+
+#ifdef USB_REMOTE_KEY_ENABLED
+    /* Use the dock remote's sampling, queue and repeat path. */
+    btn |= button_usb_remote_read();
+#endif
 
 #ifdef HAVE_LCD_FLIP
     if (btn && flipped)

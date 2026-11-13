@@ -31,6 +31,7 @@
 #include "usb_profile.h"
 #include "usb_class_driver.h"
 #include "usb_log.h"
+#include "button_usb_remote.h"
 
 #if defined(USB_ENABLE_STORAGE)
 #include "usb_storage.h"
@@ -1405,6 +1406,16 @@ static void request_handler_endpoint(struct usb_ctrlrequest* req, uint8_t* reqda
 /* Handling USB requests starts here */
 static void usb_core_control_request_handler(struct usb_ctrlrequest* req, uint8_t* reqdata, size_t reqdata_size)
 {
+#ifdef USB_REMOTE_KEY_ENABLED
+    if (req->bRequest == USB_REMOTE_KEY_REQUEST)
+    {
+        bool accepted = usb_state == CONFIGURED &&
+                        button_usb_remote_request(req);
+        usb_core_control_response(accepted ? USB_CONTROL_ACK :
+                                  USB_CONTROL_STALL, NULL, 0);
+        return;
+    }
+#endif
 #ifdef HAVE_USB_CHARGING_ENABLE
     timeout_cancel(&usb_no_host_timeout);
     if(usb_no_host) {
