@@ -24,8 +24,8 @@ static void command(const char *s)
 
 static unsigned int limit, attempts, binary_bytes, invalid_sends;
 static unsigned int turns, stage;
-static bool closed, shortcut_requested;
-static int shortcuts;
+static bool closed;
+static int shortcut_requested, shortcuts, wps_shortcuts;
 bool podlink_open(void)
 {
     return true;
@@ -127,8 +127,9 @@ int agents_shortcut_get_button(int timeout)
     (void)timeout;
     if (shortcut_requested)
     {
-        shortcut_requested = false;
-        return AGENTS_SHORTCUT_BUTTON;
+        int destination = shortcut_requested;
+        shortcut_requested = 0;
+        return destination == 2 ? REMOTE_WPS_BUTTON : AGENTS_SHORTCUT_BUTTON;
     }
     return button_get(false);
 }
@@ -136,6 +137,12 @@ void root_menu_agents_shortcut(void)
 {
     assert(closed);
     shortcuts++;
+}
+
+void root_menu_wps_shortcut(void)
+{
+    assert(closed);
+    wps_shortcuts++;
 }
 
 int main(void)
@@ -181,7 +188,12 @@ int main(void)
     stage = 2;
     podlink_screen();
     assert(shortcuts == 1 && closed);
-    puts("PASS: shortcut closes the echo link before opening Agents");
+    closed = false;
+    shortcut_requested = 2;
+    stage = 2;
+    podlink_screen();
+    assert(wps_shortcuts == 1 && shortcuts == 1 && closed);
+    puts("PASS: shortcuts close the echo link before opening Agents or WPS");
     puts("PASS: small peer limits recover from INVALID and finish DOWNLOAD");
     puts("PASS: rejected BENCH commands preserve upload/download state");
     return 0;

@@ -975,9 +975,11 @@ static int row_session(bool *again)
             int btn = agents_shortcut_get_button(busy ? TIMEOUT_NOBLOCK :
                       speak_due ? (left > 0 ? left : 0) : TIMEOUT_BLOCK);
 #ifdef HAVE_USB_PODLINK
-            if (btn == AGENTS_SHORTCUT_BUTTON)
+            if (btn == AGENTS_SHORTCUT_BUTTON ||
+                btn == REMOTE_WPS_BUTTON)
             {
-                root_menu_agents_shortcut();
+                if (btn == REMOTE_WPS_BUTTON) root_menu_wps_shortcut();
+                else root_menu_agents_shortcut();
                 repaint(year);
                 continue;
             }

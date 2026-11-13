@@ -599,9 +599,11 @@ static int scroll_bmp(struct image_info *info)
         }
 
 #ifdef HAVE_USB_PODLINK
-        if (button == AGENTS_SHORTCUT_BUTTON)
+        if (button == AGENTS_SHORTCUT_BUTTON ||
+            button == REMOTE_WPS_BUTTON)
         {
-            root_menu_agents_shortcut();
+            if (button == REMOTE_WPS_BUTTON) root_menu_wps_shortcut();
+            else root_menu_agents_shortcut();
             if (iv_usb_dropped) return PLUGIN_USB_CONNECTED;
             redraw_image(info);
             continue;

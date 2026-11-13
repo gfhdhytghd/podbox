@@ -987,6 +987,15 @@ void root_menu_agents_shortcut(void)
     }
     button_set_sw_poweroff_state(poweroff);
 }
+
+void root_menu_wps_shortcut(void)
+{
+    bool poweroff = button_get_sw_poweroff_state();
+    button_set_sw_poweroff_state(true);
+    if (wpsscrn(NULL) == GO_TO_AGENTS)
+        root_menu_agents_shortcut();
+    button_set_sw_poweroff_state(poweroff);
+}
 #endif
 
 static const struct root_items items[] = {

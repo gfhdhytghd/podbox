@@ -55,6 +55,9 @@ void agents_shortcut_talking(bool talking)
 #if defined(IPOD_ACCESSORY_PROTOCOL) && defined(HAVE_USB_PODLINK)
 #include "input/agents_remote.h"
 #include "iap/remote_capture.h"
+#include "iap/agents_volume.h"
+#include "system/activity.h"
+static struct agents_remote_state remote;
 #endif
 #include "kernel.h"
 #include "core_alloc.h"
@@ -291,14 +294,47 @@ static void action_handle_backlight(bool backlight, bool ignore_next)
 * if waiting for button release ACTION_NONE is returned until
 * button is released/repeated.
 */
+#if defined(IPOD_ACCESSORY_PROTOCOL) && defined(HAVE_USB_PODLINK)
+static int remote_poll(int timeout, int context)
+{
+    if (remote_input_active)
+    {
+        remote = (struct agents_remote_state){0};
+        return button_get_w_tmo(timeout);
+    }
+    if (remote.replay) return BUTTON_NONE;
+    if (agents_remote_pending(&remote) && (timeout < 0 || timeout > HZ / 10))
+        timeout = HZ / 10;
+    int button = button_get_w_tmo(TIMEOUT_NOBLOCK);
+    if (button == BUTTON_NONE && context == REMOTE_AGENTS)
+        button = iap_agents_volume_take();
+    if (button == BUTTON_NONE && timeout != TIMEOUT_NOBLOCK)
+        button = button_get_w_tmo(timeout);
+    return button;
+}
+#endif
+
 #ifdef HAVE_USB_PODLINK
 int agents_shortcut_get_button(int timeout)
 {
+#ifdef IPOD_ACCESSORY_PROTOCOL
+    int activity = get_current_activity();
+    int context = activity == ACTIVITY_AGENTS ? REMOTE_AGENTS :
+                  activity == ACTIVITY_WPS ? REMOTE_WPS : REMOTE_OTHER;
+    int button = remote_poll(timeout, context);
+#else
     int button = button_get_w_tmo(timeout);
+#endif
     bool fire;
     button = agents_shortcut_button(&shortcut, button, button_status(),
                                     shortcut_talking, &fire);
-    return fire ? AGENTS_SHORTCUT_BUTTON : button;
+    if (fire) return AGENTS_SHORTCUT_BUTTON;
+#ifdef IPOD_ACCESSORY_PROTOCOL
+    if (!remote_input_active)
+        button = agents_remote_button(&remote, context, button, button_status(),
+                                       current_tick);
+#endif
+    return button;
 }
 #endif
 
@@ -308,12 +344,9 @@ static inline bool action_poll_button(action_last_t *last, action_cur_t *cur)
     int *button = &cur->button;
 
 #if defined(IPOD_ACCESSORY_PROTOCOL) && defined(HAVE_USB_PODLINK)
-    static struct agents_remote_state remote;
-    bool agents = cur->context == CONTEXT_AGENTS;
-    int timeout = cur->timeout;
-    if (agents && remote.menu_down && (timeout < 0 || timeout > HZ / 10))
-        timeout = HZ / 10;
-    *button = button_get_w_tmo(timeout);
+    int context = cur->context == CONTEXT_AGENTS ? REMOTE_AGENTS :
+                  cur->context == CONTEXT_WPS ? REMOTE_WPS : REMOTE_OTHER;
+    *button = remote_poll(cur->timeout, context);
 #else
     *button = button_get_w_tmo(cur->timeout);
 #endif
@@ -332,8 +365,14 @@ static inline bool action_poll_button(action_last_t *last, action_cur_t *cur)
 #endif
 
 #if defined(IPOD_ACCESSORY_PROTOCOL) && defined(HAVE_USB_PODLINK)
-    *button = agents_remote_button(&remote, agents, *button,
-                                    button_status(), current_tick);
+    if (!remote_input_active)
+        *button = agents_remote_button(&remote, context, *button,
+                                        button_status(), current_tick);
+    if (*button == REMOTE_WPS_BUTTON)
+    {
+        *button = ACTION_REMOTE_WPS;
+        return true;
+    }
 #endif
 
    /* ********************************************************
@@ -899,14 +938,16 @@ int get_action(int context, int timeout)
     }
 #endif
 #ifdef HAVE_USB_PODLINK
-    if (action == ACTION_AGENTS_SWITCH && context != CONTEXT_WPS &&
-        context != CONTEXT_AGENTS)
+    if (action == ACTION_REMOTE_WPS ||
+        (action == ACTION_AGENTS_SWITCH && context != CONTEXT_WPS &&
+         context != CONTEXT_AGENTS))
     {
 #ifdef IPOD_ACCESSORY_PROTOCOL
         bool capture = remote_input_active;
         remote_input_active = false;
 #endif
-        root_menu_agents_shortcut();
+        if (action == ACTION_REMOTE_WPS) root_menu_wps_shortcut();
+        else root_menu_agents_shortcut();
 #ifdef IPOD_ACCESSORY_PROTOCOL
         remote_input_active = capture;
 #endif
@@ -1020,14 +1061,16 @@ int get_custom_action(int context,int timeout,
     }
 #endif
 #ifdef HAVE_USB_PODLINK
-    if (action == ACTION_AGENTS_SWITCH && context != CONTEXT_WPS &&
-        context != CONTEXT_AGENTS)
+    if (action == ACTION_REMOTE_WPS ||
+        (action == ACTION_AGENTS_SWITCH && context != CONTEXT_WPS &&
+         context != CONTEXT_AGENTS))
     {
 #ifdef IPOD_ACCESSORY_PROTOCOL
         bool capture = remote_input_active;
         remote_input_active = false;
 #endif
-        root_menu_agents_shortcut();
+        if (action == ACTION_REMOTE_WPS) root_menu_wps_shortcut();
+        else root_menu_agents_shortcut();
 #ifdef IPOD_ACCESSORY_PROTOCOL
         remote_input_active = capture;
 #endif

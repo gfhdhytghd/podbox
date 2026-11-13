@@ -118,6 +118,11 @@ void root_menu_agents_shortcut(void)
     assert(0);
 }
 
+void root_menu_wps_shortcut(void)
+{
+    root_menu_agents_shortcut();
+}
+
 int main(void)
 {
     usb_serial_init();

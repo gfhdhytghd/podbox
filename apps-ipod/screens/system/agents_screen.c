@@ -82,6 +82,9 @@
 #include "podlink.h"
 #include "input/action.h"
 #include "input/agents_shortcut.h"
+#ifdef IPOD_ACCESSORY_PROTOCOL
+#include "iap/agents_volume.h"
+#endif
 #include "draw/viewport.h"
 #include "draw/screen_access.h"
 #include "draw/text_wrap.h"
@@ -2264,6 +2267,9 @@ int agents_screen(void)
 
     FOR_NB_SCREENS(i)
         viewportmanager_theme_enable(i, true, NULL);
+#ifdef IPOD_ACCESSORY_PROTOCOL
+    iap_agents_volume_enable(true);
+#endif
     push_current_activity(ACTIVITY_AGENTS);
     /* Play is held to talk here, and held long enough it would power off */
     bool poweroff = button_get_sw_poweroff_state();
@@ -2609,6 +2615,9 @@ int agents_screen(void)
         sleep(HZ / 20);
     button_set_sw_poweroff_state(poweroff);
     pop_current_activity();
+#ifdef IPOD_ACCESSORY_PROTOCOL
+    iap_agents_volume_enable(false);
+#endif
     FOR_NB_SCREENS(i)
         viewportmanager_theme_undo(i, false);
     return ret;

@@ -982,6 +982,18 @@ static void NORETURN_ATTR usb_thread(void)
                                            (uint32_t)ev.data))
             {
                 podlink_requested = false;
+#ifdef HAVE_USB_CONFIRM
+                if (usb_detect() == USB_INSERTED &&
+                    (usb_state == USB_INSERTED || usb_state == USB_POWERED))
+                {
+                    timeout_cancel(&usb_confirm_tmo);
+                    usb_power_only = usb_mode == USB_MODE_CHARGE;
+                    usb_drive_only_now = usb_mode_drive_only() &&
+                                         !usb_power_only;
+                    usb_consent_begin(&usb_consent, usb_power_only, false);
+                    usb_confirm_has_config = false;
+                }
+#endif
                 if (usb_state == USB_INSERTED || usb_state == USB_POWERED)
                 {
                     usb_stack_enable(false);

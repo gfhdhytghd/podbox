@@ -423,6 +423,7 @@ iap/remote_capture.c
 screens/system/remote_input.c
 #ifdef HAVE_USB_PODLINK
 input/agents_remote.c
+iap/agents_volume.c
 #endif
 iap/iap-artwork.c
 iap/iap-lingo0.c

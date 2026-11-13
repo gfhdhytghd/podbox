@@ -1,12 +1,20 @@
-/* Dock remote input for Agents. Copyright (C) 2026. GPL version 2+. */
+/* Dock remote input. Copyright (C) 2026. GPL version 2+. */
 #ifndef AGENTS_REMOTE_H
 #define AGENTS_REMOTE_H
 #include <stdbool.h>
-struct agents_remote_state {
-    bool menu_down;
-    bool menu_long;
-    unsigned long menu_at;
+#define REMOTE_WPS_BUTTON (BUTTON_REDRAW | 0x100)
+enum agents_remote_context {
+    REMOTE_OTHER, REMOTE_AGENTS, REMOTE_WPS
 };
-int agents_remote_button(struct agents_remote_state *s, bool active,
+struct agents_remote_hold {
+    bool down, fired;
+    unsigned long at;
+};
+struct agents_remote_state {
+    struct agents_remote_hold hold[4];
+    int replay;
+};
+bool agents_remote_pending(const struct agents_remote_state *s);
+int agents_remote_button(struct agents_remote_state *s, int context,
                          int button, int held, unsigned long now);
 #endif

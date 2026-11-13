@@ -1,3 +1,10 @@
+- **Dock remote controls now have tap and hold actions.** Hold Left for
+  Menu or Right for Select for 0.6 seconds. A tap keeps its existing action;
+  a hold sends no Left/Right action and no longer seeks in Now Playing.
+  Outside Agents and Now Playing, holding remote Play opens Now Playing;
+  a tap keeps its existing action. Agents still uses Play for hold-to-talk.
+  Dock volume commands page Agents without changing the player's volume.
+  Leaving PodLink on a computer connection asks for disk access again.
 - **SELECT + PLAY switches between Now Playing and Agents.** From another
   screen it opens Agents. This replaces the configured Select + Play action.
   Agents waits 150 ms before starting hold-to-talk. Add SELECT during that

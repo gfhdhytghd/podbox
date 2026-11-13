@@ -34,6 +34,9 @@
 #include "metadata.h"
 #include "audio/playback.h"
 #include "system/volume.h"
+#ifdef HAVE_USB_PODLINK
+#include "iap/agents_volume.h"
+#endif
 #include "audio/remote_seek.h"
 #include "metadata/cuesheet.h"
 #include "iap-artwork.h"
@@ -799,6 +802,13 @@ void iap_handlepkt_mode3(const unsigned int len, const unsigned char *buf)
                 case 0x04:
                 {
                     CHECKLEN(5);
+#ifdef HAVE_USB_PODLINK
+                    if (iap_agents_volume(buf[0x04], buf[0x03] != 0))
+                    {
+                        cmd_ok(cmd);
+                        break;
+                    }
+#endif
                     if (buf[0x03]==0x00){
                         /* Not Muted */
                         device.mute = false;
@@ -972,6 +982,14 @@ void iap_handlepkt_mode3(const unsigned int len, const unsigned char *buf)
                 case 0x10:
                 {
                     CHECKLEN(7);
+#ifdef HAVE_USB_PODLINK
+                    if (iap_agents_volume(buf[0x04] ? buf[0x04] : buf[0x05],
+                                          buf[0x03] != 0))
+                    {
+                        cmd_ok(cmd);
+                        break;
+                    }
+#endif
                     if (buf[0x03]==0x00){
                         /* Not Muted. A UI volume of 0 defers to the
                          * absolute one. */

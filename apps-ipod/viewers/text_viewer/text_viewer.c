@@ -3695,9 +3695,11 @@ int text_viewer(const char *file)
         {
             long b = agents_shortcut_get_button(timeout);
 #ifdef HAVE_USB_PODLINK
-            if (b == AGENTS_SHORTCUT_BUTTON)
+            if (b == AGENTS_SHORTCUT_BUTTON ||
+                b == REMOTE_WPS_BUTTON)
             {
-                root_menu_agents_shortcut();
+                if (b == REMOTE_WPS_BUTTON) root_menu_wps_shortcut();
+                else root_menu_agents_shortcut();
                 tv_setup_screen();
                 tv_draw();
                 continue;

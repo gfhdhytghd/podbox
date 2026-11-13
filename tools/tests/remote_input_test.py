@@ -197,7 +197,7 @@ int main(void) {
 (O/'chord.c').write_text(pre+body('apps-ipod/input/agents_shortcut.c')+chordtest)
 for name in ('capture','chord'):
     if os.environ.get('REMOTE_TEST_ONLY') not in (None, name): continue
-    cmd=['cc','-std=gnu11','-Wall','-Wextra','-Werror','-g','-fsanitize=address,undefined','-fno-sanitize-recover=all','-fno-pie','-no-pie','-I'+str(O),'-I'+str(R),str(O/(name+'.c')),'-o',str(O/name)]
+    cmd=['cc','-std=gnu11','-Wall','-Wextra','-Werror','-g','-fsanitize=address,undefined','-fno-sanitize-recover=all','-fno-pie','-no-pie','-I'+str(O),'-I'+str(R),'-I'+str(R/'apps-ipod'),str(O/(name+'.c')),'-o',str(O/name)]
     subprocess.run(cmd,check=True);subprocess.run([str(O/name)],check=True)
 if os.environ.get('REMOTE_TEST_ONLY'): raise SystemExit(0)
 lingo=(R/'apps-ipod/iap/iap-lingo2.c').read_text()
@@ -265,7 +265,7 @@ int main(void) {
 }
 '''
 (O/'lingo.c').write_text(pre+body('apps-ipod/iap/remote_capture.c')+handlerpre+function(lingo,'iap_handlepkt_mode2')+handlertest)
-subprocess.run(['cc','-std=gnu11','-Wall','-Wextra','-Werror','-g','-fsanitize=address,undefined','-fno-sanitize-recover=all','-fno-pie','-no-pie','-I'+str(O),'-I'+str(R),str(O/'lingo.c'),'-o',str(O/'lingo')],check=True)
+subprocess.run(['cc','-std=gnu11','-Wall','-Wextra','-Werror','-g','-fsanitize=address,undefined','-fno-sanitize-recover=all','-fno-pie','-no-pie','-I'+str(O),'-I'+str(R),'-I'+str(R/'apps-ipod'),str(O/'lingo.c'),'-o',str(O/'lingo')],check=True)
 subprocess.run([str(O/'lingo')],check=True)
 # Execute the real capture screen against deterministic LCD/action ports and
 # ordinary temporary files. The serial producer is the same ring as above.
@@ -353,7 +353,7 @@ int main(void) {
 }
 '''
 (O/'screen.c').write_text(pre+body('apps-ipod/iap/remote_capture.c')+uipre+body('apps-ipod/screens/system/remote_input.c')+uitest)
-subprocess.run(['cc','-std=gnu11','-Wall','-Wextra','-Werror','-g','-fsanitize=address,undefined','-fno-sanitize-recover=all','-fno-pie','-no-pie','-I'+str(O),'-I'+str(R),str(O/'screen.c'),'-o',str(O/'screen')],check=True)
+subprocess.run(['cc','-std=gnu11','-Wall','-Wextra','-Werror','-g','-fsanitize=address,undefined','-fno-sanitize-recover=all','-fno-pie','-no-pie','-I'+str(O),'-I'+str(R),'-I'+str(R/'apps-ipod'),str(O/'screen.c'),'-o',str(O/'screen')],check=True)
 subprocess.run([str(O/'screen')],check=True)
 agents=(R/'apps-ipod/screens/system/agents_screen.c').read_text()
 a=agents.index('        if (talk_pending && !play_down)')
@@ -421,7 +421,7 @@ int main(void) {
 '''
 (O/'timing.c').write_text(pre+delaypre+delay+delayend+page+inttest)
 for name in ('timing',):
-    subprocess.run(['cc','-std=gnu11','-Wall','-Wextra','-Werror','-g','-fsanitize=address,undefined','-fno-sanitize-recover=all','-fno-pie','-no-pie','-I'+str(O),'-I'+str(R),str(O/(name+'.c')),'-o',str(O/name)],check=True)
+    subprocess.run(['cc','-std=gnu11','-Wall','-Wextra','-Werror','-g','-fsanitize=address,undefined','-fno-sanitize-recover=all','-fno-pie','-no-pie','-I'+str(O),'-I'+str(R),'-I'+str(R/'apps-ipod'),str(O/(name+'.c')),'-o',str(O/name)],check=True)
     subprocess.run([str(O/name)],check=True)
 guard=body('firmware/export/button_chord.h')
 (O/'poweroff.c').write_text(pre+guard+'''
@@ -442,13 +442,14 @@ int main(void) {
     puts("native poweroff guard: chord and partial release suppressed/PLAY alone unchanged PASS");
 }
 ''')
-subprocess.run(['cc','-std=gnu11','-Wall','-Wextra','-Werror','-g','-fsanitize=address,undefined','-fno-pie','-no-pie','-I'+str(O),'-I'+str(R),str(O/'poweroff.c'),'-o',str(O/'poweroff')],check=True)
+subprocess.run(['cc','-std=gnu11','-Wall','-Wextra','-Werror','-g','-fsanitize=address,undefined','-fno-pie','-no-pie','-I'+str(O),'-I'+str(R),'-I'+str(R/'apps-ipod'),str(O/'poweroff.c'),'-o',str(O/'poweroff')],check=True)
 subprocess.run([str(O/'poweroff')],check=True)
 # All existing remote maps are byte-for-byte unchanged; only the new Agents
 # map and its dispatch case differ. The adapter is a no-op outside Agents.
 baseline=subprocess.check_output(['git','show','db11c0fb1e:apps-ipod/input/keymap_ipod.c'],cwd=R,text=True)
 candidate=(R/'apps-ipod/input/keymap_ipod.c').read_text()
 for name in re.findall(r'static const struct button_mapping (remote_button_context_\w+)\[\]',baseline):
+    if name=='remote_button_context_agents': continue
     pattern=r'static const struct button_mapping '+name+r'\[\].*?\n};'
     assert re.search(pattern,baseline,re.S).group()==re.search(pattern,candidate,re.S).group(),name
 print('outside Agents: every pre-existing remote keymap array identical to db11c0fb1e PASS')
@@ -477,11 +478,13 @@ int main(void) {
     agents_return=0;a_calls=0;assert(agents_scrn(NULL)==GO_TO_PREVIOUS);
     a_calls=w_calls=0;agents_return=AGENTS_SWITCH_WPS;
     root_menu_agents_shortcut();assert(a_calls==2&&w_calls==1&&poweroff);
-    puts("navigation: System entry/Agents-to-WPS/modal alternation/normal cleanup PASS");
+    a_calls=w_calls=0;agents_return=0;
+    root_menu_wps_shortcut();assert(a_calls==1&&w_calls==1&&poweroff);
+    puts("navigation: System entry/Agents-to-WPS/modal alternation/remote WPS jump/normal cleanup PASS");
 }
 '''
-(O/'navigation.c').write_text(pre+navpre+function(root,'menu_result')+function(root,'agents_scrn')+function(root,'root_menu_agents_shortcut')+navtest)
-subprocess.run(['cc','-std=gnu11','-Wall','-Wextra','-Werror','-g','-fsanitize=address,undefined','-fno-pie','-no-pie','-I'+str(O),'-I'+str(R),str(O/'navigation.c'),'-o',str(O/'navigation')],check=True)
+(O/'navigation.c').write_text(pre+navpre+function(root,'menu_result')+function(root,'agents_scrn')+function(root,'root_menu_agents_shortcut')+function(root,'root_menu_wps_shortcut')+navtest)
+subprocess.run(['cc','-std=gnu11','-Wall','-Wextra','-Werror','-g','-fsanitize=address,undefined','-fno-pie','-no-pie','-I'+str(O),'-I'+str(R),'-I'+str(R/'apps-ipod'),str(O/'navigation.c'),'-o',str(O/'navigation')],check=True)
 subprocess.run([str(O/'navigation')],check=True)
 # Compile the actual polling hook too, to check adapter/chord ordering and
 # raw-screen replay without replacing the production input decision.
@@ -491,9 +494,18 @@ hookpre='''
 #define ACTION_REDRAW 1
 #define ACTION_AGENTS_SWITCH 400
 #define CONTEXT_AGENTS 1
+#define CONTEXT_WPS 2
+#define ACTION_REMOTE_WPS 401
+#define ACTIVITY_AGENTS 1
+#define ACTIVITY_WPS 2
 #define TIMEOUT_NOBLOCK 0
 struct agents_shortcut_state shortcut;
 static bool shortcut_talking;
+bool remote_input_active;
+static struct agents_remote_state remote;
+static int get_current_activity(void) {return 0;}
+static int fake_page;
+static int iap_agents_volume_take(void) {int b=fake_page;fake_page=0;return b;}
 static long current_tick;
 static int queued_button, held_button, polls;
 static int button_get_w_tmo(int t) {(void)t;polls++;return queued_button;}
@@ -507,7 +519,10 @@ int main(void) {
     action_last_t last={.button=BUTTON_REL,.context=CONTEXT_AGENTS};
     action_cur_t cur={.context=CONTEXT_AGENTS,.timeout=5};
     queued_button=held_button=BUTTON_RC_LEFT;
+    assert(action_poll_button(&last,&cur));assert(!cur.button);
+    queued_button=BUTTON_RC_LEFT|BUTTON_REL;held_button=0;current_tick=10;
     assert(!action_poll_button(&last,&cur));assert(cur.button==BUTTON_LEFT);
+    assert(!action_poll_button(&last,&cur));assert(cur.button==(BUTTON_LEFT|BUTTON_REL));
     queued_button=BUTTON_RC_PLAY;held_button=BUTTON_SELECT|BUTTON_RC_PLAY;
     assert(!action_poll_button(&last,&cur));assert(cur.button==BUTTON_PLAY);
     queued_button=BUTTON_RC_PLAY|BUTTON_SELECT;
@@ -517,6 +532,10 @@ int main(void) {
     assert(action_poll_button(&last,&cur));assert(cur.button==ACTION_AGENTS_SWITCH);
     queued_button=BUTTON_PLAY|BUTTON_SELECT|BUTTON_REL;held_button=0;
     assert(action_poll_button(&last,&cur));assert(!cur.button);
+    queued_button=held_button=0;cur.context=CONTEXT_AGENTS;
+    fake_page=BUTTON_RC_VOL_UP|BUTTON_REL|BUTTON_REPEAT;
+    assert(!action_poll_button(&last,&cur));assert(cur.button& BUTTON_REL);
+    assert(!fake_page);
     queued_button=held_button=BUTTON_SELECT;
     assert(agents_shortcut_get_button(5)==BUTTON_SELECT);
     queued_button=BUTTON_SELECT|BUTTON_REPEAT;
@@ -528,6 +547,6 @@ int main(void) {
     puts("input polling hook: native-only chord/remote PLAY isolation/native SELECT timing PASS");
 }
 '''
-(O/'hook.c').write_text(pre+'\n#include "apps-ipod/input/agents_remote.h"\n'+hookpre+body('apps-ipod/input/agents_shortcut.c')+body('apps-ipod/input/agents_remote.c')+function(action_source,'agents_shortcut_get_button')+function(action_source,'action_poll_button')+hooktest)
-subprocess.run(['cc','-std=gnu11','-Wall','-Wextra','-Werror','-g','-fsanitize=address,undefined','-fno-pie','-no-pie','-I'+str(O),'-I'+str(R),str(O/'hook.c'),'-o',str(O/'hook')],check=True)
+(O/'hook.c').write_text(pre+'\n#include "apps-ipod/input/agents_remote.h"\n'+hookpre+body('apps-ipod/input/agents_shortcut.c')+body('apps-ipod/input/agents_remote.c')+function(action_source,'remote_poll')+function(action_source,'agents_shortcut_get_button')+function(action_source,'action_poll_button')+hooktest)
+subprocess.run(['cc','-std=gnu11','-Wall','-Wextra','-Werror','-g','-fsanitize=address,undefined','-fno-pie','-no-pie','-I'+str(O),'-I'+str(R),'-I'+str(R/'apps-ipod'),str(O/'hook.c'),'-o',str(O/'hook')],check=True)
 subprocess.run([str(O/'hook')],check=True)

@@ -149,7 +149,8 @@ int podlink_screen(void)
         return 0;
     }
     long draw_at = 0;
-    bool exiting = false, shortcut = false;
+    bool exiting = false;
+    int shortcut = 0;
     received = sent = closes = 0;
     reply_type = 0;
     operation = ECHO;
@@ -218,7 +219,8 @@ int podlink_screen(void)
             draw_at = current_tick + HZ / 4;
         }
         int button = agents_shortcut_get_button(TIMEOUT_NOBLOCK);
-        if (button == AGENTS_SHORTCUT_BUTTON) shortcut = true;
+        if (button == AGENTS_SHORTCUT_BUTTON) shortcut = 1;
+        if (button == REMOTE_WPS_BUTTON) shortcut = 2;
         if ((button == BUTTON_MENU || shortcut) && !exiting)
         {
             exiting = true;
@@ -237,7 +239,8 @@ int podlink_screen(void)
             podlink_wait(1);
     }
 #ifdef HAVE_USB_PODLINK
-    if (shortcut) root_menu_agents_shortcut();
+    if (shortcut == 2) root_menu_wps_shortcut();
+    else if (shortcut == 1) root_menu_agents_shortcut();
 #endif
     return 0;
 }

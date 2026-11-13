@@ -17,6 +17,7 @@
 void root_menu(void) NORETURN_ATTR;
 #ifdef HAVE_USB_PODLINK
 void root_menu_agents_shortcut(void);
+void root_menu_wps_shortcut(void);
 #endif
 struct menu_table {
     char *string;

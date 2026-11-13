@@ -1,50 +1,69 @@
-/* Dock remote input for Agents. Copyright (C) 2026. GPL version 2+. */
+/* Dock tap/hold input. Copyright (C) 2026. GPL version 2+. */
 #include "config.h"
 #include "button.h"
 #include "kernel.h"
 #include "input/agents_remote.h"
 
-int agents_remote_button(struct agents_remote_state *s, bool active,
+bool agents_remote_pending(const struct agents_remote_state *s)
+{
+    return s->replay || s->hold[0].down || s->hold[1].down ||
+           s->hold[2].down || s->hold[3].down;
+}
+
+int agents_remote_button(struct agents_remote_state *s, int context,
                          int button, int held, unsigned long now)
 {
-    if (!active)
+    static const int keys[] = {
+        BUTTON_RC_MENU, BUTTON_RC_RIGHT, BUTTON_RC_LEFT, BUTTON_RC_PLAY
+    };
+    if (s->replay)
     {
-        s->menu_down = s->menu_long = false;
-        return button;
+        int replay = s->replay;
+        s->replay = 0;
+        return replay;
     }
-
-    bool menu = (button & BUTTON_REMOTE) == BUTTON_RC_MENU;
-    bool release = menu && (button & BUTTON_REL);
-    if (menu && !release && !s->menu_down)
+    for (unsigned int i = 0; i < sizeof(keys) / sizeof(keys[0]); i++)
     {
-        s->menu_down = true;
-        s->menu_long = false;
-        s->menu_at = now;
+        struct agents_remote_hold *h = &s->hold[i];
+        int key = keys[i];
+        bool event = (button & BUTTON_REMOTE) == key;
+        bool release = event && (button & BUTTON_REL);
+        bool allowed = key == BUTTON_RC_MENU ? context == REMOTE_AGENTS :
+                       key == BUTTON_RC_PLAY ? context == REMOTE_OTHER : true;
+        if (!h->down && event && !release && allowed)
+        {
+            h->down = true;
+            h->fired = false;
+            h->at = now;
+        }
+        /* A held Play used to open WPS must not become WPS's held Stop. */
+        if (h->down && key == BUTTON_RC_PLAY && context != REMOTE_OTHER)
+            h->fired = true;
+        if (h->down && (event || button == BUTTON_NONE))
+        {
+            bool ended = release || !(held & key);
+            bool fire = !h->fired && now - h->at >= (3 * HZ + 4) / 5;
+            bool tap = ended && !h->fired && !fire;
+            if (ended) h->down = false;
+            if (fire || tap)
+            {
+                h->fired = true;
+                if (fire && key == BUTTON_RC_PLAY)
+                    return REMOTE_WPS_BUTTON;
+                int result = fire ? (key == BUTTON_RC_LEFT ? BUTTON_MENU :
+                                                            BUTTON_SELECT) :
+                             context == REMOTE_AGENTS ?
+                             (key == BUTTON_RC_MENU ? BUTTON_MENU :
+                              key == BUTTON_RC_LEFT ? BUTTON_LEFT : BUTTON_RIGHT) :
+                             key;
+                s->replay = result | BUTTON_REL;
+                return result;
+            }
+            return BUTTON_NONE;
+        }
+        if (event && allowed) return BUTTON_NONE;
     }
-    if (s->menu_down && (menu || button == BUTTON_NONE))
-    {
-        bool ended = release || !(held & BUTTON_RC_MENU);
-        bool fire = !s->menu_long && now - s->menu_at >= (3 * HZ + 4) / 5;
-        if (fire)
-            s->menu_long = true;
-        bool tap = ended && !s->menu_long;
-        if (ended)
-            s->menu_down = false;
-        if (fire)
-            return BUTTON_RC_SELECT;
-        if (tap)
-            return BUTTON_RC_MENU | BUTTON_REL;
-    }
-    if (menu)
-        return BUTTON_NONE;
-
-    int rc = button & BUTTON_REMOTE;
-    int local = 0;
-    if (rc & BUTTON_RC_LEFT) local |= BUTTON_LEFT;
-    if (rc & BUTTON_RC_RIGHT) local |= BUTTON_RIGHT;
-    if (rc & BUTTON_RC_PLAY) local |= BUTTON_PLAY;
-    if (local)
-        return (button & ~(BUTTON_RC_LEFT | BUTTON_RC_RIGHT | BUTTON_RC_PLAY))
-               | local;
+    if (context == REMOTE_AGENTS && (button & BUTTON_RC_PLAY))
+        return (button & ~BUTTON_RC_PLAY) | BUTTON_PLAY;
     return button;
 }

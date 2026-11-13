@@ -336,6 +336,7 @@ enum {
     ACTION_AGENTS_TALK_END,
     ACTION_AGENTS_LEFT_REPEAT,
     ACTION_AGENTS_SWITCH,
+    ACTION_REMOTE_WPS,
 
     LAST_ACTION_PLACEHOLDER, /* custom actions should be this + something */
 };
