@@ -88,7 +88,7 @@ static int cursor, mapped[50], mapped_count;
 static void collect(int context, int button, unsigned long t) {
     int result=agents_remote_button(&remote,context,button,lastbtn,t);
     if(result) { assert(mapped_count<50);mapped[mapped_count++]=result; }
-    while(remote.replay) {
+    while(remote.queued) {
         result=agents_remote_button(&remote,context,0,lastbtn,t);
         assert(result && mapped_count<50);mapped[mapped_count++]=result;
     }

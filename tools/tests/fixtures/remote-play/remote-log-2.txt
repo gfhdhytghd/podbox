@@ -1,0 +1,55 @@
+307 tick=41252 +47.20s flags=0 L0/01 len=3 rx=3 stored=3 00 01 02  ?
+308 tick=41252 +0.00s flags=0 L0/0F len=3 rx=3 stored=3 00 0F 00  ?
+309 tick=41254 +0.02s flags=0 L0/0F len=3 rx=3 stored=3 00 0F 03  ?
+310 tick=41255 +0.01s flags=0 L0/09 len=2 rx=2 stored=2 00 09  ?
+311 tick=41256 +0.01s flags=0 L0/0D len=2 rx=2 stored=2 00 0D  ?
+312 tick=41258 +0.02s flags=0 L0/13 len=14 rx=14 stored=14 00 13 00 00 00 0D 00 00 00 02 00 00 00 10  ?
+313 tick=41259 +0.01s flags=0 L0/15 len=4 rx=4 stored=4 00 15 01 00  ?
+323 tick=42252 +1.61s flags=0 L2/00 len=4 rx=4 stored=4 02 00 08 00  RIGHT
+324 tick=42257 +0.05s flags=0 L2/00 len=4 rx=4 stored=4 02 00 08 00  RIGHT
+325 tick=42263 +0.06s flags=0 L2/00 len=4 rx=4 stored=4 02 00 08 00  RIGHT
+326 tick=42268 +0.05s flags=0 L2/00 len=4 rx=4 stored=4 02 00 08 00  RIGHT
+327 tick=42270 +0.02s flags=0 L2/00 len=4 rx=4 stored=4 02 00 00 00  (release)
+328 tick=42307 +0.37s flags=0 L3/0E len=6 rx=6 stored=6 03 0E 04 00 27 01  ?
+329 tick=42317 +0.10s flags=0 L3/0E len=6 rx=6 stored=6 03 0E 04 00 2A 01  ?
+330 tick=42358 +0.41s flags=0 L2/00 len=4 rx=4 stored=4 02 00 10 00  LEFT
+331 tick=42364 +0.06s flags=0 L2/00 len=4 rx=4 stored=4 02 00 10 00  LEFT
+332 tick=42369 +0.05s flags=0 L2/00 len=4 rx=4 stored=4 02 00 10 00  LEFT
+333 tick=42374 +0.05s flags=0 L2/00 len=4 rx=4 stored=4 02 00 10 00  LEFT
+334 tick=42377 +0.03s flags=0 L2/00 len=4 rx=4 stored=4 02 00 00 00  (release)
+335 tick=42413 +0.36s flags=0 L3/0E len=6 rx=6 stored=6 03 0E 04 00 27 01  ?
+336 tick=42424 +0.11s flags=0 L3/0E len=6 rx=6 stored=6 03 0E 04 00 24 01  ?
+273 tick=64776 +2.84s flags=0 L2/00 len=4 rx=4 stored=4 02 00 01 00  PLAY
+274 tick=64782 +0.06s flags=0 L2/00 len=4 rx=4 stored=4 02 00 01 00  PLAY
+275 tick=64787 +0.05s flags=0 L2/00 len=4 rx=4 stored=4 02 00 01 00  PLAY
+276 tick=64793 +0.06s flags=0 L2/00 len=4 rx=4 stored=4 02 00 01 00  PLAY
+277 tick=64798 +0.05s flags=0 L2/00 len=4 rx=4 stored=4 02 00 01 00  PLAY
+278 tick=64803 +0.05s flags=0 L2/00 len=4 rx=4 stored=4 02 00 01 00  PLAY
+279 tick=64805 +0.02s flags=0 L2/00 len=4 rx=4 stored=4 02 00 00 00  (release)
+280 tick=64820 +0.15s flags=0 L2/00 len=4 rx=4 stored=4 02 00 01 00  PLAY
+281 tick=64825 +0.05s flags=0 L2/00 len=4 rx=4 stored=4 02 00 01 00  PLAY
+282 tick=64831 +0.06s flags=0 L2/00 len=4 rx=4 stored=4 02 00 01 00  PLAY
+283 tick=64833 +0.02s flags=0 L2/00 len=4 rx=4 stored=4 02 00 00 00  (release)
+284 tick=64879 +0.46s flags=0 L2/00 len=4 rx=4 stored=4 02 00 01 00  PLAY
+285 tick=64885 +0.06s flags=0 L2/00 len=4 rx=4 stored=4 02 00 01 00  PLAY
+286 tick=64890 +0.05s flags=0 L2/00 len=4 rx=4 stored=4 02 00 01 00  PLAY
+287 tick=64896 +0.06s flags=0 L2/00 len=4 rx=4 stored=4 02 00 01 00  PLAY
+288 tick=64901 +0.05s flags=0 L2/00 len=4 rx=4 stored=4 02 00 01 00  PLAY
+289 tick=64906 +0.05s flags=0 L2/00 len=4 rx=4 stored=4 02 00 01 00  PLAY
+290 tick=64912 +0.06s flags=0 L2/00 len=4 rx=4 stored=4 02 00 01 00  PLAY
+291 tick=64917 +0.05s flags=0 L2/00 len=4 rx=4 stored=4 02 00 01 00  PLAY
+292 tick=64919 +0.02s flags=0 L2/00 len=4 rx=4 stored=4 02 00 00 00  (release)
+293 tick=64944 +0.25s flags=0 L2/00 len=4 rx=4 stored=4 02 00 01 00  PLAY
+294 tick=64950 +0.06s flags=0 L2/00 len=4 rx=4 stored=4 02 00 01 00  PLAY
+295 tick=64955 +0.05s flags=0 L2/00 len=4 rx=4 stored=4 02 00 01 00  PLAY
+296 tick=64961 +0.06s flags=0 L2/00 len=4 rx=4 stored=4 02 00 01 00  PLAY
+297 tick=64966 +0.05s flags=0 L2/00 len=4 rx=4 stored=4 02 00 01 00  PLAY
+298 tick=64972 +0.06s flags=0 L2/00 len=4 rx=4 stored=4 02 00 01 00  PLAY
+299 tick=64977 +0.05s flags=0 L2/00 len=4 rx=4 stored=4 02 00 01 00  PLAY
+300 tick=64983 +0.06s flags=0 L2/00 len=4 rx=4 stored=4 02 00 01 00  PLAY
+301 tick=64984 +0.01s flags=0 L2/00 len=4 rx=4 stored=4 02 00 00 00  (release)
+302 tick=65010 +0.26s flags=0 L2/00 len=4 rx=4 stored=4 02 00 01 00  PLAY
+303 tick=65015 +0.05s flags=0 L2/00 len=4 rx=4 stored=4 02 00 01 00  PLAY
+304 tick=65021 +0.06s flags=0 L2/00 len=4 rx=4 stored=4 02 00 01 00  PLAY
+305 tick=65026 +0.05s flags=0 L2/00 len=4 rx=4 stored=4 02 00 01 00  PLAY
+306 tick=65028 +0.02s flags=0 L2/00 len=4 rx=4 stored=4 02 00 00 00  (release)

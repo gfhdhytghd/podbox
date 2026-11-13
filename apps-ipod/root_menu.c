@@ -639,9 +639,13 @@ static int plugins_browser_removed(void* param)
     return GO_TO_ROOT;
 }
 
+static bool wps_return_agents;
+
 static int wpsscrn(void* param)
 {
     int ret_val = GO_TO_PREVIOUS;
+    bool return_agents = wps_return_agents;
+    wps_return_agents = false;
     int audstatus = audio_status();
     (void)param;
 
@@ -662,7 +666,7 @@ static int wpsscrn(void* param)
     if (audstatus)
     {
         talk_shutup();
-        ret_val = gui_wps_show();
+        ret_val = gui_wps_show(return_agents);
     }
     else if (global_status.resume_index != -1)
     {
@@ -676,7 +680,7 @@ static int wpsscrn(void* param)
                 global_status.resume_crc32,
                 global_status.resume_elapsed,
                 global_status.resume_offset);
-            ret_val = gui_wps_show();
+            ret_val = gui_wps_show(return_agents);
         }
     }
     else if (!file_exists(PLAYLIST_CONTROL_FILE))
@@ -685,7 +689,7 @@ static int wpsscrn(void* param)
              playlist_resume() != -1)
     {
         playlist_start(0, 0, 0);
-        ret_val = gui_wps_show();
+        ret_val = gui_wps_show(return_agents);
     }
 
     if (ret_val == GO_TO_PLAYLIST_VIEWER
@@ -967,6 +971,7 @@ static int agents_scrn(void *param)
 {
     (void)param;
     int ret = agents_screen();
+    wps_return_agents = ret == AGENTS_SWITCH_WPS;
     return ret == AGENTS_SWITCH_WPS ? GO_TO_WPS : GO_TO_PREVIOUS;
 }
 
@@ -983,6 +988,8 @@ void root_menu_agents_shortcut(void)
         if ((agents && ret != AGENTS_SWITCH_WPS) ||
             (!agents && ret != GO_TO_AGENTS))
             break;
+        if (agents)
+            wps_return_agents = true;
         agents = !agents;
     }
     button_set_sw_poweroff_state(poweroff);
@@ -990,6 +997,7 @@ void root_menu_agents_shortcut(void)
 
 void root_menu_wps_shortcut(void)
 {
+    wps_return_agents = false;
     bool poweroff = button_get_sw_poweroff_state();
     button_set_sw_poweroff_state(true);
     if (wpsscrn(NULL) == GO_TO_AGENTS)

@@ -383,6 +383,9 @@ static const struct button_mapping button_context_usb_hid_mode_mouse[] = {
  *****************************************************************************/
 
 static const struct button_mapping remote_button_context_agents[] = {
+    { ACTION_AGENTS_REMOTE_TALK, BUTTON_RC_PLAY, BUTTON_NONE },
+    { ACTION_AGENTS_DISCARD, BUTTON_RC_PLAY|BUTTON_REL|BUTTON_REPEAT,
+      BUTTON_NONE },
     /* A volume-set pair supplies one completed page gesture. */
     { ACTION_LISTTREE_PGUP, BUTTON_RC_VOL_UP|BUTTON_REL|BUTTON_REPEAT,
       BUTTON_NONE },

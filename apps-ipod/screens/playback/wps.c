@@ -725,7 +725,7 @@ static inline int action_wpsab_single(long button)
  * In either way, call gwps_leave_wps(true), in order to restore the correct
  * "main screen" backdrops and statusbars
  */
-long gui_wps_show(void)
+long gui_wps_show(bool return_agents)
 {
     long button = 0;
     bool restore = true;
@@ -994,6 +994,8 @@ long gui_wps_show(void)
             /* menu key functions */
             case ACTION_WPS_MENU:
                 gwps_leave_wps(true);
+                if (return_agents)
+                    return GO_TO_AGENTS;
                 return global_settings.wps_menu_action == WPS_MENU_PREVIOUS
                        ? GO_TO_PREVIOUS : GO_TO_ROOT;
                 break;

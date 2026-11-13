@@ -123,7 +123,12 @@ HerdRemote calls `HoldStart`/`HoldStop` on the session bus at
 synthesise F23. Ordinary F23 uses `HoldStart`. Alt+F23 uses `HoldStartRaw`,
 which disables text cleanup; it does not select another microphone.
 
-The player sends `vd <req> <target>` on press and `vu <req>` on release.
+The player sends `vd <req> <target>` immediately on press. A normal release
+sends `vu <req>`; a discarded tap or shortcut sends `vc <req>`, which calls
+`Cancel` then `HoldStop` and returns `Discarded` without committing text.
+Remote taps shorter than 300 ms and native taps shorter than 150 ms are
+discarded. A native SELECT joining PLAY within 150 ms also discards before
+switching screens. Use the matching daemon when updating this firmware.
 By default Play/Pause behaves like F23: recording starts at the computer's
 current cursor without moving herdr, regardless of the selected player row.
 Set `voice_focus=on` explicitly to focus the selected pane or workspace's

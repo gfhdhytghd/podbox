@@ -108,14 +108,13 @@ int main(void) {
     st=(struct agents_remote_state){0};
     for(int f=0;f<3;f++) {
         int flag=f==1?BUTTON_REPEAT:f==2?BUTTON_REL:0;
-        assert(agents_remote_button(&st,REMOTE_AGENTS,BUTTON_RC_PLAY|flag,
-                                    f==2?0:BUTTON_RC_PLAY,500)==(BUTTON_PLAY|flag));
-        assert(agents_remote_button(&st,REMOTE_WPS,BUTTON_RC_PLAY|flag,
-                                    f==2?0:BUTTON_RC_PLAY,500)==(BUTTON_RC_PLAY|flag));
         assert(agents_remote_button(&st,REMOTE_AGENTS,BUTTON_LEFT|flag,0,500)==(BUTTON_LEFT|flag));
         assert(agents_remote_button(&st,REMOTE_AGENTS,BUTTON_RIGHT|flag,0,500)==(BUTTON_RIGHT|flag));
     }
-    tap(&st,REMOTE_OTHER,BUTTON_RC_PLAY,BUTTON_RC_PLAY,CONTEXT_LIST);
+    assert(lookup(CONTEXT_AGENTS,BUTTON_RC_PLAY,0)==ACTION_AGENTS_REMOTE_TALK);
+    assert(lookup(CONTEXT_AGENTS,BUTTON_RC_PLAY|BUTTON_REL|BUTTON_REPEAT,0)==ACTION_AGENTS_DISCARD);
+    assert(lookup(CONTEXT_AGENTS,BUTTON_PLAY|BUTTON_REL,0)==ACTION_AGENTS_TALK_END);
+    st=(struct agents_remote_state){0};
     assert(!agents_remote_button(&st,REMOTE_OTHER,BUTTON_RC_PLAY,BUTTON_RC_PLAY,600));
     assert(!agents_remote_button(&st,REMOTE_OTHER,BUTTON_RC_PLAY|BUTTON_REPEAT,BUTTON_RC_PLAY,659));
     assert(agents_remote_button(&st,REMOTE_OTHER,0,BUTTON_RC_PLAY,660)==REMOTE_WPS_BUTTON);

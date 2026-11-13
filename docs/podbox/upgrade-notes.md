@@ -1,3 +1,9 @@
+- **Double-tap remote Play to switch between Agents and Now Playing.**
+  Start the second press within 200 ms of releasing the first. A single
+  tap waits for that window. In Agents, recording starts on press: remote
+  taps shorter than 300 ms and native taps shorter than 150 ms discard it.
+  Update the matching HerdRemote daemon for the new discard command. Menu returns
+  Now Playing to Agents when the switch opened it from Agents.
 - **Agents and PodLink can open with USB already connected.** A charging
   connection switches to PodLink without unplugging. A disk in use by the
   computer stays with it. Leaving asks for disk access again; USB Mode
@@ -12,9 +18,9 @@
   Leaving PodLink on a computer connection asks for disk access again.
 - **SELECT + PLAY switches between Now Playing and Agents.** From another
   screen it opens Agents. This replaces the configured Select + Play action.
-  Agents waits 150 ms before starting hold-to-talk. Add SELECT during that
-  delay to switch without recording. After recording starts, SELECT does
-  nothing until PLAY is released. SELECT alone keeps its tap and held
+  Native Play starts recording immediately. Add SELECT within 150 ms to
+  discard and switch. After 150 ms, SELECT does nothing until PLAY is released.
+  SELECT alone keeps its tap and held
   actions. PLAY joins the combo only before SELECT's held action fires.
 - **Long comments and other tags in FLAC, Ogg, Opus, APE and WavPack files
   are now kept to 500 characters,** as in MP3 and M4A files; until now they

@@ -433,6 +433,7 @@ down or `ok=0`: retain last data and mark it stale. See
 | `fp <req> <pane>` | Show this pane on the computer |
 | `vd <req> <target>` | Start hold-to-talk; target is a pane id, `w:<ws>`, or `-` |
 | `vu <req>` | Release hold-to-talk |
+| `vc <req>` | Discard this session's voice hold without committing text |
 | `k <req> <key> [<n>]` | Tap `bs`, `left`, `right`, `enter`, `wleft` or `wright` 1–32 times (default 1) at the computer's current keyboard focus |
 | `a <req> <qid> <number>` | Choose option `number` of question `qid` |
 | `us` | Send the cached `U/P/N` usage frame now; request a refresh when due |
@@ -470,6 +471,16 @@ report `Talking`. `vu` calls `HoldStop` for this session's hold and returns
 `R <req> ok Sent`, or `err Voice input not running` on a D-Bus failure.
 The microphone and committed text both belong to the computer.
 
+`vc` checks that the current addon token is still this session's recording,
+calls `Cancel`, then `HoldStop` to reset the addon's held-key state. Success
+is `R <req> ok Discarded`. Cancel clears the addon session and the deferred
+voice bridge commits no text for its `Cancelled` event. Unmatched/repeated
+`vc` never cancels an unowned recording. A failed Cancel is retried without
+calling HoldStop first, so a failed discard cannot become a submission.
+After Cancel succeeds, only a failed HoldStop is retried. A new hold waits
+until that reset completes. Ordinary link loss/reset/shutdown retain their
+existing release behavior; a discard already pending keeps its discard intent.
+
 Repeated `vd` while held neither refocuses nor extends the deadline.
 Repeated/unmatched `vu` succeeds without touching an unrelated recording.
 Link loss, `hr` session reset and daemon shutdown release an outstanding
@@ -484,7 +495,7 @@ limit can expire during these calls. The watchdog then stops immediately
 after that bounded sequence, with a separately bounded stop call. Stops
 require a reachable bus/addon.
 
-`vd` and `vu` each occupy exactly one record. Request ids are nonempty and
+`vd`, `vu` and `vc` each occupy exactly one record. Request ids are nonempty and
 at most 7 bytes; targets are nonempty and at most 17 bytes (the `w:` prefix
 plus a 15-byte workspace id). Control characters are rejected.
 

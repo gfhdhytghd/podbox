@@ -62,7 +62,7 @@ class SessionBus:
             raise VoiceError(NOT_RUNNING) from error
 
     def call(self, method):
-        if method not in METHODS + ("HoldStop", "Status"):
+        if method not in METHODS + ("HoldStop", "Cancel", "Status"):
             raise ValueError("unsupported voice method")
         return self._call(DEST, OBJECT, INTERFACE, method)
 
@@ -99,6 +99,8 @@ class HoldToTalk:
         self.timer = None
         self.down = False
         self.engaged = False  # includes a start whose D-Bus reply was lost
+        self.token = 0
+        self.discarding = self.cancelled = False
         self.expired = False
         self.generation = 0
 
@@ -119,12 +121,19 @@ class HoldToTalk:
         if not self.engaged:
             return
         try:
+            if self.discarding and not self.cancelled:
+                token, _state = self.bus.status()
+                if token and token == self.token:
+                    self.bus.call("Cancel")
+                self.cancelled = True
             self.bus.call("HoldStop")
         except VoiceError:
             # Keep ownership and retry: a lost reply must not leave the mic on.
             self._arm(1)
             raise
         self.engaged = False
+        self.token = 0
+        self.discarding = self.cancelled = False
 
     def _timeout(self, generation):
         with self.lock:
@@ -157,6 +166,7 @@ class HoldToTalk:
                 token, state = self.bus.status()
                 if not token or state != "recording":
                     raise VoiceError(NOT_RUNNING)
+                self.token = token
                 self.down = True
                 self.expired = False
                 return True, "Talking"
@@ -172,8 +182,20 @@ class HoldToTalk:
             self.down = False
             self.expired = False
             try:
+                discarded = self.discarding
                 self._stop()
-                return True, "Sent"
+                return True, "Discarded" if discarded else "Sent"
+            except VoiceError as error:
+                return False, str(error)
+
+    def discard(self):
+        with self.lock:
+            self.down = self.expired = False
+            if self.engaged:
+                self.discarding = True
+            try:
+                self._stop()
+                return True, "Discarded"
             except VoiceError as error:
                 return False, str(error)
 

@@ -45,10 +45,14 @@
 #ifdef HAVE_USB_PODLINK
 #include "input/agents_shortcut.h"
 #include "root_menu.h"
+#include "kernel.h"
 static struct agents_shortcut_state shortcut;
 static bool shortcut_talking;
+static unsigned long shortcut_talking_at;
 void agents_shortcut_talking(bool talking)
 {
+    if (talking && !shortcut_talking)
+        shortcut_talking_at = current_tick;
     shortcut_talking = talking;
 }
 #endif
@@ -302,7 +306,7 @@ static int remote_poll(int timeout, int context)
         remote = (struct agents_remote_state){0};
         return button_get_w_tmo(timeout);
     }
-    if (remote.replay) return BUTTON_NONE;
+    if (remote.queued) return BUTTON_NONE;
     if (agents_remote_pending(&remote) && (timeout < 0 || timeout > HZ / 10))
         timeout = HZ / 10;
     int button = button_get_w_tmo(TIMEOUT_NOBLOCK);
@@ -327,7 +331,10 @@ int agents_shortcut_get_button(int timeout)
 #endif
     bool fire;
     button = agents_shortcut_button(&shortcut, button, button_status(),
-                                    shortcut_talking, &fire);
+                                    shortcut_talking &&
+                                    (unsigned long)current_tick -
+                                    shortcut_talking_at > (3 * HZ + 19) / 20,
+                                    &fire);
     if (fire) return AGENTS_SHORTCUT_BUTTON;
 #ifdef IPOD_ACCESSORY_PROTOCOL
     if (!remote_input_active)
@@ -353,7 +360,10 @@ static inline bool action_poll_button(action_last_t *last, action_cur_t *cur)
 #ifdef HAVE_USB_PODLINK
     bool fire;
     *button = agents_shortcut_button(&shortcut, *button, button_status(),
-                                     shortcut_talking, &fire);
+                                     shortcut_talking &&
+                                     (unsigned long)current_tick -
+                                     shortcut_talking_at > (3 * HZ + 19) / 20,
+                                     &fire);
     if (fire)
     {
         last->button = BUTTON_REL;
@@ -371,6 +381,14 @@ static inline bool action_poll_button(action_last_t *last, action_cur_t *cur)
     if (*button == REMOTE_WPS_BUTTON)
     {
         *button = ACTION_REMOTE_WPS;
+        return true;
+    }
+    if (*button == REMOTE_SWITCH_BUTTON)
+    {
+        last->button = BUTTON_REL;
+        last->action = ACTION_NONE;
+        last->wait_for_release = false;
+        *button = ACTION_AGENTS_SWITCH;
         return true;
     }
 #endif

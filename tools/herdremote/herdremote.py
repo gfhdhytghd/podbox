@@ -440,7 +440,7 @@ class Daemon:
             self.usage.request()
         elif name in ("fw", "fp", "ft"):
             self.focus(name, *args)
-        elif name in ("vd", "vu"):
+        elif name in ("vd", "vu", "vc"):
             self.voice_command(name, *args)
         elif name == "k":
             self.key_command(*args)
@@ -480,7 +480,8 @@ class Daemon:
         self.changed.set()
 
     def voice_command(self, name, req, target=None):
-        result = self.voice.press(target) if name == "vd" else self.voice.release()
+        result = (self.voice.press(target) if name == "vd" else
+                  self.voice.discard() if name == "vc" else self.voice.release())
         self.send(hrproto.result(req, *result))
 
     def focus(self, name, req, target, tab_id=None):

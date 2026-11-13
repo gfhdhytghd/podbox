@@ -333,6 +333,8 @@ enum {
 
     /* System > Agents: Play down and up, hold to talk */
     ACTION_AGENTS_TALK,
+    ACTION_AGENTS_REMOTE_TALK,
+    ACTION_AGENTS_DISCARD,
     ACTION_AGENTS_TALK_END,
     ACTION_AGENTS_LEFT_REPEAT,
     ACTION_AGENTS_SWITCH,

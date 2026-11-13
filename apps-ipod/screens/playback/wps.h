@@ -23,7 +23,7 @@ struct wps_state
     bool paused;
 };
 
-long gui_wps_show(void);
+long gui_wps_show(bool return_agents);
 
 enum wps_do_action_type
 {

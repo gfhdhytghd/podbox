@@ -191,11 +191,10 @@ static struct row usage_from;   /* the spaces row to go back to */
 /* Hold to talk: the band at the foot of the list, while it is wanted */
 #define TALK_REPLY  (8 * HZ)    /* how long vd and vu wait for their R */
 #define TALK_BAND   30          /* the band's height in pixels */
-static bool talk_pending;
-static unsigned long talk_pending_at;
-static bool talk_held;          /* vd sent and vu not yet */
+static bool talk_remote, talk_discarded;
+static bool talk_held;          /* vd sent, with vu/vc still to come */
 static long talk_since;         /* when the recording began, for its count */
-static char talk_req[8];        /* the vd or vu awaiting its result */
+static char talk_req[8];        /* the vd/vu/vc awaiting its result */
 static bool talk_req_up;        /* that request is the vu */
 static long talk_until;         /* when the request or the note expires */
 static char talk_note[64];      /* the last result */
@@ -215,7 +214,7 @@ static struct hr_wheel wheel;
  * again) */
 static char *outbox_slot(void)
 {
-    return nout < OUTBOX ? outbox[nout++] : NULL;
+    return nout < OUTBOX - (talk_held ? 1 : 0) ? outbox[nout++] : NULL;
 }
 
 static void take_req(char *req, size_t size)
@@ -1577,6 +1576,8 @@ static void draw_mic(struct screen *d, int x, int y, unsigned colour)
  * reports, a request awaiting its result, or a result still shown */
 static bool talk_wanted(void)
 {
+    if (talk_discarded && !talk_failed)
+        return false;
     return talk_held || model.voice == 't' || talk_req[0] ||
            (talk_note[0] && TIME_BEFORE(current_tick, talk_until));
 }
@@ -1661,7 +1662,7 @@ static void talk_result(const char *text, bool failed)
 }
 
 /* Play pressed: start recording on the computer */
-static void start_talk(struct gui_synclist *list)
+static void start_talk(struct gui_synclist *list, bool remote)
 {
     char target[24];
     if (talk_held)
@@ -1671,6 +1672,8 @@ static void start_talk(struct gui_synclist *list)
         talk_result("No link to the computer", true);
         return;
     }
+    if (nout >= OUTBOX - 1)
+        return; /* Keep one slot for vu/vc while recording. */
     char *slot = outbox_slot();
     if (!slot)
         return;
@@ -1679,6 +1682,8 @@ static void start_talk(struct gui_synclist *list)
     snprintf(slot, sizeof outbox[0], "vd\t%s\t%s", talk_req, target);
     talk_req_up = false;
     talk_held = true;
+    talk_remote = remote;
+    talk_discarded = false;
     agents_shortcut_talking(true);
     talk_since = current_tick;
     talk_until = current_tick + TALK_REPLY;
@@ -1687,14 +1692,19 @@ static void start_talk(struct gui_synclist *list)
     model.voice = 0;
 }
 
-/* Play released, or the hold has to end: stop recording, which sends what
- * was said */
-static void stop_talk(void)
+/* Discard clears the band immediately; a normal stop submits the recording. */
+static void finish_talk(bool discard)
 {
-    talk_pending = false;
     if (!talk_held)
         return;
     talk_held = false;
+    talk_discarded = discard;
+    if (discard)
+    {
+        model.voice = 0;
+        talk_note[0] = '\0';
+        talk_failed = false;
+    }
     agents_shortcut_talking(false);
     char *slot = podlink_state() == PODLINK_CONNECTED ? outbox_slot() : NULL;
     if (!slot)
@@ -1703,9 +1713,16 @@ static void stop_talk(void)
         return;
     }
     take_req(talk_req, sizeof talk_req);
-    snprintf(slot, sizeof outbox[0], "vu\t%s", talk_req);
-    talk_req_up = true;
+    snprintf(slot, sizeof outbox[0], "%s\t%s", discard ? "vc" : "vu", talk_req);
+    talk_req_up = !discard;
     talk_until = current_tick + TALK_REPLY;
+}
+
+static bool talk_is_short(void)
+{
+    unsigned long limit = talk_remote ? (3 * HZ + 9) / 10 :
+                                       (3 * HZ + 19) / 20;
+    return (unsigned long)current_tick - (unsigned long)talk_since < limit;
 }
 
 static void forget_keys(void)
@@ -2255,7 +2272,7 @@ int agents_screen(void)
     detail_shown_age = -1;
     task_text[0] = '\0';
     reset_focus();
-    talk_held = talk_shown = talk_pending = false;
+    talk_held = talk_shown = talk_discarded = false;
     agents_shortcut_talking(false);
     talk_req[0] = talk_note[0] = '\0';
     forget_keys();
@@ -2347,15 +2364,8 @@ int agents_screen(void)
         /* A release the keymap did not see still ends the hold. A failure
          * stays in view while Play is held, and for a moment after. */
         bool play_down = agents_play_down();
-        if (talk_pending && !play_down) talk_pending = false;
-        if (talk_pending && play_down && !(button_status() & BUTTON_SELECT) &&
-            (unsigned long)current_tick - talk_pending_at >= (3 * HZ + 19) / 20)
-        {
-            talk_pending = false;
-            start_talk(&list);
-        }
         if (talk_held && !play_down)
-            stop_talk();
+            finish_talk(talk_is_short());
         if (talk_failed && play_down && TIME_BEFORE(current_tick, talk_until))
             talk_until = current_tick + 3 * HZ;
         if (talk_req[0] && TIME_AFTER(current_tick, talk_until))
@@ -2562,17 +2572,23 @@ int agents_screen(void)
             case ACTION_AGENTS_TALK:
                 if (view != VIEW_CONFIRM)
                 {
-                    talk_pending = true;
-                    talk_pending_at = current_tick;
+                    start_talk(&list, false);
                 }
                 break;
+            case ACTION_AGENTS_REMOTE_TALK:
+                if (view != VIEW_CONFIRM)
+                    start_talk(&list, true);
+                break;
+            case ACTION_AGENTS_DISCARD:
+                finish_talk(true);
+                break;
             case ACTION_AGENTS_SWITCH:
-                talk_pending = false;
+                finish_talk(true);
                 ret = AGENTS_SWITCH_WPS;
                 done = true;
                 break;
             case ACTION_AGENTS_TALK_END:
-                stop_talk();
+                finish_talk(talk_is_short());
                 break;
             case ACTION_STD_CONTEXT:
                 /* SELECT held is still one Enter in usage and detail: the
@@ -2598,7 +2614,7 @@ int agents_screen(void)
     }
 
     /* A hold ends with the screen */
-    stop_talk();
+    finish_talk(false);
     flush_outbox();
     /* Close cleanly: the transport finishes its CLOSE only while polled */
     podlink_close();

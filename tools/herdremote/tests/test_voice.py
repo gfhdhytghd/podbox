@@ -54,6 +54,57 @@ class VoiceFixture:
 
 
 class VoiceTests(VoiceFixture, unittest.TestCase):
+    def owned_recording(self):
+        self.assertEqual(self.voice.press("-"), (True, "Talking"))
+        self.bus.status.side_effect = None
+        self.bus.status.return_value = (23, "recording")
+
+    def test_discard_cancels_then_resets_hold_and_allows_next_press(self):
+        self.owned_recording()
+        self.assertEqual(self.voice.discard(), (True, "Discarded"))
+        self.assertEqual(self.methods(), ["HoldStart", "Cancel", "HoldStop"])
+        self.assertFalse(self.voice.engaged or self.voice.down)
+        self.assertEqual(self.voice.discard(), (True, "Discarded"))
+        self.assertEqual(self.methods(), ["HoldStart", "Cancel", "HoldStop"])
+        self.bus.status.side_effect = [(0, "idle"), (24, "recording")]
+        self.assertEqual(self.voice.press("-"), (True, "Talking"))
+
+    def test_unmatched_discard_never_cancels_unowned_recording(self):
+        self.assertEqual(self.voice.discard(), (True, "Discarded"))
+        self.bus.assert_not_called()
+        self.assertEqual(self.bus.mock_calls, [])
+
+    def test_discard_does_not_cancel_a_replacement_session(self):
+        self.owned_recording()
+        self.bus.status.return_value = (24, "recording")
+        self.assertEqual(self.voice.discard(), (True, "Discarded"))
+        self.assertEqual(self.methods(), ["HoldStart", "HoldStop"])
+
+    def test_failed_cancel_never_submits_and_retries_before_new_press(self):
+        self.owned_recording()
+        def fail_cancel(method):
+            if method == "Cancel":
+                raise hrvoice.VoiceError(hrvoice.NOT_RUNNING)
+        self.bus.call.side_effect = fail_cancel
+        self.assertEqual(self.voice.discard(), (False, hrvoice.NOT_RUNNING))
+        self.assertEqual(self.methods(), ["HoldStart", "Cancel"])
+        self.assertEqual(self.voice.press("-"), (False, hrvoice.NOT_RUNNING))
+        self.bus.call.side_effect = None
+        self.voice.timer.fire()
+        self.assertEqual(self.methods(), ["HoldStart", "Cancel", "Cancel", "HoldStop"])
+
+    def test_failed_hold_reset_does_not_repeat_successful_cancel(self):
+        self.owned_recording()
+        def fail_stop(method):
+            if method == "HoldStop":
+                raise hrvoice.VoiceError(hrvoice.NOT_RUNNING)
+        self.bus.call.side_effect = fail_stop
+        self.assertEqual(self.voice.discard(), (False, hrvoice.NOT_RUNNING))
+        self.bus.call.side_effect = None
+        self.bus.status.return_value = (24, "recording")
+        self.voice.timer.fire()
+        self.assertEqual(self.methods(), ["HoldStart", "Cancel", "HoldStop", "HoldStop"])
+
     def test_default_keeps_current_cursor_for_any_target(self):
         voice = hrvoice.HoldToTalk(self.focus, bus=self.bus, timer=FakeTimer)
         self.addCleanup(voice.stop)
@@ -178,6 +229,8 @@ class BusTests(unittest.TestCase):
                 capture_output=True, text=True, check=True, timeout=3))
             bus.call("HoldStop")
             self.assertEqual(run.call_args.args[0][-1], "HoldStop")
+            bus.call("Cancel")
+            self.assertEqual(run.call_args.args[0][-1], "Cancel")
 
     def test_missing_busctl_failed_call_timeout_and_bad_status(self):
         bus = hrvoice.SessionBus()
@@ -265,6 +318,16 @@ class DaemonTests(VoiceFixture, unittest.TestCase):
         self.assertEqual(self.result(b"vu\t8"), ["R", "8", "ok", "Sent"])
         self.bus.ready.side_effect = hrvoice.VoiceError(hrvoice.NOT_RUNNING)
         self.assertEqual(self.result(b"vd\t9\t-"), ["R", "9", "err", hrvoice.NOT_RUNNING])
+
+    def test_daemon_discard_command(self):
+        self.assertEqual(self.result(b"vd\t7\t-"), ["R", "7", "ok", "Talking"])
+        self.bus.status.side_effect = None
+        self.bus.status.return_value = (23, "recording")
+        self.assertEqual(self.result(b"vc\t8"), ["R", "8", "ok", "Discarded"])
+        self.assertEqual(self.methods(), ["HoldStart", "Cancel", "HoldStop"])
+        self.assertEqual(hrproto.parse_command(b"vc\t8"), ("vc", ["8"]))
+        for bad in (b"vc", b"vc\t", b"vc\t12345678", b"vc\t1\t-", b"vc\t1\n", b"vc\t1\nvu\t2"):
+            self.assertIsNone(hrproto.parse_command(bad), bad)
 
     def test_daemon_default_voice_does_not_focus(self):
         with mock.patch.object(herdremote.hrusage, "UsageCache"):

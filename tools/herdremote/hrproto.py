@@ -242,7 +242,7 @@ def parse_command(payload):
     fields = records[0]
     name, args = fields[0], fields[1:]
     shapes = {"hr": 1, "sub": 1, "fw": 2, "fp": 2, "a": 3, "us": 0,
-              "vd": 2, "vu": 1, "k": 2, "ft": 3, "det": 1}
+              "vd": 2, "vu": 1, "vc": 1, "k": 2, "ft": 3, "det": 1}
     if name in ("sub", "ft", "det"):
         valid_lengths = (1, 2) if name == "sub" else (shapes[name],)
         if len(records) != 1 or len(args) not in valid_lengths:
@@ -255,9 +255,9 @@ def parse_command(payload):
         if name == "sub" and len(args) == 2 and args[0] == "-":
             return None
         return name, args
-    if name in ("us", "vd", "vu", "k") and len(records) != 1:
+    if name in ("us", "vd", "vu", "vc", "k") and len(records) != 1:
         return None
-    if name in ("vd", "vu", "k") and (
+    if name in ("vd", "vu", "vc", "k") and (
             not args or not args[0] or len(args[0].encode("utf-8")) > 7 or
             any(ord(c) < 32 or ord(c) == 127 for a in args for c in a)):
         return None

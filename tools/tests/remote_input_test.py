@@ -356,13 +356,10 @@ int main(void) {
 subprocess.run(['cc','-std=gnu11','-Wall','-Wextra','-Werror','-g','-fsanitize=address,undefined','-fno-sanitize-recover=all','-fno-pie','-no-pie','-I'+str(O),'-I'+str(R),'-I'+str(R/'apps-ipod'),str(O/'screen.c'),'-o',str(O/'screen')],check=True)
 subprocess.run([str(O/'screen')],check=True)
 agents=(R/'apps-ipod/screens/system/agents_screen.c').read_text()
-a=agents.index('        if (talk_pending && !play_down)')
-b=agents.index('        if (talk_held && !play_down)',a)
-delay=agents[a:b]
 a=agents.index('            if (action == ACTION_LISTTREE_PGUP ||')
 b=agents.index('            const char *key = dir ?',a)
 page=agents[a:b]
-delaypre='''
+pagepre='''
 #define MAX(a,b) ((a)>(b)?(a):(b))
 #define MIN(a,b) ((a)<(b)?(a):(b))
 #define ACTION_LISTTREE_PGUP 1
@@ -375,54 +372,30 @@ delaypre='''
 #define HR_USAGE_SVCS 4
 #define USE_BLOCK 50
 #define USE_LINE 21
-static bool talk_pending;
-static unsigned long talk_pending_at,current_tick;
-static int held,starts;
-static int button_status(void) {return held;}
-static void start_talk(void *list) {(void)list;starts++;}
-static void tick(unsigned long now,int keys) {
-    current_tick=now;held=keys;bool play_down=keys&BUTTON_PLAY;
-    int list=0;
-'''
-delayend='''
-}
-struct vp {int height;};
-struct gl {struct vp *parent[1];};
+struct vp {int height;};struct gl {struct vp *parent[1];};
 static int view,usage_scroll,detail_scroll,detail_scroll_max,detail_page_lines,draws;
-static void draw_usage(struct gl *l) {(void)l;draws++;}
-static void draw_detail(struct gl *l) {(void)l;draws++;}
-static void page_move(int action) {
-    struct vp vp={.height=100};struct gl list={.parent={&vp}};
+static void draw_usage(struct gl*l){(void)l;draws++;}
+static void draw_detail(struct gl*l){(void)l;draws++;}
+static void page_move(int action){struct vp vp={.height=100};struct gl list={.parent={&vp}};
 '''
-inttest='''
+pagetest='''
 }
-int main(void) {
-    talk_pending=true;talk_pending_at=100;
-    tick(114,BUTTON_PLAY);assert(!starts&&talk_pending);
-    tick(115,BUTTON_PLAY);assert(starts==1&&!talk_pending);
-    tick(116,BUTTON_PLAY);assert(starts==1);
-    talk_pending=true;talk_pending_at=200;
-    tick(214,BUTTON_PLAY|BUTTON_SELECT);assert(starts==1&&talk_pending);
-    tick(215,BUTTON_PLAY|BUTTON_SELECT);assert(starts==1&&talk_pending);
-    /* The switch action cancels the deferred start, so no vd or vu exists. */
-    talk_pending=false;tick(220,0);assert(starts==1);
-    talk_pending=true;talk_pending_at=300;tick(310,0);assert(!talk_pending&&starts==1);
-    view=VIEW_USAGE;page_move(ACTION_LISTTREE_PGDOWN);assert(usage_scroll==100&&draws==1);
-    page_move(ACTION_LISTTREE_PGDOWN);assert(usage_scroll==124);
-    page_move(ACTION_LISTTREE_PGUP);assert(usage_scroll==24);
-    page_move(ACTION_LISTTREE_PGUP);assert(usage_scroll==0);
-    view=VIEW_DETAIL;detail_scroll_max=23;detail_page_lines=7;
-    page_move(ACTION_LISTTREE_PGDOWN);assert(detail_scroll==7);
-    page_move(ACTION_LISTTREE_PGDOWN);assert(detail_scroll==14);
-    page_move(ACTION_LISTTREE_PGUP);assert(detail_scroll==7);
-    view=VIEW_CONFIRM;int n=draws;page_move(ACTION_LISTTREE_PGDOWN);assert(draws==n);
-    puts("Agents production delay/page blocks: 150ms/no early talk/chord cancels pending/short tap/page bounds PASS");
+int main(void){
+ view=VIEW_USAGE;page_move(ACTION_LISTTREE_PGDOWN);assert(usage_scroll==100&&draws==1);
+ page_move(ACTION_LISTTREE_PGDOWN);assert(usage_scroll==124);
+ page_move(ACTION_LISTTREE_PGUP);assert(usage_scroll==24);
+ page_move(ACTION_LISTTREE_PGUP);assert(usage_scroll==0);
+ view=VIEW_DETAIL;detail_scroll_max=23;detail_page_lines=7;
+ page_move(ACTION_LISTTREE_PGDOWN);assert(detail_scroll==7);
+ page_move(ACTION_LISTTREE_PGDOWN);assert(detail_scroll==14);
+ page_move(ACTION_LISTTREE_PGUP);assert(detail_scroll==7);
+ view=VIEW_CONFIRM;int n=draws;page_move(ACTION_LISTTREE_PGDOWN);assert(draws==n);
+ puts("Agents production page blocks: Usage/detail/confirm/page bounds PASS");
 }
 '''
-(O/'timing.c').write_text(pre+delaypre+delay+delayend+page+inttest)
-for name in ('timing',):
-    subprocess.run(['cc','-std=gnu11','-Wall','-Wextra','-Werror','-g','-fsanitize=address,undefined','-fno-sanitize-recover=all','-fno-pie','-no-pie','-I'+str(O),'-I'+str(R),'-I'+str(R/'apps-ipod'),str(O/(name+'.c')),'-o',str(O/name)],check=True)
-    subprocess.run([str(O/name)],check=True)
+(O/'timing.c').write_text(pre+pagepre+page+pagetest)
+subprocess.run(['cc','-std=gnu11','-Wall','-Wextra','-Werror','-g','-fsanitize=address,undefined','-fno-sanitize-recover=all','-fno-pie','-no-pie','-I'+str(O),'-I'+str(R),'-I'+str(R/'apps-ipod'),str(O/'timing.c'),'-o',str(O/'timing')],check=True)
+subprocess.run([str(O/'timing')],check=True)
 guard=body('firmware/export/button_chord.h')
 (O/'poweroff.c').write_text(pre+guard+'''
 volatile bool button_agents_chord_latched;
@@ -464,22 +437,23 @@ navpre='''
 #define GO_TO_PREVIOUS -2
 #define AGENTS_SWITCH_WPS 2
 static int agents_return, a_calls, w_calls;
+static bool wps_return_agents,was_agents;
 static bool poweroff=true;
 static bool button_get_sw_poweroff_state(void) {return poweroff;}
 static void button_set_sw_poweroff_state(bool on) {poweroff=on;}
 static int agents_screen(void) {a_calls++;return a_calls==1?agents_return:0;}
-static int wpsscrn(void *p) {(void)p;w_calls++;return GO_TO_AGENTS;}
+static int wpsscrn(void *p) {(void)p;w_calls++;was_agents=wps_return_agents;wps_return_agents=false;return GO_TO_AGENTS;}
 '''
 navtest='''
 int main(void) {
     assert(menu_result(GO_TO_AGENTS)==GO_TO_AGENTS);
     assert(menu_result(GO_TO_WPS)==GO_TO_WPS);
-    agents_return=AGENTS_SWITCH_WPS;assert(agents_scrn(NULL)==GO_TO_WPS);
-    agents_return=0;a_calls=0;assert(agents_scrn(NULL)==GO_TO_PREVIOUS);
+    agents_return=AGENTS_SWITCH_WPS;assert(agents_scrn(NULL)==GO_TO_WPS&&wps_return_agents);
+    agents_return=0;a_calls=0;assert(agents_scrn(NULL)==GO_TO_PREVIOUS&&!wps_return_agents);
     a_calls=w_calls=0;agents_return=AGENTS_SWITCH_WPS;
-    root_menu_agents_shortcut();assert(a_calls==2&&w_calls==1&&poweroff);
+    root_menu_agents_shortcut();assert(a_calls==2&&w_calls==1&&poweroff&&was_agents&&!wps_return_agents);
     a_calls=w_calls=0;agents_return=0;
-    root_menu_wps_shortcut();assert(a_calls==1&&w_calls==1&&poweroff);
+    root_menu_wps_shortcut();assert(a_calls==1&&w_calls==1&&poweroff&&!was_agents&&!wps_return_agents);
     puts("navigation: System entry/Agents-to-WPS/modal alternation/remote WPS jump/normal cleanup PASS");
 }
 '''
@@ -501,6 +475,7 @@ hookpre='''
 #define TIMEOUT_NOBLOCK 0
 struct agents_shortcut_state shortcut;
 static bool shortcut_talking;
+static unsigned long shortcut_talking_at;
 bool remote_input_active;
 static struct agents_remote_state remote;
 static int get_current_activity(void) {return 0;}
@@ -524,14 +499,15 @@ int main(void) {
     assert(!action_poll_button(&last,&cur));assert(cur.button==BUTTON_LEFT);
     assert(!action_poll_button(&last,&cur));assert(cur.button==(BUTTON_LEFT|BUTTON_REL));
     queued_button=BUTTON_RC_PLAY;held_button=BUTTON_SELECT|BUTTON_RC_PLAY;
-    assert(!action_poll_button(&last,&cur));assert(cur.button==BUTTON_PLAY);
+    assert(!action_poll_button(&last,&cur));assert(cur.button==BUTTON_RC_PLAY);
     queued_button=BUTTON_RC_PLAY|BUTTON_SELECT;
     assert(!action_poll_button(&last,&cur));
-    assert(cur.button==(BUTTON_PLAY|BUTTON_SELECT));
+    assert(cur.button==BUTTON_SELECT);
     queued_button=held_button=BUTTON_SELECT|BUTTON_PLAY;
     assert(action_poll_button(&last,&cur));assert(cur.button==ACTION_AGENTS_SWITCH);
     queued_button=BUTTON_PLAY|BUTTON_SELECT|BUTTON_REL;held_button=0;
-    assert(action_poll_button(&last,&cur));assert(!cur.button);
+    assert(!action_poll_button(&last,&cur));
+    assert(cur.button==(BUTTON_RC_PLAY|BUTTON_REL|BUTTON_REPEAT));
     queued_button=held_button=0;cur.context=CONTEXT_AGENTS;
     fake_page=BUTTON_RC_VOL_UP|BUTTON_REL|BUTTON_REPEAT;
     assert(!action_poll_button(&last,&cur));assert(cur.button& BUTTON_REL);
@@ -544,6 +520,16 @@ int main(void) {
     assert(agents_shortcut_get_button(5)==queued_button);
     queued_button=BUTTON_SELECT|BUTTON_REL;held_button=0;
     assert(agents_shortcut_get_button(5)==(BUTTON_SELECT|BUTTON_REL));
+    remote=(struct agents_remote_state){0};shortcut=(struct agents_shortcut_state){0};
+    cur.context=CONTEXT_WPS;current_tick=100;queued_button=held_button=BUTTON_RC_PLAY;
+    assert(action_poll_button(&last,&cur)&&!cur.button);
+    current_tick=113;queued_button=BUTTON_RC_PLAY|BUTTON_REL;held_button=0;
+    assert(action_poll_button(&last,&cur)&&!cur.button);
+    current_tick=118;queued_button=held_button=BUTTON_RC_PLAY;
+    assert(action_poll_button(&last,&cur)&&!cur.button);
+    current_tick=131;queued_button=BUTTON_RC_PLAY|BUTTON_REL;held_button=0;
+    assert(action_poll_button(&last,&cur)&&cur.button==ACTION_AGENTS_SWITCH);
+    assert(last.button==BUTTON_REL&&last.action==ACTION_NONE&&!last.wait_for_release);
     puts("input polling hook: native-only chord/remote PLAY isolation/native SELECT timing PASS");
 }
 '''
