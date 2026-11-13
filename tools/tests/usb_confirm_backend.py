@@ -285,13 +285,13 @@ int main(void)
     assert(pause_count == 1 && (status & AUDIO_STATUS_PAUSE));
     confirm_action(&d, BUTTON_MULTIMEDIA_PLAYPAUSE, &epoch);
     assert(resume_count == 1 && !(status & AUDIO_STATUS_PAUSE));
+    /* A remote Play tap is SELECT: on a dark screen it only wakes. */
     assert(key_action(BUTTON_RC_PLAY | BUTTON_REL, BUTTON_RC_PLAY) ==
-           ACTION_WPS_PLAY);
-    for (int i = 0; i < 2; ++i)
-        assert(confirm_action(&d, key_action(BUTTON_RC_PLAY | BUTTON_REL,
-                                             BUTTON_RC_PLAY), &epoch) ==
-               DIALOG_CONTINUE);
-    assert(pause_count == 2 && resume_count == 2);
+           ACTION_STD_OK);
+    assert(confirm_action(&d, key_action(BUTTON_RC_PLAY | BUTTON_REL,
+                                         BUTTON_RC_PLAY), &epoch) ==
+           DIALOG_CONTINUE);
+    assert(!reply_count && pause_count == 1 && resume_count == 1);
     const struct button_mapping remote[] = {
         { BUTTON_MULTIMEDIA_STOP, BUTTON_RC_PLAY | BUTTON_REPEAT, BUTTON_RC_PLAY },
         { BUTTON_MULTIMEDIA_STOP, BUTTON_RC_STOP, BUTTON_NONE },

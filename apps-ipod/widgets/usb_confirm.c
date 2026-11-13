@@ -88,7 +88,8 @@ static const struct button_mapping *confirm_keymap(int context)
         { ACTION_WPS_PLAY, BUTTON_PLAY | BUTTON_REL, BUTTON_PLAY },
 #ifdef IPOD_ACCESSORY_PROTOCOL
         { ACTION_STD_CANCEL, BUTTON_RC_MENU, BUTTON_NONE },
-        { ACTION_WPS_PLAY, BUTTON_RC_PLAY | BUTTON_REL, BUTTON_RC_PLAY },
+        /* A remote Play tap is SELECT here: choose Disk Mode */
+        { ACTION_STD_OK, BUTTON_RC_PLAY | BUTTON_REL, BUTTON_RC_PLAY },
         { BUTTON_MULTIMEDIA_STOP, BUTTON_RC_PLAY | BUTTON_REPEAT,
           BUTTON_RC_PLAY },
         { BUTTON_MULTIMEDIA_STOP, BUTTON_RC_STOP, BUTTON_NONE },
