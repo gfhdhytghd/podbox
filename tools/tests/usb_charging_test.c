@@ -4,6 +4,9 @@
 #include "charging_stubs/config.h"
 #define _BUTTON_H_
 #include "../../firmware/usbstack/usb_core.c"
+#define BUTTON_NONE 0
+#define BUTTON_RC_MENU 0x00200000
+#include "../../firmware/drivers/button_usb_remote.c"
 #include "../../firmware/target/arm/s5l8702/ipod6g/power-6g.c"
 
 long current_tick;
@@ -492,6 +495,17 @@ int main(void)
                 descriptor(USB_DT_OTHER_SPEED_CONFIG, grant / 2);
                 configure(1);
                 assert(exclusive == (profile == 0));
+                struct usb_ctrlrequest key = {
+                    .bRequestType = 0x40,
+                    .bRequest = USB_REMOTE_KEY_REQUEST,
+                    .wValue = USB_REMOTE_KEY_MENU,
+                    .wIndex = 1,
+                };
+                usb_core_control_request_handler(&key, NULL, 0);
+                assert(button_usb_remote_read() == BUTTON_RC_MENU);
+                key.wIndex = 0;
+                usb_core_control_request_handler(&key, NULL, 0);
+                assert(button_usb_remote_read() == BUTTON_NONE);
                 assert(usb_charging_current_grant() == grant);
                 expect_current(grant);
                 usb_core_bus_suspend(true);
