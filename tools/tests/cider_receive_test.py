@@ -11,7 +11,7 @@ def fn(name):
 pre=r'''
 #include <assert.h>
 #define MIN(a,b) ((a)<(b)?(a):(b))
-static unsigned int play_request;static struct cider_modes modes;static int play_reply;
+static unsigned int play_request,loading_request;static struct cider_modes modes;static int play_reply;
 #include <stdio.h>
 #include <string.h>
 #include <stdarg.h>
@@ -61,6 +61,10 @@ ack="CK\t7\t200\t0\tFailed";message.data=(const unsigned char*)ack;message.lengt
 const char*neighbors="CP\t7\tsong\t-\t-";strcpy(state.id,"song");message.data=(const unsigned char*)neighbors;message.length=strlen(neighbors);assert(receive(&message)&&!state.previous_art[0]&&!state.next_art[0]);
 const char*offer="CO\t7\tM\taaaa";message.data=(const unsigned char*)offer;message.length=strlen(offer);assert(receive(&message)&&store_texts==1);
 const char*feat="CF\t7\tlocalstore";message.data=(const unsigned char*)feat;message.length=strlen(feat);assert(receive(&message)&&store_texts==2);feat="CQ\t7\t0";message.data=(const unsigned char*)feat;message.length=strlen(feat);assert(receive(&message)&&store_texts==3);
+/* FU28b: only the failed command owning the optimistic loading flag clears it. */
+state.loading=true;loading_request=500;
+ack="CK\t7\t499\t0\tFailed";message.data=(const unsigned char*)ack;message.length=strlen(ack);assert(receive(&message)&&state.loading);
+ack="CK\t7\t500\t0\tFailed";message.data=(const unsigned char*)ack;message.length=strlen(ack);assert(receive(&message)&&!state.loading&&!loading_request);
 puts("Production resident receiver: legacy raw passthrough, state negotiation, whole-cover CRC/cache, exact credit refund, stale-generation drop PASS");}
 '''
 (O/'receive.c').write_text(pre+'\nstatic volatile uint32_t status_word;\n'+fn('publish_status')+fn('u32')+fn('receive')+post)

@@ -132,6 +132,9 @@ class Client:
         data=None if body is None else json.dumps(body).encode()
         if data is not None:headers['Content-Type']='application/json'
         req=urllib.request.Request(self.base+path,data=data,headers=headers,method=method)
+        observer=getattr(self,'rpc_observer',None)
+        playback=body is not None and ('/playback/' in path or path=='/api/v2/queue/jump')
+        if observer and playback:observer('rpc-sent',path)
         try:
             with self.opener.open(req,timeout=self.timeout if timeout is None else timeout) as r:
                 raw=r.read(2*1024*1024+1)
@@ -140,6 +143,7 @@ class Client:
         except urllib.error.HTTPError as e:
             code=e.code;e.close()
             raise OSError('Cider HTTP '+str(code)) from None
+        if observer and playback:observer('rpc-returned',path)
         if allow_list and isinstance(value,list):return value
         if not isinstance(value,dict) or value.get('error'):raise OSError('Cider RPC failed')
         return value
@@ -164,6 +168,26 @@ class Client:
                     position=position,rate=1000 if playing else 0,
                     volume=max(0,min(100,round(float(volume)*100))),repeat=int(repeat or 0),shuffle=int(shuffle or 0),
                     art=art_id(artwork.get('url','')),template=artwork.get('url',''),bg=str(artwork.get('bgColor','181818'))[:6])
+    def transport_snapshot(self):
+        try:return self._transport_snapshot()
+        except (TypeError,AttributeError,KeyError,OverflowError) as e:
+            raise ValueError('Malformed Cider transport state') from None
+    def _transport_snapshot(self):
+        data=self.request('/api/v2/playback').get('data') or {}
+        info=data.get('nowPlaying') or {};params=info.get('playParams') or {}
+        ids={str(v) for v in (info.get('id'),params.get('id'),params.get('catalogId'),params.get('libraryId')) if v}
+        timing=data.get('time') or {};duration=max(0,int(info.get('durationInMillis') or 0))
+        return dict(id=str(params.get('id') or info.get('id') or ''),ids=ids,
+                    duration=duration,position=min(duration,max(0,int(float(timing.get('currentTime',0))*1000))),
+                    rate=1000 if data.get('state')=='playing' else 0)
+    def same_song(self,route):
+        parts=str(route).split('/')
+        if len(parts)!=3 or parts[0]!='play' or parts[1] not in ('songs','library-songs'):return False
+        wanted=urllib.parse.unquote(parts[2]);state=self.transport_snapshot()
+        if wanted not in state['ids']:return False
+        # Explicit play resumes a paused item. Never seek or recreate its queue.
+        if not state['rate']:self.request('/api/v1/playback/play',{})
+        return True
     def _mode5(self,repeat,shuffle,track):
         """Rockbox repeat numbering: 0 off, 1 all, 2 one, 3 shuffle, 4 A-B."""
         with self.mlock:
@@ -216,7 +240,7 @@ class Client:
     def control(self,command,value=0):
         if command in ('seek','volume') and not math.isfinite(float(value)):
             raise ValueError('Nonfinite Cider value')
-        routes={'toggle':('playpause',{}),'next':('next',{}),'previous':('previous',{}),
+        routes={'resume':('play',{}),'toggle':('playpause',{}),'next':('next',{}),'previous':('previous',{}),
                 'seek':('seek',{})}
         if command in ('repeat5','ab-mark'):
             try:number=int(str(value).strip())
@@ -401,48 +425,98 @@ class Window:
 
 
 class Loading:
-    """Inferred transport state; all access is under Bridge.lock."""
-    COMMANDS={'play-item','native-play','native-context','next','previous',
-              'play-collection','queue-jump','seek'}
+    """Final-selection gate plus state-only stream edges, with clock fallback."""
+    COMMANDS={'play-item','native-play','next','previous','play-collection','queue-jump','seek'}
     def __init__(self):
         self.value=False;self.pending=None;self.last=None;self.advanced=0;self.epoch=0
+        self.command='';self.started=0;self.reason='';self.seen_id='';self.running=None
+    def note(self,event,now=None,**fields):
+        now=time.monotonic() if now is None else now
+        log.info('loading timeline epoch=%d command=%s event=%s monotonic=%.6f elapsed_ms=%.1f %s',
+                 self.epoch,self.command,event,now,1000*(now-self.started) if self.started else 0,
+                 ' '.join(str(k)+'='+clean(v,128) for k,v in fields.items()))
+    def transition(self,before,reason,now):
+        if before!=self.value:
+            self.reason=reason;self.note('loading-transition',now,loading=int(self.value),reason=reason)
     def begin(self,command,value,state,now):
         if command not in self.COMMANDS:return False
-        target=max(0,float(value)) if command=='seek' else None
+        target=float(value) if command=='seek' else None
         if target is not None and not math.isfinite(target):raise ValueError('Invalid seek target')
-        self.epoch+=1
-        self.pending=dict(id=(state or {}).get('id',''),until=now+8,
-                          target=target,point=None)
-        self.value=True
+        before=self.value;self.epoch+=1;self.command=command;self.started=now
+        self.seen_id=(state or {}).get('id','')
+        self.pending=dict(id=self.seen_id,until=now+8,target=max(0,target) if target is not None else None,
+                          point=None,wanted=set(),selected=False,gate=now,edge=None)
+        if command=='native-play':
+            parts=str(value).split('/')
+            if len(parts)==3 and parts[1] in ('songs','library-songs'):self.expected({urllib.parse.unquote(parts[2])})
+        elif command=='play-item':
+            kind,_,key=str(value).partition(':')
+            if kind in ('songs','song','library-songs','library-song'):self.expected({key})
+        self.note('command-sent',now,track=self.seen_id,value=value)
+        self.value=True;self.transition(before,'seek' if target is not None else 'track-change',now)
         return True
+    def expected(self,ids):
+        if self.pending:self.pending['wanted']=set(ids)
+    def final_leg(self,now):
+        if self.pending:
+            self.pending.update(point=None,selected=False,gate=now,edge=None)
+            self.note('final-queue-jump-sent',now)
+    def rpc_returned(self,now=None):self.note('rpc-returned',now)
+    def _clear(self,reason,now):
+        before=self.value;self.pending=None;self.value=False;self.advanced=now
+        self.transition(before,reason,now)
     def cancel(self):
-        self.pending=None;self.value=False;self.last=None;self.epoch+=1
+        self._clear('cancelled',time.monotonic());self.last=None;self.epoch+=1
+    def stream(self,running,now):
+        before=self.running;self.running=running
+        self.note('audio-stream-state',now,running=int(running))
+        p=self.pending
+        if p and running and before is not True:
+            p['edge']=now
+            if p['selected'] and now>=p['gate']:self._clear('cleared-by-audio-start',now)
+        elif not p and running and self.value:self._clear('cleared-by-audio-start',now)
     def sample(self,state,now):
-        track,pos,rate=state['id'],state['position'],state['rate']
-        old=self.last
+        before=self.value;reason='stall'
+        track,pos,rate=state['id'],state['position'],state['rate'];old=self.last
         moved=old is not None and old[0]==track and pos>old[1]
-        if old is None or old[0]!=track or not old[2] or not rate or pos!=old[1]:
-            self.advanced=now
-        stall=bool(rate and now-self.advanced>=1)
+        restarted=old is not None and old[0]==track and pos+250<old[1]
+        if old is None or old[0]!=track or not old[2] or not rate or pos!=old[1]:self.advanced=now
+        # Cider's clock is emitted at ~1 Hz. A running stream must not flicker
+        # at that cadence; a corked/missing stream retains the 1 s stall bound.
+        stall=bool(rate and now-self.advanced >= (2.5 if self.running else 1))
         p=self.pending
         if p:
+            if track!=self.seen_id:
+                self.note('now-playing-id-changed',now,old=self.seen_id,track=track,position=pos);self.seen_id=track
+            ids=set(state.get('ids',()))|{track}
+            eligible=bool(track) and (abs(pos-p['target'])<=250 if p['target'] is not None else
+                      bool(ids&p['wanted']) if p['wanted'] else track!=p['id'] or restarted)
+            if not track or (p['wanted'] and not ids&p['wanted']):
+                p['selected']=False;p['point']=None
+            if restarted and track==p['id'] and (not p['wanted'] or bool(ids&p['wanted'])):
+                p['point']=(track,pos);p['selected']=True;self.note('same-id-restarted',now,position=pos)
             point=p['point']
-            eligible=(track!=p['id'] if p['target'] is None else abs(pos-p['target'])<=2000)
-            if point is not None and point[0]==track and pos>point[1] and moved:
-                self.pending=None
+            if p['selected'] and point is not None and point[0]==track and pos>point[1] and moved:
+                self.note('first-position-advance',now,track=track,position=pos)
+                self.pending=None;stall=False;reason='cleared-by-advance'
             elif now>=p['until']:
-                self.pending=None
-                # Timeout clears this frame; fresh samples can detect a later stall.
-                stall=False;self.advanced=now
+                self.pending=None;stall=False;self.advanced=now;reason='timeout'
             elif eligible:
-                if point is None or point[0]!=track or pos<point[1]:p['point']=(track,pos)
-        self.last=(track,pos,rate)
-        self.value=bool(self.pending or stall)
-        return self.value
+                p['selected']=bool(rate)
+                # A new label can precede the new audio while the old clock keeps
+                # advancing. Only a reset/start clock may complete track loading.
+                clock_ready=p['target'] is not None or pos<=2000 or restarted
+                if clock_ready and (point is None or point[0]!=track or pos<point[1]):p['point']=(track,pos)
+                if self.running and p['edge'] is not None and p['edge']>=p['gate'] and now-p['edge']<.15:
+                    self.pending=None;stall=False;reason='cleared-by-audio-start'
+        self.last=(track,pos,rate);self.value=bool(self.pending or stall)
+        if not self.value and reason=='stall':reason='cleared-by-advance' if rate else 'cleared-by-pause'
+        self.transition(before,reason,now);return self.value
 
 
 class Bridge:
-    def __init__(self,client=None,cache=None,fetch=None,volume=None):
+    def __init__(self,client=None,cache=None,fetch=None,volume=None,realtime=None):
+        self.realtime = client is None if realtime is None else realtime
         self.client=client or Client(os.environ.get('CIDER_API_URL','http://127.0.0.1:10767'),os.environ.get('CIDER_API_TOKEN'))
         self.fetch=fetch or urllib.request.urlopen
         self.cache=cache or Cache();self.scheduler=Scheduler();self.lock=threading.RLock()
@@ -457,10 +531,14 @@ class Bridge:
         self.prefetch=queue.Queue(10)
         self.warm_window=set();self.warm_queue=set();self.warm_jobs={};self.neighbors=None
         self.capabilities=frozenset();self.loading=Loading()
+        self.client.rpc_observer=self._rpc_event
         self.ledger=Ledger(self.cache);self.planner=Planner(self.cache,self.ledger);self.offer_pairs=set()
     def start(self):
         for target,name in [(self._prefetch_worker,'cider-prefetch-'+str(i)) for i in range(4)]+[(self._poll,'cider-state'),(self._work,'cider-art'),(self._control,'cider-control'),(self._index,'cider-index'),(self._pages,'cider-pages'),(self._neighbors,'cider-neighbors')]:
             t=threading.Thread(target=target,name=name,daemon=True);t.start();self.threads.append(t)
+        if self.realtime:
+            for target,name in [(self._event_worker,'cider-events'),(self._stream_worker,'cider-stream')]:
+                t=threading.Thread(target=target,name=name,daemon=True);t.start();self.threads.append(t)
     def close(self):
         self.stop.set()
         self.fill_cancel.set()
@@ -587,7 +665,9 @@ class Bridge:
             fields=['CN',self.generation,self.state_seq,int(now*1000)&0xffffffff,s['duration'],s['position'],s['rate'],s['volume'],s['shuffle'],s['repeat'],s['id'],s['art'],s['bg'],s['title'],s['artist'],s['album']]
             if 'cn18' in self.capabilities or 'loading' in self.capabilities:fields.extend([int(s.get('muted',False)),s.get('composer','')])
             if ('cn18' in self.capabilities and 'modes5' in self.capabilities) or 'loading' in self.capabilities:fields.append(s.get('repeat5',0))
-            if 'loading' in self.capabilities:fields.append(int(self.loading.value))
+            if 'loading' in self.capabilities:
+                fields.append(int(self.loading.value))
+                self.loading.note('cn-pushed',now,loading=int(self.loading.value),generation=self.generation,seq=self.state_seq)
             self.scheduler.push(1,2,'\t'.join(clean(v) for v in fields).encode())
         self.last_state=now;self.state_dirty=False
     def _loading_begin(self,command,value):
@@ -598,6 +678,38 @@ class Bridge:
     def _loading_cancel(self):
         before=self.loading.value;self.loading.cancel()
         if before and 'loading' in self.capabilities:self._state(True)
+    def _rpc_event(self,event,path):
+        with self.lock:
+            self.loading.note(event,path=path)
+            if event=='rpc-sent' and path=='/api/v2/queue/jump':self.loading.final_leg(time.monotonic())
+    def _fast_sample(self):
+        with self.lock:epoch=self.loading.epoch
+        state=self.client.transport_snapshot()
+        if not isinstance(state,dict):return
+        with self.lock:
+            if epoch!=self.loading.epoch or not self.state:return
+            self.state.update({k:v for k,v in state.items() if k!='ids'})
+            before=self.loading.value;self.loading.sample(state,time.monotonic())
+            if before!=self.loading.value:self._state(True)
+    def _on_event(self,event,stamp):
+        kind=event.get('type','')
+        if kind not in ('playbackStatus.nowPlayingItemDidChange','playbackStatus.playbackStateDidChange','playbackStatus.playbackTimeDidChange'):return
+        with self.lock:self.loading.note('cider-event',stamp,type=kind)
+        try:self._fast_sample()
+        except (OSError,ValueError,TimeoutError):pass
+        self.wake.set()
+    def _on_stream(self,state,stamp):
+        try:self._fast_sample()
+        except (OSError,ValueError,TimeoutError):pass
+        with self.lock:
+            before=self.loading.value;self.loading.stream(state['running'],stamp)
+            if before!=self.loading.value:self._state(True)
+    def _event_worker(self):
+        from hrcider_events import playback_events
+        playback_events(self.client,self.stop,self._on_event)
+    def _stream_worker(self):
+        from hrcider_events import AudioStream
+        AudioStream().watch(self.stop,self._on_stream)
     def _poll(self):
         next_poll=0;published=None;anchor=0
         while not self.stop.is_set():
@@ -667,19 +779,34 @@ class Bridge:
             try:
                 if not self.available:raise OSError('Cider unavailable')
                 log.info('control request gen=%d req=%d command=%s',generation,req,command)
+                log.info('control timeline gen=%d req=%d command=%s event=command-sent monotonic=%.6f',generation,req,command,time.monotonic())
+                route=value
+                if command=='play-item':
+                    kind,_,key=str(value).partition(':');route='play/'+kind+'/'+key
+                same = command in ('native-play','play-item') and self.client.same_song(route) is True
+                if same:
+                    self.library.context=None
+                    self.loading.note('same-song-open',track=self.state.get('id','') if self.state else '')
                 with self.lock:
-                    if self._loading_begin(command,value):loading_epoch=self.loading.epoch
-                if command=='native-play':
+                    if not same and self._loading_begin(command,value):loading_epoch=self.loading.epoch
+                if same:pass
+                elif command=='native-play':
                     self.fill_cancel.set();self.fill_cancel=cancel=threading.Event()
                     result=self.library.play(value)
                     expected=result.get('expected_ids',[]) if isinstance(result,dict) else []
                     if expected:
+                        with self.lock:self.loading.expected(expected)
                         deadline=time.monotonic()+2.5
                         while True:
                             info=self.client.request('/api/v1/playback/now-playing').get('info') or {}
                             params=info.get('playParams') or {}
                             ids={str(v) for v in (info.get('id'),params.get('id'),params.get('catalogId'),params.get('libraryId')) if v}
-                            if ids.intersection(expected):break
+                            if ids.intersection(expected):
+                                live=self.client.transport_snapshot()
+                                if isinstance(live,dict) and not live['rate']:
+                                    self.client.control('seek',0)
+                                    self.client.request('/api/v1/playback/play',{})
+                                break
                             if self.stop.is_set() or time.monotonic()>=deadline:
                                 raise OSError('Cider did not select the requested song')
                             self.stop.wait(.05)
@@ -690,6 +817,8 @@ class Bridge:
                 elif command=='source-local':
                     if self.client.request('/api/v1/playback/is-playing').get('is_playing'):self.client.control('toggle')
                 else:self.client.control(command,value)
+                self.loading.note('rpc-returned',ok=1)
+                log.info('control timeline gen=%d req=%d command=%s event=rpc-returned monotonic=%.6f',generation,req,command,time.monotonic())
                 ok=True;text='OK';self.wake.set()
             except (OSError,ValueError,TimeoutError) as error:
                 with self.lock:

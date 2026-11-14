@@ -442,7 +442,7 @@ int cider_browse(void)
                         if (cider_play_in(selected_row.route, search_route,
                                           search_index))
                         {
-                            play_pending = true;
+                            result = GO_TO_WPS; break;
                         }
                     }
                     else enter(&selected_row);
@@ -461,7 +461,7 @@ int cider_browse(void)
                                       depth ? history[depth].route : "",
                                       history[depth].selected))
                     {
-                        play_pending = true;
+                        result = GO_TO_WPS; break;
                     }
                 }
                 else

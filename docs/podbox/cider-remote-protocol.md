@@ -650,3 +650,56 @@ loading is overlaid procedurally and consumes no image-strip frame. Themes
 without `%pZ` continue their original display. Hidden/auto-hidden slots and the
 volume overlay retain their existing visibility. The compact transport status
 is published as one aligned word; UI readers take no mutex.
+
+## FU28b: loading accuracy, current-song navigation, and diagnostics
+
+This supersedes FU28's inference rules above. `native-context` stores only a
+list context and never starts loading. Before `native-play` or `play-item`, the
+host reads an atomic `/api/v2/playback` snapshot and compares library/catalog
+aliases. Selecting the current playing song performs no playback RPC. Selecting
+the current paused song sends explicit `play`, with no seek, queue replacement
+or loading. Firmware compares decoded song-route IDs against the current CN ID
+first; it opens WPS directly, or queues only `resume` for a paused current song.
+The host guard covers old firmware and catalog/library aliases.
+
+For a different song, firmware sets its compact loading flag at the action and
+opens WPS immediately. This is a display preview: local audio ownership still
+moves only on a successful selected-song ACK. Next, previous and seek also set
+the local flag before transport. A failed matching command clears that flag.
+CN receive and loading-draw transitions are recorded in the existing remote log.
+The WPS loop checks transitions at most every 20 ms while keeping spinner head
+animation at eight frames per second. It does not wait for a one-second skin
+refresh, create a thread, or spin without a timed wait.
+
+The host observes Cider's public `API:Playback` Socket.IO events through the
+existing `websockets>=13` dependency. An independent `pactl subscribe` listener
+reads only Cider's sink-input state, stream IDs and `corked`; it never opens a
+source/monitor or reads PCM. Streams are matched by Cider's process binary or
+application name, excluding other applications. Missing sources leave position
+polling available. Injected Client instances disable these external monitors by
+default; an integration can opt in with `realtime=True`.
+
+A pending play has an expected song-ID set. A collection's first-track blip
+cannot complete a jump to another song, including when the first track restarts
+the previous ID. Sending the final queue-jump resets the completion gate. A
+matching stream start can clear loading without waiting for Cider's ~1 Hz clock.
+Without a stream edge, track completion requires a reset/start clock and forward
+progress for the expected ID. A new metadata label plus the previous audio's
+continuing clock cannot clear loading. A same-ID restart followed by progress
+can complete an operation whose target permits that ID. Seek uses the requested
+point (250 ms tolerance), then a stream edge or forward progress. Timeout remains
+8 s. While Pulse reports running, stall detection allows 2.5 s for Cider's coarse
+clock; with a corked/missing stream it retains the 1 s threshold.
+
+INFO timelines include monotonic timestamps, command/epoch, RPC send/return,
+selected-ID changes, first progress, every loading transition and every CN push
+(including loading=0). Stream transitions and public Cider event names are logged
+without audio data. Loading transitions force CN publication past the usual
+250 ms throttle. CN format and capability negotiation remain FU28's 20 fields.
+
+Accuracy boundary: Cider can keep a stream running across pauses, skips and
+seeks, and can change public now-playing metadata while the audio clock still
+belongs to the prior item. Such a window has no independently observable audio
+start in Pulse state. The clock fallback is an inference, not proof of a 250 ms
+end offset. FU28b live evidence separates these cases from observed stream
+starts; the report records the remaining acceptance gate.

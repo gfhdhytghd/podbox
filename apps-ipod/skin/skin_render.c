@@ -1623,6 +1623,8 @@ bool skin_render_viewport(struct skin_element* viewport, struct gui_wps *gwps,
             info.drew = true;
             if (skin_viewport->has_loading_indicator)
             {
+                if (gwps->data->loading_drawn != info.pending_loading)
+                    cider_loading_drawn(info.pending_loading);
                 gwps->data->loading_drawn = info.pending_loading;
                 gwps->data->loading_frame = cider_spinner_frame(current_tick, HZ);
             }

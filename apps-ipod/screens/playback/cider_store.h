@@ -44,6 +44,9 @@ struct cs_io
 struct cider_store
 {
     const struct cs_io *io;
+    /* Worker-only cancellation check. A USB handover leaves descriptors for
+     * cs_unload() to flush/close, and a later load revalidates partial work. */
+    bool (*cancelled)(void);         /* may be NULL */
     char dir[40], path[64];
     bool loaded;
     int ifd, pfd, pfd_index;          /* cached descriptors, -1 closed */

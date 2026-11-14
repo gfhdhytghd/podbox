@@ -37,6 +37,35 @@ static bool number(const char *text, uint32_t *out)
     return true;
 }
 
+/* Compare only song routes; decode one byte at a time on the tight UI stack. */
+bool cider_route_matches(const char *route, const char *id)
+{
+    const char *key;
+    if (!strncmp(route, "play/library-songs/", 19)) key = route + 19;
+    else if (!strncmp(route, "play/songs/", 11)) key = route + 11;
+    else return false;
+    if (!*id) return false;
+    while (*key && *id)
+    {
+        unsigned char ch = *key++;
+        if (ch == '%')
+        {
+            unsigned value = 0;
+            for (int n = 0; n < 2; n++)
+            {
+                unsigned char c = *key++;
+                if (c >= '0' && c <= '9') value = value * 16 + c - '0';
+                else if (c >= 'a' && c <= 'f') value = value * 16 + c - 'a' + 10;
+                else if (c >= 'A' && c <= 'F') value = value * 16 + c - 'A' + 10;
+                else return false;
+            }
+            ch = value;
+        }
+        if (ch != (unsigned char)*id++) return false;
+    }
+    return !*key && !*id;
+}
+
 int cider_state_apply(struct cider_state *s, const void *data,
                       unsigned int length, uint32_t tick)
 {

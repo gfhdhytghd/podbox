@@ -46,6 +46,7 @@ static struct { char key[65]; unsigned char tier; } offers[8];
 static void mutex_lock(int*p){(void)p;}static void mutex_unlock(int*p){(void)p;}
 static bool tagcache_is_busy(void){return tag_busy;}
 static bool queue_empty(int*q){(void)q;return queue_idle;}
+static bool disk_usb_pending(void){return false;}
 static void yield(void){}
 static void queue_post(int*q,int n,int v){(void)q;(void)n;(void)v;posts++;}
 static int t_open(const char*p,int m){return open(p,m==CS_O_READ?O_RDONLY:O_RDWR|O_CREAT,0644);}

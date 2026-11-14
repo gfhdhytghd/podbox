@@ -57,6 +57,7 @@ static bool usb_confirm_has_config,usb_host_present,cable,car,unplug_during_slee
 static bool podlink_requested,usb_power_only,usb_drive_only_now;
 
 static bool exclusive_storage_enabled,exclusive_storage_requested,usb_host_probe_on;
+static bool usb_disk_ejected;
 static inline int disable_irq_save(void){return 0;}
 static inline void restore_irq(int n){(void)n;}
 static int usb_state,usb_mode;

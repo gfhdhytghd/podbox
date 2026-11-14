@@ -108,6 +108,7 @@ pre=r'''
 #define HZ 100
 #define TIMEOUT_NOBLOCK 0
 #define MIN(a,b) ((a)<(b)?(a):(b))
+#define MAX(a,b) ((a)>(b)?(a):(b))
 #define TIME_BEFORE(a,b) ((long)((a)-(b))<0)
 #define TIME_AFTER(a,b) TIME_BEFORE(b,a)
 #define FOR_NB_SCREENS(i) for(int i=0;i<1;i++)
@@ -138,7 +139,7 @@ static bool skin_flush_inhibited(void){return inhibited;}
 static void skin_update(int s,int i,unsigned r){(void)s;(void)i;assert(r==SKIN_REFRESH_LOADING);
  if(last_draw>=0&&visible)assert(current_tick-last_draw<=13);
  data.loading_drawn=skin_cider_loading();data.loading_frame=cider_spinner_frame(current_tick,HZ);
- last_draw=current_tick;draws++;if(!skin_cider_loading()){restores++;assert(current_tick-changed_at<=13);}}
+ last_draw=current_tick;draws++;if(!skin_cider_loading()){restores++;assert(current_tick-changed_at<=2);}}
 static void skin_flush_dirty(void){flushes++;}
 static void peak_meter_peek(void){}static void spectrum_meter_peek(void){}
 static void sleep(int t){(void)t;current_tick++;}
@@ -156,7 +157,7 @@ int main(void){
  int old=draws;active=false;visible=true;skin_wait_for_action(WPS,0,20);assert(draws==old);
  active=true;visible=true;clear_at=-1;asleep=true;skin_wait_for_action(WPS,0,20);assert(draws==old);
  asleep=false;inhibited=true;skin_wait_for_action(WPS,0,20);assert(draws==old);
- puts("Production WPS tick: bounded blocking wait, slot-only frames, restore <=13 ticks, local/LCD-off/inhibition PASS");}
+ puts("Production WPS tick: bounded blocking wait, slot-only frames, restore <=2 ticks, local/LCD-off/inhibition PASS");}
 '''
 (O/'tick.c').write_text(pre+loop[start:end]+post)
 subprocess.run(['cc','-std=gnu11','-Wall','-Wextra','-Werror','-g','-fsanitize=address,undefined','-fno-pie','-no-pie','-I'+str(R/'apps-ipod'),str(O/'tick.c'),'-o',str(O/'tick')],check=True)

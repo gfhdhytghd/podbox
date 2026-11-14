@@ -1,10 +1,10 @@
 """Production source switches and WPS adapter; no audio/USB/Cider endpoints."""
 from pathlib import Path
-import re,subprocess,sys
+import re,subprocess,sys,os
 R=Path(__file__).resolve().parents[2];O=Path(sys.argv[1]).resolve();O.mkdir(parents=True,exist_ok=True)
 source=(R/'apps-ipod/screens/playback/cider_wps.c').read_text()
 source=re.sub(r'^#include .*\n','',source,flags=re.M)
-resident=(R/'apps-ipod/screens/playback/cider.c').read_text()
+resident=Path(os.environ.get('PODBOX_CIDER_C',R/'apps-ipod/screens/playback/cider.c')).read_text()
 playback=(R/'apps-ipod/audio/playback.c').read_text()
 wps=(R/'apps-ipod/screens/playback/wps.c').read_text()
 def fn(name,text=None):
@@ -75,7 +75,7 @@ static void talk_force_shutup(void){}
 struct audio_resume_info {unsigned long elapsed,offset;};
 static bool initialized=true;
 static int cider_mutex,local_playing,pauses;
-static unsigned int ncommands,next_request,cancel_request,play_request;
+static unsigned int ncommands,next_request,cancel_request,play_request,loading_request;
 static int play_reply;static long play_at;
 static void cider_log(const char*f,...){(void)f;}
 static struct cider_transfer transfer;
@@ -90,7 +90,6 @@ static void mutex_lock(int*m){(void)m;}
 static void mutex_unlock(int*m){(void)m;}
 static int disable_irq_save(void){return 0;}
 static void restore_irq(int level){(void)level;}
-static bool cider_active(void){return active;}
 static bool cider_available(void){return state.available;}
 static void cider_snapshot(struct cider_state*out){*out=state;}
 struct cider_status { bool available, muted; int rate, volume, shuffle, repeat; };
@@ -187,9 +186,29 @@ char longctx[400];memset(longctx,'a',sizeof longctx);longctx[399]=0;
 play_request=0;ncommands=0;assert(cider_play_in("play/library-songs/s9",longctx,1)&&ncommands==1&&!strstr(commands[0],"native-context"));
 play_request=0;ncommands=0;
 }
+/* FU28b: selecting the current song opens WPS without a native-play or context.
+ * A paused current song sends only resume. A different song previews loading
+ * immediately, while local audio ownership still waits for the ACK. */
+play_request=0;play_reply=0;ncommands=0;active=false;state.have=true;
+strcpy(state.id,"same.id");state.rate=1000;state.loading=false;
+assert(cider_play_in("play/library-songs/same.id","album/other",3));
+assert(!ncommands&&!state.loading&&cider_active());
+assert(cider_play_status()==1&&active);
+play_request=0;play_reply=0;ncommands=0;active=false;state.rate=0;
+assert(cider_play_in("play/songs/same.id","album/other",3));
+assert(ncommands==1&&strstr(commands[0],"\tresume\t")&&!state.loading&&cider_active());
+assert(!strstr(commands[0],"native-play")&&!strstr(commands[0],"native-context"));
+assert(!cider_play_status()&&!active);play_reply=1;assert(cider_play_status()==1&&active);
+play_request=0;play_reply=0;ncommands=0;active=false;state.rate=1000;state.loading=false;
+assert(cider_play("play/library-songs/different")&&state.loading&&cider_active()&&!active);
+assert(!cider_play_status()&&!active);play_reply=-1;assert(cider_play_status()==-1&&!cider_active());
+assert(cider_route_matches("play/library-songs/same%2Eid","same.id"));
+assert(!cider_route_matches("play/library-albums/same.id","same.id"));
+assert(!cider_route_matches("play/songs/same%","same.id"));
+puts("Production same-song/resume, pending WPS preview, ACK ownership, route decoding PASS");
 puts("Production Local/Cider, disconnect/reconnect, native WPS bitmap/actions PASS");}
 '''
-(O/'source.c').write_text(pre+'\nstatic volatile uint32_t status_word;\n'+fn('publish_status')+'\nenum {'+','.join(actions)+'};\n'+fn('queue_control')+'\n'+fn('cider_control')+'\n'+fn('cider_mode_get')+'\n'+fn('cider_mode_set')+'\n'+fn('play_route')+'\n'+fn('cider_play')+'\n'+fn('cider_play_in')+'\n'+fn('cider_play_status')+'\n'+fn('cider_local_play')+'\n'+fn('cider_retain_art')+'\n'+fn('cider_prefetch_art')+'\n'+fn('audio_play',playback)+'\n'+fn('audio_resume',playback)+'\n'+source+'\n'+seek+'\nstatic int get_action(int c,int t){(void)c;(void)t;return seek_actions++ ? ACTION_WPS_STOPSEEK : ACTION_WPS_SEEKFWD;}\n'+post)
+(O/'source.c').write_text(pre+'\nstatic volatile uint32_t status_word;\n'+fn('publish_status')+'\nenum {'+','.join(actions)+'};\n'+fn('cider_active')+'\n'+fn('queue_control')+'\n'+fn('cider_control')+'\n'+fn('cider_mode_get')+'\n'+fn('cider_mode_set')+'\n'+fn('play_route')+'\n'+fn('cider_play')+'\n'+fn('cider_play_in')+'\n'+fn('cider_play_status')+'\n'+fn('cider_local_play')+'\n'+fn('cider_retain_art')+'\n'+fn('cider_prefetch_art')+'\n'+fn('audio_play',playback)+'\n'+fn('audio_resume',playback)+'\n'+source+'\n'+seek+'\nstatic int get_action(int c,int t){(void)c;(void)t;return seek_actions++ ? ACTION_WPS_STOPSEEK : ACTION_WPS_SEEKFWD;}\n'+post)
 (O/'config.h').write_text('#define HAVE_USB_PODLINK\n')
 cmd=['cc','-std=gnu11','-g','-Wall','-Wextra','-Wno-unused-variable','-Werror','-fsanitize=address,undefined','-fno-pie','-no-pie','-I'+str(O),'-I'+str(R/'apps-ipod'),'-I'+str(R/'firmware/export'),str(O/'source.c'),str(R/'apps-ipod/screens/playback/cider_model.c'),str(R/'firmware/usbstack/podlink_wire.c'),'-o',str(O/'source')]
 subprocess.run(cmd,check=True);subprocess.run([str(O/'source')],check=True)

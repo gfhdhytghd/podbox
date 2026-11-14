@@ -17,6 +17,7 @@ struct cider_state
     char previous_art[65], next_art[65];
     char id[80], art[65], title[124], artist[124], album[124], composer[124], reason[96];
 };
+bool cider_route_matches(const char *route, const char *id);
 #define CIDER_MODE_SHUFFLE 0   /* Cider shuffleMode: 0 off, 1 on */
 #define CIDER_MODE_REPEAT 1    /* Rockbox repeat_mode: 0 off, 1 all, 2 one, 3 shuffle, 4 A-B */
 #define CIDER_REPEAT_AB 4

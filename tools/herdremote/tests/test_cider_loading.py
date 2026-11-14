@@ -32,7 +32,7 @@ def test_stall_pause_stop_resume_and_track_reset():
     assert not x.sample(state('b',0,0),5)
 
 
-@pytest.mark.parametrize('command',['play-item','native-play','native-context','next','previous','play-collection','queue-jump'])
+@pytest.mark.parametrize('command',['play-item','native-play','next','previous','play-collection','queue-jump'])
 def test_timeout_and_pending_commands(command):
     x=hrcider.Loading();x.sample(state(),0);assert x.begin(command,'songs:x',state(),.1)
     assert x.sample(state(pos=500),8.099)
@@ -108,7 +108,7 @@ def test_mock_poll_transitions_and_quarter_second_schedule(monkeypatch):
         b.close()
 
 
-@pytest.mark.parametrize('command',['next','previous','play-item','native-context','native-play','seek'])
+@pytest.mark.parametrize('command',['next','previous','play-item','native-play','seek'])
 def test_control_publishes_before_rpc_and_failure_restores(command):
     with tempfile.TemporaryDirectory() as d:
         client=Mock();b=hrcider.Bridge(client=client,cache=hrcider.Cache(d),volume=Mock())

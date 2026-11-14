@@ -1143,8 +1143,8 @@ int skin_wait_for_action(enum skinnable_screens skin, int context, int timeout)
         while (TIME_BEFORE(current_tick, next_big_refresh)) {
             int wait = TIMEOUT_NOBLOCK;
             if (loading_tick && !(pm || sb || tb || recolouring || pending))
-                wait = MIN((long)cider_spinner_wait(current_tick, HZ),
-                           next_big_refresh - current_tick);
+                wait = MIN(MIN((long)cider_spinner_wait(current_tick, HZ),
+                               MAX(1, HZ / 50)), next_big_refresh - current_tick);
             button = get_action(context, wait);
             if (button != ACTION_NONE) {
                 break;
