@@ -110,6 +110,24 @@ class BridgeTests(Base):
         gen=self.bridge.generation
         self.bridge.command(f'ls\t{gen}\t1\t0\t0\t0\t1048576'.encode());self.assertFalse(any(f.startswith(b'CQ\t') for f in self.frames()))
         self.bridge.command(f'lw\t{gen}\t5'.encode());self.assertFalse(any(f.startswith(b'CO\t') for f in self.frames()))
+    def test_fu27_store_and_modes5_negotiate_together(self):
+        caps=b'cn18,neighbors,warm,play-ack,localstore,modes5'
+        self.bridge.state['repeat5']=4
+        frames=self.connect(caps)
+        self.assertEqual(self.bridge.capabilities,frozenset(caps.decode().split(',')))
+        self.assertIn(f'CF\t{self.gen}\tlocalstore'.encode(),frames)
+        cn=next(f for f in frames if f.startswith(b'CN\t')).split(b'\t')
+        self.assertEqual(len(cn),19);self.assertEqual(cn[-1],b'4')
+        # Renegotiation removes each feature independently; store never changes CN width.
+        frames=self.connect(b'cn18,localstore')
+        self.assertTrue(any(f.startswith(b'CF\t') for f in frames))
+        self.assertEqual(len(next(f for f in frames if f.startswith(b'CN\t')).split(b'\t')),18)
+        frames=self.connect(b'cn18,modes5')
+        self.assertFalse(any(f.startswith(b'CF\t') for f in frames))
+        self.assertEqual(len(next(f for f in frames if f.startswith(b'CN\t')).split(b'\t')),19)
+        frames=self.connect(b'localstore,modes5')
+        self.assertTrue(any(f.startswith(b'CF\t') for f in frames))
+        self.assertEqual(len(next(f for f in frames if f.startswith(b'CN\t')).split(b'\t')),16)
     def test_status_mismatch_lists_then_offers_only_after_verified_sync(self):
         self.connect()
         held=[(bytes.fromhex(self.ids[0][:16]),0,9)]

@@ -11,7 +11,7 @@ def fn(name):
 pre=r'''
 #include <assert.h>
 #define MIN(a,b) ((a)<(b)?(a):(b))
-static unsigned int play_request;static int play_reply;
+static unsigned int play_request;static struct cider_modes modes;static int play_reply;
 #include <stdio.h>
 #include <string.h>
 #include <stdarg.h>
@@ -52,6 +52,12 @@ message=(struct podlink_message){.type=PODLINK_TEXT,.data=(const unsigned char*)
 assert(receive(&message)&&play_reply==1);
 play_reply=0;ack="CK\t7\t124\t1\tOK";message.data=(const unsigned char*)ack;message.length=strlen(ack);assert(receive(&message)&&!play_reply);
 ack="CK\t7\t123\t0\tFailed";message.data=(const unsigned char*)ack;message.length=strlen(ack);assert(receive(&message)&&play_reply==-1);
+/* FU26: a failed shuffle/repeat command drops its shown-ahead value; success and unrelated requests do not */
+cider_mode_ask(&modes,CIDER_MODE_SHUFFLE,1,10,200);cider_mode_ask(&modes,CIDER_MODE_REPEAT,2,10,201);
+ack="CK\t7\t200\t1\tOK";message.data=(const unsigned char*)ack;message.length=strlen(ack);assert(receive(&message)&&modes.pending[0]&&modes.pending[1]);
+ack="CK\t7\t999\t0\tFailed";message.data=(const unsigned char*)ack;message.length=strlen(ack);assert(receive(&message)&&modes.pending[0]&&modes.pending[1]);
+ack="CK\t7\t201\t0\tFailed";message.data=(const unsigned char*)ack;message.length=strlen(ack);assert(receive(&message)&&modes.pending[0]&&!modes.pending[1]);
+ack="CK\t7\t200\t0\tFailed";message.data=(const unsigned char*)ack;message.length=strlen(ack);assert(receive(&message)&&!modes.pending[0]);
 const char*neighbors="CP\t7\tsong\t-\t-";strcpy(state.id,"song");message.data=(const unsigned char*)neighbors;message.length=strlen(neighbors);assert(receive(&message)&&!state.previous_art[0]&&!state.next_art[0]);
 const char*offer="CO\t7\tM\taaaa";message.data=(const unsigned char*)offer;message.length=strlen(offer);assert(receive(&message)&&store_texts==1);
 const char*feat="CF\t7\tlocalstore";message.data=(const unsigned char*)feat;message.length=strlen(feat);assert(receive(&message)&&store_texts==2);feat="CQ\t7\t0";message.data=(const unsigned char*)feat;message.length=strlen(feat);assert(receive(&message)&&store_texts==3);

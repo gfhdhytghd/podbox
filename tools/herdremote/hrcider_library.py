@@ -12,6 +12,8 @@ import urllib.parse
 from hrcider_cache import art_id
 from hrcider_featured import featured_guests
 
+LIST_BEFORE, LIST_AFTER = 5, 20  # queue window around a song of a plain list
+
 ROOT = {'Search':'search', 'Album':'albums', 'Random Album':'random',
         'Album Artist':'albumartists', 'Artist':'artists', 'Genre':'genres',
         'Year':'years', 'Composer':'composers', 'Featured Artists':'featured',
@@ -68,6 +70,7 @@ class Library:
         self.cache, self.client = cache, client
         self.remote = collections.OrderedDict()
         self.state = {}
+        self.context = None
 
     def _items(self, kind):
         with self.cache.lock:
@@ -241,4 +244,39 @@ class Library:
             return self.client.shuffle_library()
         parts=path.split('/')
         if len(parts)!=3 or parts[0]!='play':raise ValueError('Invalid play route')
-        return self.client.control('play-item',parts[1]+':'+urllib.parse.unquote(parts[2]))
+        kind,key=parts[1],urllib.parse.unquote(parts[2])
+        context,self.context=self.context,None
+        if context and kind in ('songs','library-songs') and time.monotonic()-context[2]<15:
+            try:
+                result=self._play_in_list(context[0],context[1],kind,key)
+                if result is not None:return result
+            except (OSError,ValueError,TimeoutError):
+                pass  # the song still plays on its own
+        return self.client.control('play-item',kind+':'+key)
+
+    def set_context(self, value):
+        """native-context: 'index|list-route', for the native-play that follows."""
+        index,_,route=str(value).partition('|')
+        self.context=None
+        if index.isdigit() and 0<len(route)<=380 and int(index)<100000:
+            self.context=(int(index),route,time.monotonic())
+
+    def _play_in_list(self, index, route, kind, key):
+        """Play song `key` of the list `route` (row `index`) so that Cider's queue is
+        that list: a whole album or playlist, or a window around the row."""
+        aliases=self.client.song_aliases(kind,key)
+        match=re.fullmatch(r'(album|playlist)/(?:catalog-([a-zA-Z-]+)/)?([^/?]+)',route)
+        if match:
+            ctype=('' if match[2] else 'library-')+('albums' if match[1]=='album' else 'playlists')
+            return self.client.play_collection(ctype,urllib.parse.unquote(match[3]),aliases,index)
+        start=max(0,index-LIST_BEFORE)
+        rows=self.page(route,start,LIST_BEFORE+LIST_AFTER+1)['items']
+        songs=[(r['id'],r['route'].split('/')[1],urllib.parse.unquote(r['route'].split('/')[2]))
+               for r in rows if r['route'].startswith('play/') and r['route'].count('/')==2]
+        here=next((i for i,v in enumerate(songs) if v[2]==key),None)
+        if here is None:return None
+        before=[v[1:] for v in songs[:here]];after=[v[1:] for v in songs[here+1:]]
+        if not before and not after:return None
+        result=self.client.control('play-item',kind+':'+key)
+        result['fill']=lambda cancel:self.client.fill_queue(aliases,before,after,cancel)
+        return result

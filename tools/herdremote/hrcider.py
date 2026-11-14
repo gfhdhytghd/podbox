@@ -120,6 +120,10 @@ class Client:
         if url.scheme!='http' or url.hostname not in ('127.0.0.1','localhost','::1'):
             raise ValueError('Cider API must be loopback HTTP')
         self.base,self.token,self.timeout=base.rstrip('/'),token,timeout
+        # Rockbox's Repeat modes Shuffle/A-B have no Cider equivalent; the host keeps
+        # them virtually and drops them when Cider's own repeat/shuffle moves.
+        self.mlock=threading.RLock();self.virtual=None;self.expect=None;self.restore_shuffle=0
+        self.real=(0,0);self.last_id='';self.ab={'a':None,'b':None,'id':None}
         # Environment HTTP proxies must not forward local credentials.
         self.opener=opener or urllib.request.build_opener(urllib.request.ProxyHandler({}))
     def request(self,path,body=None,timeout=None,method=None,allow_list=False):
@@ -154,16 +158,80 @@ class Client:
         artwork=info.get('artwork') or {};params=info.get('playParams') or {}
         duration=max(0,int(info.get('durationInMillis') or 0))
         position=min(duration,max(0,int(float(timing.get('currentTime',timing.get('currentPlaybackTime',0)))*1000)))
-        return dict(id=str(params.get('id') or info.get('id') or ''),title=info.get('name',''),artist=info.get('artistName',''),
+        track=str(params.get('id') or info.get('id') or '')
+        return dict(id=track,repeat5=self._mode5(int(repeat or 0),int(shuffle or 0),track),title=info.get('name',''),artist=info.get('artistName',''),
                     album=info.get('albumName',''),composer=info.get('composerName',''),duration=duration,
                     position=position,rate=1000 if playing else 0,
                     volume=max(0,min(100,round(float(volume)*100))),repeat=int(repeat or 0),shuffle=int(shuffle or 0),
                     art=art_id(artwork.get('url','')),template=artwork.get('url',''),bg=str(artwork.get('bgColor','181818'))[:6])
+    def _mode5(self,repeat,shuffle,track):
+        """Rockbox repeat numbering: 0 off, 1 all, 2 one, 3 shuffle, 4 A-B."""
+        with self.mlock:
+            self.real=(repeat,shuffle);self.last_id=track
+            if self.virtual and (repeat,shuffle)!=self.expect:self.virtual=None
+            if self.virtual!='ab' or (self.ab['id'] is not None and self.ab['id']!=track):
+                self.ab={'a':None,'b':None,'id':None}
+            return {'shuffle':3,'ab':4}.get(self.virtual) or {0:0,2:1,1:2}.get(repeat,0)
+    @property
+    def ab_active(self):
+        with self.mlock:return self.virtual=='ab' and self.ab['b'] is not None
+    def ab_tick(self,state):
+        """Position to seek back to when playback has passed marker B, else None."""
+        with self.mlock:
+            ab=self.ab
+            if self.virtual=='ab' and ab['b'] is not None and ab['id']==state['id'] and state['rate'] and state['position']>=ab['b']:
+                return ab['a']
+        return None
+    def _repeat5(self,number):
+        if number not in range(5):raise ValueError('Invalid repeat value')
+        put=lambda mode:self.request('/api/v2/playback/repeat',{'mode':mode},method='PUT')
+        shuffle=lambda on:self.request('/api/v2/playback/shuffle',{'enabled':bool(on)},method='PUT')
+        with self.mlock:
+            leaving=self.virtual=='shuffle' and number!=3;restore=self.restore_shuffle;previous=self.virtual
+            if number==3:
+                if previous!='shuffle':self.restore_shuffle=self.real[1]
+                self.virtual='shuffle';self.expect=(2,1)
+            elif number==4:
+                self.virtual='ab';self.expect=(self.real[0],restore if leaving else self.real[1]);self.ab={'a':None,'b':None,'id':None}
+            else:self.virtual=None;self.ab={'a':None,'b':None,'id':None}
+        try:
+            if number==3:put('all');return shuffle(True)
+            if leaving:shuffle(restore)
+            if number==4:return {'status':'ok'}
+            return put(('none','all','one')[number])
+        except BaseException:
+            with self.mlock:self.virtual=None
+            raise
+    def _ab_mark(self,ms):
+        seek=None
+        with self.mlock:
+            if self.virtual!='ab':raise ValueError('A-B repeat is not active')
+            ab=self.ab
+            if ab['a'] is None:ab.update(a=ms,b=None,id=self.last_id)
+            elif ab['b'] is None:
+                if ms<=ab['a']:raise ValueError('Marker B must follow A')
+                ab['b']=ms;seek=ab['a']
+            else:ab.update(a=None,b=None,id=None)
+        return self.control('seek',seek) if seek is not None else {'status':'ok'}
     def control(self,command,value=0):
         if command in ('seek','volume') and not math.isfinite(float(value)):
             raise ValueError('Nonfinite Cider value')
         routes={'toggle':('playpause',{}),'next':('next',{}),'previous':('previous',{}),
                 'seek':('seek',{})}
+        if command in ('repeat5','ab-mark'):
+            try:number=int(str(value).strip())
+            except ValueError:raise ValueError('Invalid '+command+' value') from None
+            return self._repeat5(number) if command=='repeat5' else self._ab_mark(max(0,number))
+        if command in ('shuffle','repeat'):
+            # Explicit values (never toggles), so a retried press is idempotent.
+            # Cider repeatMode: 0 none, 1 one, 2 all; shuffleMode: 0 off, 1 on.
+            try:number=int(str(value).strip())
+            except ValueError:raise ValueError('Invalid '+command+' value') from None
+            if command=='shuffle':
+                if number not in (0,1):raise ValueError('Invalid shuffle value')
+                return self.request('/api/v2/playback/shuffle',{'enabled':bool(number)},method='PUT')
+            if number not in (0,1,2):raise ValueError('Invalid repeat value')
+            return self.request('/api/v2/playback/repeat',{'mode':('none','one','all')[number]},method='PUT')
         if command=='play-item':
             kind,key=str(value).split(':',1)
             if not re.fullmatch(r'[a-z][a-z0-9-]{0,31}',kind) or not re.fullmatch(r'[\w.:-]{1,128}',key):raise ValueError('Invalid play item')
@@ -190,6 +258,82 @@ class Client:
             if command=='seek':body={'position':max(0,float(value))/1000}
         # A control timeout is never retried: toggle/skip are not idempotent.
         return self.request('/api/v1/playback/'+route,body)
+    # --- playing a song inside its container (the queue is the container) ---
+    @staticmethod
+    def aliases(item):
+        params=(item.get('attributes') or {}).get('playParams') or {}
+        return {str(v) for v in (item.get('id'),params.get('id'),params.get('catalogId'),params.get('libraryId')) if v}
+    def song_aliases(self,kind,key):
+        if not re.fullmatch(r'[a-z][a-z0-9-]{0,31}',kind) or not re.fullmatch(r'[\w.:-]{1,128}',key):raise ValueError('Invalid play item')
+        href=('/v1/me/library/' if kind.startswith('library-') else '/v1/catalog/$STOREFRONT/')+'songs/'+urllib.parse.quote(key,safe='')
+        reply=self.request('/api/v1/amapi/run-v3',{'path':href})
+        if isinstance(reply.get('data'),dict):reply=reply['data']
+        items=reply.get('data',[])
+        if not isinstance(items,list) or not items:raise ValueError('Selected item unavailable')
+        return self.aliases(items[0])|{key}
+    def queue_state(self):
+        data=self.request('/api/v2/queue/position',timeout=3).get('data') or {}
+        return int(data.get('position',0)),int(data.get('total',0))
+    def queue_slice(self,offset,limit):
+        data=self.request(f'/api/v2/queue?offset={offset}&limit={limit}',timeout=3).get('data') or {}
+        return [i.get('track',i) for i in data.get('items',[])]
+    def queue_find(self,wanted,total,near):
+        """Queue index of the first track whose ids meet `wanted`, `near` first."""
+        if 0<=near<total:
+            tracks=self.queue_slice(near,1)
+            if tracks and wanted&self.aliases(tracks[0]):return near
+        for offset in range(0,min(total,1000),100):
+            for k,track in enumerate(self.queue_slice(offset,100)):
+                if wanted&self.aliases(track):return offset+k
+        return None
+    def play_collection(self,ctype,cid,wanted,index):
+        """Queue a whole album/playlist and start at row `index`; Cider's /previous
+        and /next then walk the container. Verified against the queue by track id."""
+        if not re.fullmatch(r'(?:library-)?(?:albums|playlists)',ctype) or not re.fullmatch(r'[\w.:-]{1,128}',cid):raise ValueError('Invalid collection')
+        self.request('/api/v2/playback/play-collection',{'type':ctype,'id':cid},timeout=4)
+        end=time.monotonic()+4;seen=None;since=time.monotonic()
+        while True:
+            position,total=self.queue_state()
+            if total!=seen:seen=total;since=time.monotonic()
+            # Long collections load in pages: wait for the row, or for the queue to settle.
+            if total>index or (total and time.monotonic()-since>=.4):break
+            if time.monotonic()>=end:raise OSError('Cider queue not ready')
+            time.sleep(.05)
+        target=self.queue_find(wanted,total,index)
+        if target is None:raise ValueError('Selected song is not in the collection')
+        if target!=position:self.request('/api/v2/queue/jump',{'index':target},timeout=3)
+        return {'status':'ok','expected_ids':sorted(wanted)}
+    def fill_queue(self,wanted,before,after,cancel):
+        """The song already plays. Append the rows after it in order, then the rows
+        before it, and move those in front of it (Cider keeps the position)."""
+        def add(kind,key):
+            if not re.fullmatch(r'[a-z][a-z0-9-]{0,31}',kind) or not re.fullmatch(r'[\w.:-]{1,128}',key):return False
+            _,total=self.queue_state()
+            self.request('/api/v2/queue/add-later',{'type':kind,'id':key},timeout=3)
+            end=time.monotonic()+3
+            while self.queue_state()[1]<=total:
+                if cancel.is_set() or time.monotonic()>=end:return False
+                time.sleep(.02)
+            return True
+        try:
+            # play-item-href replaces the queue asynchronously: start once it is just this song.
+            end=time.monotonic()+3
+            while True:
+                position,total=self.queue_state()
+                if total==1 and self.queue_find(wanted,1,0)==0:break
+                if cancel.is_set() or time.monotonic()>=end:return False
+                time.sleep(.05)
+            for kind,key in list(after)+list(before):
+                if cancel.is_set() or not add(kind,key):return False
+            if before and not cancel.is_set():
+                _,total=self.queue_state()
+                here=self.queue_find(wanted,total,0)
+                if here is None:return False
+                for j in range(len(before)):
+                    self.request('/api/v2/queue/move',{'from':total-len(before)+j,'to':here+j},timeout=3)
+            return True
+        except (OSError,ValueError,TimeoutError):
+            return False
     def library(self,kind,offset,limit):
         return self.request('/api/v1/amapi/run-v3',{'path':f'/v1/me/library/{kind}?limit={limit}&offset={offset}'+('&include=albums,catalog' if kind=='songs' else '')},timeout=3)
 
@@ -264,6 +408,7 @@ class Bridge:
         self.stop=threading.Event();self.requests={};self.jobs=queue.PriorityQueue(32);self.controls=queue.Queue(16)
         self.state=None;self.available=False;self.reason='Starting';self.state_seq=0;self.last_state=0
         self.opened=False;self.state_dirty=False;self.library_sent=0;self.wake=threading.Event();self.failures=0;self.templates={};self.generation=0;self.threads=[]
+        self.fill_cancel=threading.Event()
         self.index=Index(self.cache,self.client)
         self.library=Library(self.cache,self.client);self.volume=volume or SystemVolume()
         self.volume_delta=0;self.pages=queue.Queue(1);self.page_token=0
@@ -277,6 +422,7 @@ class Bridge:
             t=threading.Thread(target=target,name=name,daemon=True);t.start();self.threads.append(t)
     def close(self):
         self.stop.set()
+        self.fill_cancel.set()
         for t in self.threads:t.join(timeout=3)
         if not any(t.is_alive() for t in self.threads):self.cache.close()
     def disconnect(self):
@@ -294,7 +440,7 @@ class Bridge:
                     if len(fields) not in (3,4) or fields[1]!='1':raise ValueError('Cider protocol')
                     advertised=fields[3].split(',') if len(fields)==4 else []
                     if len(advertised)>8 or any(not re.fullmatch('[a-z0-9-]{1,24}',c) for c in advertised):raise ValueError('Invalid Cider capabilities')
-                    self.capabilities=frozenset(advertised)&{'cn18','neighbors','warm','play-ack','localstore'}
+                    self.capabilities=frozenset(advertised)&{'cn18','neighbors','warm','play-ack','localstore','modes5'}
                     window=int(fields[2]);self.volume_delta=0;self.generation=secrets.randbelow(0xfffffffe)+1;self.scheduler.reset(self.generation,window)
                     self.warm_window.clear();self.warm_queue.clear();self.warm_jobs.clear();self.neighbors=None
                     self.offer_pairs.clear();self.ledger.pending=None;self.ledger.synced=False;self.planner.reset()
@@ -399,6 +545,7 @@ class Bridge:
             s=self.state;self.state_seq+=1
             fields=['CN',self.generation,self.state_seq,int(now*1000)&0xffffffff,s['duration'],s['position'],s['rate'],s['volume'],s['shuffle'],s['repeat'],s['id'],s['art'],s['bg'],s['title'],s['artist'],s['album']]
             if 'cn18' in self.capabilities:fields.extend([int(s.get('muted',False)),s.get('composer','')])
+            if 'cn18' in self.capabilities and 'modes5' in self.capabilities:fields.append(s.get('repeat5',0))
             self.scheduler.push(1,2,'\t'.join(clean(v) for v in fields).encode())
         self.last_state=now;self.state_dirty=False
     def _poll(self):
@@ -420,7 +567,11 @@ class Bridge:
                         self.templates[state['art']]=state['template']
                         if len(self.templates)>128:self.templates.pop(next(iter(self.templates)))
                     if changed:published=dict(state);anchor=now;self._state()
-                self.failures=0;next_poll=now+1
+                target=self.client.ab_tick(state)
+                if target is not None:
+                    try:self.client.control('seek',target);self.wake.set()
+                    except (OSError,ValueError,TimeoutError):pass
+                self.failures=0;next_poll=now+(.25 if self.client.ab_active else 1)
             except (OSError,ValueError,TimeoutError) as error:
                 with self.lock:
                     if self.available or self.reason=='Starting':self.available=False;self.reason=clean(str(error),80) or 'Cider unavailable';self._state()
@@ -459,6 +610,7 @@ class Bridge:
                 if not self.available:raise OSError('Cider unavailable')
                 log.info('control request gen=%d req=%d command=%s',generation,req,command)
                 if command=='native-play':
+                    self.fill_cancel.set();self.fill_cancel=cancel=threading.Event()
                     result=self.library.play(value)
                     expected=result.get('expected_ids',[]) if isinstance(result,dict) else []
                     if expected:
@@ -471,6 +623,10 @@ class Bridge:
                             if self.stop.is_set() or time.monotonic()>=deadline:
                                 raise OSError('Cider did not select the requested song')
                             self.stop.wait(.05)
+                    fill=result.get('fill') if isinstance(result,dict) else None
+                    if fill:threading.Thread(target=fill,args=(cancel,),daemon=True,name='cider-queue').start()
+                elif command=='native-context':
+                    self.library.set_context(value)
                 elif command=='source-local':
                     if self.client.request('/api/v1/playback/is-playing').get('is_playing'):self.client.control('toggle')
                 else:self.client.control(command,value)

@@ -33,6 +33,8 @@ enum quickscreen_return {
 };
 
 extern int quick_screen_quick(int button_enter);
+/* Same screen bound to Cider's shuffle (left) and repeat (right) */
+extern int quick_screen_cider(int button_enter);
 bool is_setting_quickscreenable(const struct settings_list *setting);
 
 #endif /*_GUI_QUICK_SCREEN_H_*/

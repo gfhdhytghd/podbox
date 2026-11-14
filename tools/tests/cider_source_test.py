@@ -9,7 +9,7 @@ playback=(R/'apps-ipod/audio/playback.c').read_text()
 wps=(R/'apps-ipod/screens/playback/wps.c').read_text()
 def fn(name,text=None):
  text=resident if text is None else text
- m=re.search(r'(?m)^(?:static )?(?:void|bool|int) '+name+r'\([^;{}]*\)\s*\{',text);assert m,name
+ m=re.search(r'(?m)^(?:static )?(?:void|bool|int|uint32_t) '+name+r'\([^;{}]*\)\s*\{',text);assert m,name
  e=m.end();d=1
  while d:d+=(text[e]=='{')-(text[e]=='}');e+=1
  return text[m.start():e]
@@ -85,6 +85,7 @@ static int request_calls;
 static bool cider_has_art(const char*k,const char*t){(void)k;(void)t;return false;}
 static char commands[12][384];
 static struct cider_state state;
+static struct cider_modes modes;
 static void mutex_lock(int*m){(void)m;}
 static void mutex_unlock(int*m){(void)m;}
 static int disable_irq_save(void){return 0;}
@@ -135,9 +136,60 @@ assert(cider_play("play/library-songs/fail"));play_reply=-1;assert(cider_play_st
 assert(cider_play("play/library-songs/timeout"));current_tick+=601;assert(cider_play_status()==-1&&!active);
 ncommands=12;assert(!cider_play("play/library-songs/full")&&!active);ncommands=0;
 assert(cider_play("play/library-songs/cancel"));cider_local_play();assert(!play_request&&cider_play_status()==-1&&!active);
+
+/* FU26: long SELECT/MENU reach the Cider pages, never the local menus; modes are explicit, optimistic and reconciled */
+{
+active=true;state.available=true;ncommands=0;
+assert(!cider_wps_action(ACTION_WPS_CONTEXT)&&!cider_wps_action(ACTION_WPS_QUICKSCREEN)&&!ncommands);
+state.available=false;assert(!cider_wps_action(ACTION_WPS_CONTEXT)&&!cider_wps_action(ACTION_WPS_QUICKSCREEN)&&!ncommands);
+state.available=true;current_tick=1000;state.shuffle=0;state.repeat=0;memset(&modes,0,sizeof modes);
+assert(cider_mode_get(CIDER_MODE_SHUFFLE)==0&&cider_mode_get(CIDER_MODE_REPEAT)==0);
+/* shuffle: Off -> On, explicit value on the wire, shown at once */
+cider_mode_set(CIDER_MODE_SHUFFLE,cider_mode_step(CIDER_MODE_SHUFFLE,cider_mode_get(CIDER_MODE_SHUFFLE),false));
+assert(ncommands==1&&strstr(commands[0],"\tshuffle\t1")&&cider_mode_get(CIDER_MODE_SHUFFLE)==1);
+state.shuffle=1;assert(cider_mode_get(CIDER_MODE_SHUFFLE)==1&&!modes.pending[CIDER_MODE_SHUFFLE]);
+/* a later change by Cider itself is not masked */
+state.shuffle=0;assert(cider_mode_get(CIDER_MODE_SHUFFLE)==0);
+/* repeat in Rockbox's order: Off -> All -> One -> Shuffle -> A-B -> Off */
+ncommands=0;for(int i=1;i<=5;i++){int want=i%5;int cur=cider_mode_get(CIDER_MODE_REPEAT);assert(cider_mode_step(CIDER_MODE_REPEAT,cur,false)==want);
+ cider_mode_set(CIDER_MODE_REPEAT,want);assert(cider_mode_get(CIDER_MODE_REPEAT)==want);state.repeat=want;assert(cider_mode_get(CIDER_MODE_REPEAT)==want);}
+assert(ncommands==5&&strstr(commands[0],"\trepeat5\t1")&&strstr(commands[1],"\trepeat5\t2")&&strstr(commands[2],"\trepeat5\t3")&&strstr(commands[3],"\trepeat5\t4")&&strstr(commands[4],"\trepeat5\t0"));
+/* no CN within 2 s: back to Cider's value */
+cider_mode_set(CIDER_MODE_REPEAT,2);assert(cider_mode_get(CIDER_MODE_REPEAT)==2);current_tick+=199;assert(cider_mode_get(CIDER_MODE_REPEAT)==2);
+current_tick+=1;assert(cider_mode_get(CIDER_MODE_REPEAT)==0);
+/* host refusal: back at once; other mode's request untouched */
+cider_mode_set(CIDER_MODE_REPEAT,1);cider_mode_set(CIDER_MODE_SHUFFLE,1);
+assert(cider_mode_failed(&modes,modes.request[CIDER_MODE_REPEAT])&&cider_mode_get(CIDER_MODE_REPEAT)==0&&cider_mode_get(CIDER_MODE_SHUFFLE)==1);
+assert(!cider_mode_failed(&modes,9999));state.shuffle=1;cider_mode_get(CIDER_MODE_SHUFFLE);
+/* Cider away or command queue full: nothing is shown ahead */
+state.available=false;ncommands=0;cider_mode_set(CIDER_MODE_SHUFFLE,0);assert(!ncommands&&cider_mode_get(CIDER_MODE_SHUFFLE)==1);
+state.available=true;ncommands=12;cider_mode_set(CIDER_MODE_SHUFFLE,0);assert(cider_mode_get(CIDER_MODE_SHUFFLE)==1);ncommands=0;
+/* stepping wraps both ways and clamps strangers */
+assert(cider_mode_step(CIDER_MODE_SHUFFLE,1,false)==0&&cider_mode_step(CIDER_MODE_SHUFFLE,0,true)==1);
+for(int v=0;v<5;v++){assert(cider_mode_step(CIDER_MODE_REPEAT,v,false)==(v+1)%5&&cider_mode_step(CIDER_MODE_REPEAT,v,true)==(v+4)%5);}
+assert(cider_mode_step(CIDER_MODE_REPEAT,7,false)==1);
+/* A-B: SELECT marks only in A-B mode; elsewhere it stays swallowed */
+state.repeat=0;memset(&modes,0,sizeof modes);ncommands=0;assert(cider_wps_action(ACTION_WPS_BROWSE)&&!ncommands);
+state.repeat=CIDER_REPEAT_AB;state.position=5000;state.received=current_tick;state.rate=1000;cider_wps_update(&w);
+assert(cider_wps_action(ACTION_WPS_BROWSE)&&ncommands==1&&strstr(commands[0],"\tab-mark\t5000"));
+active=false;
+}
+/* FU26c: a song played from a list carries that list ahead of native-play, in order */
+{
+active=false;state.available=true;play_request=0;ncommands=0;
+assert(cider_play_in("play/library-songs/s9","album/l.X",2)&&ncommands==2);
+assert(strstr(commands[0],"\tnative-context\t2|album/l.X")&&strstr(commands[1],"\tnative-play\tplay/library-songs/s9"));
+play_request=0;ncommands=0;assert(cider_play_in("play/library-songs/s9","",3)&&ncommands==1&&!strstr(commands[0],"native-context"));
+play_request=0;ncommands=0;assert(cider_play_in("play/library-songs/s9","songs",-1)&&ncommands==1&&strstr(commands[0],"native-play"));
+play_request=0;ncommands=11;assert(!cider_play_in("play/library-songs/s9","songs",1)&&ncommands==11);
+play_request=0;ncommands=10;assert(cider_play_in("play/library-songs/s9","songs",1)&&ncommands==12);
+char longctx[400];memset(longctx,'a',sizeof longctx);longctx[399]=0;
+play_request=0;ncommands=0;assert(cider_play_in("play/library-songs/s9",longctx,1)&&ncommands==1&&!strstr(commands[0],"native-context"));
+play_request=0;ncommands=0;
+}
 puts("Production Local/Cider, disconnect/reconnect, native WPS bitmap/actions PASS");}
 '''
-(O/'source.c').write_text(pre+'\nenum {'+','.join(actions)+'};\n'+fn('cider_control')+'\n'+fn('cider_play')+'\n'+fn('cider_play_status')+'\n'+fn('cider_local_play')+'\n'+fn('cider_retain_art')+'\n'+fn('cider_prefetch_art')+'\n'+fn('audio_play',playback)+'\n'+fn('audio_resume',playback)+'\n'+source+'\n'+seek+'\nstatic int get_action(int c,int t){(void)c;(void)t;return seek_actions++ ? ACTION_WPS_STOPSEEK : ACTION_WPS_SEEKFWD;}\n'+post)
+(O/'source.c').write_text(pre+'\nenum {'+','.join(actions)+'};\n'+fn('queue_control')+'\n'+fn('cider_control')+'\n'+fn('cider_mode_get')+'\n'+fn('cider_mode_set')+'\n'+fn('play_route')+'\n'+fn('cider_play')+'\n'+fn('cider_play_in')+'\n'+fn('cider_play_status')+'\n'+fn('cider_local_play')+'\n'+fn('cider_retain_art')+'\n'+fn('cider_prefetch_art')+'\n'+fn('audio_play',playback)+'\n'+fn('audio_resume',playback)+'\n'+source+'\n'+seek+'\nstatic int get_action(int c,int t){(void)c;(void)t;return seek_actions++ ? ACTION_WPS_STOPSEEK : ACTION_WPS_SEEKFWD;}\n'+post)
 (O/'config.h').write_text('#define HAVE_USB_PODLINK\n')
 cmd=['cc','-std=gnu11','-g','-Wall','-Wextra','-Wno-unused-variable','-Werror','-fsanitize=address,undefined','-fno-pie','-no-pie','-I'+str(O),'-I'+str(R/'apps-ipod'),'-I'+str(R/'firmware/export'),str(O/'source.c'),str(R/'apps-ipod/screens/playback/cider_model.c'),str(R/'firmware/usbstack/podlink_wire.c'),'-o',str(O/'source')]
 subprocess.run(cmd,check=True);subprocess.run([str(O/'source')],check=True)

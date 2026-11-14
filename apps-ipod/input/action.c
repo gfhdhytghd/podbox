@@ -456,6 +456,11 @@ static bool remote_volume_action(action_cur_t *cur)
         return true;
     }
     if (cur->context == CONTEXT_AGENTS) return false;
+    if (cur->context == CONTEXT_QUICKSCREEN)
+    {   /* what the wheel does there: the volume */
+        cur->action = up ? ACTION_QS_VOLUP : ACTION_QS_VOLDOWN;
+        return true;
+    }
     if (cur->context == CONTEXT_PLUGIN &&
         get_current_activity() == ACTIVITY_ALBUMCOVERS)
     {

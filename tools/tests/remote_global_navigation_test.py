@@ -72,6 +72,9 @@ prefix=pre+'''
 #define CONTEXT_AGENTS 1
 #define CONTEXT_WPS 2
 #define CONTEXT_PLUGIN 3
+#define CONTEXT_QUICKSCREEN 4
+#define ACTION_QS_VOLUP 505
+#define ACTION_QS_VOLDOWN 506
 #define ACTIVITY_ALBUMCOVERS 9
 #define ACTION_STD_PREV 501
 #define ACTION_STD_NEXT 502
@@ -89,6 +92,7 @@ int main(void){
  for(int c=0;c<20;c++)for(int d=0;d<2;d++){
   activity=0;action_cur_t cur={.button=d?DOWN:UP,.context=c};bool routed=remote_volume_action(&cur);
   if(c==CONTEXT_AGENTS||c==CONTEXT_WPS)assert(!routed&&cur.button==(d?DOWN:UP));
+  else if(c==CONTEXT_QUICKSCREEN)assert(routed&&cur.action==(d?ACTION_QS_VOLDOWN:ACTION_QS_VOLUP)&&cur.button==(d?DOWN:UP));
   else assert(routed&&cur.action==(d?ACTION_STD_NEXT:ACTION_STD_PREV)&&cur.button==(d?DOWN:UP));
  }
  activity=ACTIVITY_ALBUMCOVERS;action_cur_t cur={.button=UP,.context=CONTEXT_PLUGIN};assert(!remote_volume_action(&cur)&&cur.button==BUTTON_SCROLL_BACK);

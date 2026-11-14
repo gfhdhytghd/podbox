@@ -89,6 +89,13 @@ bool cider_wps_action(int action)
             case ACTION_WPS_SKIPPREV:
                 cider_control("previous", 0);
                 break;
+            case ACTION_WPS_BROWSE:
+                /* A-B repeat: like Rockbox's single marker key, SELECT sets
+                 * A, then B, then clears; the host holds the markers. */
+                if (cider_mode_get(CIDER_MODE_REPEAT) == CIDER_REPEAT_AB)
+                    cider_control("ab-mark",
+                                  cider_position(&source, current_tick, HZ));
+                break;
             case ACTION_WPS_VOLUP:
                 cider_control("volume-step", 1);
                 break;
@@ -108,6 +115,8 @@ bool cider_wps_action(int action)
         case ACTION_WPS_SEEKBACK:
             return !cider_available();
         case ACTION_WPS_MENU:
+        case ACTION_WPS_CONTEXT:     /* Cider shuffle/repeat page, wps.c */
+        case ACTION_WPS_QUICKSCREEN: /* Cider quick screen, wps.c */
         case ACTION_WPS_STOP:
         case ACTION_AGENTS_COVERS:
         case ACTION_AGENTS_REMOTE_COVERS:

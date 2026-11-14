@@ -9,7 +9,7 @@ sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 import hrcider
 
 class Handler(BaseHTTPRequestHandler):
-    calls=[];fail=False;library_items=None
+    calls=[];fail=False;library_items=None;queue={'ids':[],'pos':0};collections={};modes={'repeat':0,'shuffle':0}
     def log_message(self,*args):pass
     def do_GET(self): self.respond()
     def do_POST(self): self.respond()
@@ -26,7 +26,28 @@ class Handler(BaseHTTPRequestHandler):
         elif self.path.endswith('is-playing'):value={'is_playing':True}
         elif self.path.endswith('/time'):value={'data':{'currentTime':12,'duration':100,'remaining':88}}
         elif self.path.endswith('/volume'):value={'volume':.5}
-        elif self.path.endswith('repeat-mode') or self.path.endswith('shuffle-mode'):value={'value':0}
+        elif self.path.startswith('/api/v2/queue') or self.path.endswith('play-collection') or self.path.endswith('play-item-href'):
+            q=self.queue;data=json.loads(body) if body else {}
+            track=lambda i:{'track':{'id':'cat-'+i,'attributes':{'playParams':{'id':i}}}}
+            if self.path.endswith('play-collection') and (data['type'],data['id']) not in self.collections:self.send_error(404);return
+            if self.path.endswith('play-collection'):q['ids']=list(self.collections[(data['type'],data['id'])]);q['pos']=0;value={'data':{}}
+            elif self.path.endswith('play-item-href'):q['ids']=[self.path.rsplit('/',1)[1] if False else data['href'].rsplit('/',1)[1]];q['pos']=0;value={'status':'ok'}
+            elif self.path.endswith('/queue/position'):value={'data':{'position':q['pos'],'total':len(q['ids'])}}
+            elif self.path.endswith('/queue/jump'):q['pos']=data['index'];value={'data':{}}
+            elif self.path.endswith('/queue/add-later'):q['ids'].append(data['id']);value={'data':{}}
+            elif self.path.endswith('/queue/move'):
+                cur=q['ids'][q['pos']];item=q['ids'].pop(data['from']);q['ids'].insert(data['to'],item);q['pos']=q['ids'].index(cur);value={'data':{}}
+            else:
+                qs=urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query);off=int(qs['offset'][0]);lim=int(qs['limit'][0])
+                value={'data':{'items':[track(i) for i in q['ids'][off:off+lim]],'position':q['pos']}}
+            self.calls[-1]=self.calls[-1]
+        elif self.path.startswith('/api/v2/playback/') and self.command=='PUT':
+            data=json.loads(body)
+            if self.path.endswith('/repeat'):self.modes['repeat']={'none':0,'one':1,'all':2}[data['mode']]
+            if self.path.endswith('/shuffle'):self.modes['shuffle']=int(data['enabled'])
+            value={'data':data}
+        elif self.path.endswith('repeat-mode'):value={'value':self.modes['repeat']}
+        elif self.path.endswith('shuffle-mode'):value={'value':self.modes['shuffle']}
         elif self.path.endswith('run-v3'):
             path=json.loads(body)['path'];query=urllib.parse.parse_qs(urllib.parse.urlsplit(path).query)
             offset=int(query.get('offset',['0'])[0]);limit=int(query.get('limit',['50'])[0])
@@ -59,7 +80,7 @@ class Cider(unittest.TestCase):
         cls.server=ThreadingHTTPServer(('127.0.0.1',0),Handler);cls.thread=threading.Thread(target=cls.server.serve_forever,daemon=True);cls.thread.start();cls.url='http://127.0.0.1:'+str(cls.server.server_port)
     @classmethod
     def tearDownClass(cls):cls.server.shutdown();cls.server.server_close();cls.thread.join()
-    def setUp(self):self.tmp=tempfile.TemporaryDirectory();self.cache=hrcider.Cache(self.tmp.name,art_limit=150000);Handler.calls=[];Handler.fail=False;Handler.library_items=None
+    def setUp(self):self.tmp=tempfile.TemporaryDirectory();self.cache=hrcider.Cache(self.tmp.name,art_limit=150000);Handler.calls=[];Handler.fail=False;Handler.library_items=None;Handler.queue={'ids':[],'pos':0};Handler.collections={};Handler.modes={'repeat':0,'shuffle':0}
     def tearDown(self):self.cache.close();self.tmp.cleanup()
     def client(self,**kwargs):return hrcider.Client(self.url,opener=LocalOpener(self.url),**kwargs)
     def fetch(self,url,timeout):return LocalOpener(self.url).open(url,timeout)
@@ -74,6 +95,159 @@ class Cider(unittest.TestCase):
         with self.assertRaises(ValueError):c.control('volume',55)
         self.assertFalse(any(path.endswith('/volume') for _,path,*_ in Handler.calls))
         self.assertTrue(all(p[3]=='mock-token' for p in Handler.calls))
+    def test_shuffle_repeat_set_explicit_values(self):
+        c=self.client(token='t')
+        for cmd,value in [('shuffle',1),('shuffle','0'),('repeat',0),('repeat','1'),('repeat',2)]:c.control(cmd,value)
+        calls=[v[:3] for v in Handler.calls]
+        self.assertEqual(calls,[('PUT','/api/v2/playback/shuffle',{'enabled':True}),('PUT','/api/v2/playback/shuffle',{'enabled':False}),
+            ('PUT','/api/v2/playback/repeat',{'mode':'none'}),('PUT','/api/v2/playback/repeat',{'mode':'one'}),('PUT','/api/v2/playback/repeat',{'mode':'all'})])
+        n=len(Handler.calls)
+        for cmd,value in [('shuffle',2),('shuffle',-1),('repeat',3),('repeat','x'),('repeat','')]:
+            with self.assertRaises(ValueError):c.control(cmd,value)
+        self.assertEqual(len(Handler.calls),n)
+        Handler.fail=True
+        with self.assertRaises(OSError):c.control('repeat',2)
+    def lib(self):
+        from hrcider_library import Library
+        return Library(self.cache,self.client())
+    def posts(self):return [(v[1].split('/api/')[1],v[2]) for v in Handler.calls if v[0]=='POST' and 'amapi' not in v[1]]
+    def test_song_in_album_plays_the_whole_album_from_that_song(self):
+        Handler.collections[('library-albums','al1')]=['t1','t2','t3','t4','t5']
+        lib=self.lib();lib.set_context('2|album/al1');r=lib.play('play/library-songs/t3')
+        self.assertEqual(Handler.queue,{'ids':['t1','t2','t3','t4','t5'],'pos':2})
+        self.assertEqual(self.posts(),[('v2/playback/play-collection',{'type':'library-albums','id':'al1'}),('v2/queue/jump',{'index':2})])
+        self.assertIn('t3',r['expected_ids'])
+        # first row: no jump; catalog album and playlist routes pick the catalog/library collection types
+        Handler.calls=[];Handler.collections[('albums','9')]=['a','b'];lib.set_context('0|album/catalog-us/9');lib.play('play/songs/a')
+        self.assertEqual(self.posts(),[('v2/playback/play-collection',{'type':'albums','id':'9'})]);self.assertEqual(Handler.queue['pos'],0)
+        Handler.calls=[];Handler.collections[('library-playlists','p.1')]=['x','y','z'];lib.set_context('1|playlist/p.1');lib.play('play/library-songs/y')
+        self.assertEqual((Handler.queue['ids'],Handler.queue['pos']),(['x','y','z'],1))
+        # Cider dropped an unplayable track: the song is found by id, not by row number
+        Handler.collections[('library-albums','al2')]=['q1','q3','q4'];lib.set_context('2|album/al2');lib.play('play/library-songs/q4')
+        self.assertEqual(Handler.queue['pos'],2);lib.set_context('3|album/al2');lib.play('play/library-songs/q3')
+        self.assertEqual(Handler.queue['pos'],1)
+    def test_song_in_plain_list_queues_a_window_around_it(self):
+        lib=self.lib();rows=[dict(id='s%d'%i,route='play/library-songs/s%d'%i) for i in range(8)]
+        calls=[]
+        def page(route,offset,limit):calls.append((route,offset,limit));return dict(items=rows[offset:offset+limit])
+        lib.page=page
+        lib.set_context('3|songs');r=lib.play('play/library-songs/s3')
+        self.assertEqual(calls,[('songs',0,26)]);self.assertEqual(Handler.queue,{'ids':['s3'],'pos':0})
+        self.assertTrue(r['fill'](threading.Event()))
+        self.assertEqual(Handler.queue,{'ids':['s0','s1','s2','s3','s4','s5','s6','s7'],'pos':3})
+        # first song of a list: nothing before; last of a one-row list: plain play
+        lib.set_context('0|songs');lib.play('play/library-songs/s0').get('fill')(threading.Event())
+        self.assertEqual((Handler.queue['ids'],Handler.queue['pos']),(['s0','s1','s2','s3','s4','s5','s6','s7'],0))
+        lib.page=lambda route,offset,limit:dict(items=rows[:1]);lib.set_context('0|songs');self.assertNotIn('fill',lib.play('play/library-songs/s0'))
+        # a cancelled fill adds nothing more
+        lib.page=page;lib.set_context('3|songs');r=lib.play('play/library-songs/s3');stop=threading.Event();stop.set()
+        self.assertFalse(r['fill'](stop));self.assertEqual(Handler.queue['ids'],['s3'])
+    def test_context_is_optional_stale_or_bad_and_never_blocks_the_song(self):
+        lib=self.lib()
+        lib.play('play/library-songs/solo');self.assertEqual(Handler.queue['ids'],['solo']);self.assertNotIn('v2/playback/play-collection',[p for p,_ in self.posts()])
+        for bad in ('x|album/a','-1|album/a','2|','2','99999999|songs'):
+            lib.set_context(bad);self.assertIsNone(lib.context)
+        lib.set_context('1|album/zzz');lib.play('play/library-songs/lone')   # unknown collection: the song still plays
+        self.assertEqual(Handler.queue['ids'],['lone'])
+        lib.set_context('1|album/zzz');lib.context=(1,'album/zzz',time.monotonic()-60);Handler.calls=[];lib.play('play/library-songs/old')
+        self.assertFalse(any('play-collection' in v[1] for v in Handler.calls))
+        # context is single-use
+        Handler.collections[('library-albums','al1')]=['t1','t2'];lib.set_context('1|album/al1');lib.play('play/library-songs/t2');Handler.calls=[];lib.play('play/library-songs/t1')
+        self.assertFalse(any('play-collection' in v[1] for v in Handler.calls))
+    def test_bridge_native_context_then_play_queues_the_album(self):
+        Handler.collections[('library-albums','al1')]=['t1','t2','song-1','t4']
+        b=hrcider.Bridge(client=self.client(),cache=self.cache,fetch=self.fetch,volume=mock.Mock(read=mock.Mock(return_value=(42,False))))
+        b.start()
+        try:
+            end=time.monotonic()+4
+            while not b.available and time.monotonic()<end:time.sleep(.01)
+            b.command(b'ci\t1\t131072');gen=b.generation
+            b.command(f'cc\t{gen}\t7\tnative-context\t2|album/al1'.encode());b.command(f'cc\t{gen}\t8\tnative-play\tplay/library-songs/song-1'.encode())
+            frames=[];end=time.monotonic()+5
+            while sum(1 for k,p in frames if p.startswith(b'CK'))<2 and time.monotonic()<end:
+                b.poll(lambda *v:frames.append(v));time.sleep(.01)
+            acks={p.split(b'\t')[2]:p.split(b'\t')[3] for k,p in frames if p.startswith(b'CK')}
+            self.assertEqual(acks,{b'7':b'1',b'8':b'1'});self.assertEqual(Handler.queue,{'ids':['t1','t2','song-1','t4'],'pos':2})
+        finally:
+            b.close();self.cache=hrcider.Cache(self.tmp.name)
+    def test_repeat5_native_modes_map_to_cider(self):
+        c=self.client()
+        puts=lambda:[v[1].rsplit('/',1)[1]+':'+json.dumps(v[2],sort_keys=True) for v in Handler.calls if v[0]=='PUT']
+        # Rockbox order 0 off, 1 all, 2 one; Cider's own numbers differ (1 one, 2 all).
+        for n,mode,real in [(0,'none',0),(1,'all',2),(2,'one',1)]:
+            Handler.calls=[];c.control('repeat5',n);self.assertEqual(puts(),['repeat:{"mode": "%s"}'%mode])
+            s=c.snapshot();self.assertEqual((s['repeat5'],s['repeat'],s['shuffle']),(n,real,0))
+        for bad in (5,-1,'x',''):
+            with self.assertRaises(ValueError):c.control('repeat5',bad)
+        # Shuffle mode: repeat all + shuffle on, reported as 3, legacy field stays real
+        Handler.calls=[];c.control('repeat5',3)
+        self.assertEqual(puts(),['repeat:{"mode": "all"}','shuffle:{"enabled": true}'])
+        s=c.snapshot();self.assertEqual((s['repeat5'],s['repeat'],s['shuffle']),(3,2,1))
+        c.control('repeat5',0);Handler.calls=[]
+        s=c.snapshot();self.assertEqual((s['repeat5'],s['shuffle']),(0,0),'leaving restores the earlier shuffle')
+        # The user changes Cider itself: the virtual mode collapses to the real one
+        c.control('repeat5',3);Handler.modes['shuffle']=0
+        self.assertEqual(c.snapshot()['repeat5'],1)
+        c.control('repeat5',3);Handler.modes['repeat']=1
+        self.assertEqual(c.snapshot()['repeat5'],2)
+        # A failed RPC leaves no virtual mode behind
+        Handler.fail=True
+        with self.assertRaises(OSError):c.control('repeat5',3)
+        Handler.fail=False;self.assertEqual(c.snapshot()['repeat5'],2)
+    def test_ab_repeat_markers_seek_and_clear(self):
+        c=self.client();st=lambda pos,id_='song-1':{'id':id_,'position':pos,'rate':1000}
+        with self.assertRaises(ValueError):c.control('ab-mark',1000)
+        c.control('repeat5',4);self.assertEqual(c.snapshot()['repeat5'],4)
+        self.assertFalse(c.ab_active);self.assertIsNone(c.ab_tick(st(99999)))
+        c.control('ab-mark',10000)
+        with self.assertRaises(ValueError):c.control('ab-mark',10000)
+        Handler.calls=[];c.control('ab-mark',20000)
+        self.assertEqual([(v[1],v[2]) for v in Handler.calls],[('/api/v1/playback/seek',{'position':10.0})])
+        self.assertTrue(c.ab_active)
+        self.assertIsNone(c.ab_tick(st(19999)));self.assertEqual(c.ab_tick(st(20000)),10000)
+        self.assertIsNone(c.ab_tick({'id':'song-1','position':25000,'rate':0}))
+        # a new track clears the markers; the mode stays
+        c.snapshot();self.assertTrue(c.ab_active)
+        self.assertEqual(c._mode5(*c.real,'other'),4)
+        self.assertFalse(c.ab_active)
+        c.control('ab-mark',1000);c.control('ab-mark',3000);c.control('ab-mark',0);self.assertFalse(c.ab_active)
+        # leaving A-B, or the user touching Cider, drops it
+        c.control('ab-mark',1000);c.control('repeat5',1);self.assertEqual(c.snapshot()['repeat5'],1)
+        with self.assertRaises(ValueError):c.control('ab-mark',1000)
+        c.control('repeat5',4);Handler.modes['shuffle']=1;self.assertEqual(c.snapshot()['repeat5'],1)
+    def test_cn_carries_repeat5_only_when_advertised(self):
+        for caps,count in ((b'cn18,modes5',19),(b'cn18',18)):
+            b=hrcider.Bridge(client=self.client(),cache=self.cache,fetch=self.fetch,volume=mock.Mock(read=mock.Mock(return_value=(42,False))))
+            b.start()
+            try:
+                end=time.monotonic()+4
+                while not b.available and time.monotonic()<end:time.sleep(.01)
+                b.command(b'ci\t1\t131072\t'+caps)
+                frames=[];end=time.monotonic()+4
+                while not any(p.startswith(b'CN\t') for k,p in frames) and time.monotonic()<end:
+                    b.poll(lambda *v:frames.append(v));time.sleep(.01)
+                fields=next(p for k,p in frames if p.startswith(b'CN\t')).split(b'\t')
+                self.assertEqual(len(fields),count)
+                if count==19:self.assertEqual(fields[18],b'0')
+            finally:
+                b.close();self.cache=hrcider.Cache(self.tmp.name)
+    def test_bridge_routes_shuffle_repeat_and_acks(self):
+        b=hrcider.Bridge(client=self.client(),cache=self.cache,fetch=self.fetch,volume=mock.Mock(read=mock.Mock(return_value=(42,False))))
+        b.start()
+        try:
+            end=time.monotonic()+4
+            while not b.available and time.monotonic()<end:time.sleep(.01)
+            b.command(b'ci\t1\t131072');gen=b.generation
+            b.command(f'cc\t{gen}\t4\tshuffle\t1'.encode());b.command(f'cc\t{gen}\t5\trepeat\t2'.encode());b.command(f'cc\t{gen}\t6\trepeat\t9'.encode())
+            frames=[];end=time.monotonic()+4
+            while sum(1 for k,p in frames if p.startswith(b'CK'))<3 and time.monotonic()<end:
+                b.poll(lambda *v:frames.append(v));time.sleep(.01)
+            acks={p.split(b'\t')[2]:p.split(b'\t')[3] for k,p in frames if p.startswith(b'CK')}
+            self.assertEqual(acks,{b'4':b'1',b'5':b'1',b'6':b'0'})
+            puts=[v[1:3] for v in Handler.calls if v[0]=='PUT']
+            self.assertIn(('/api/v2/playback/shuffle',{'enabled':True}),puts);self.assertIn(('/api/v2/playback/repeat',{'mode':'all'}),puts)
+        finally:
+            b.close();self.cache=hrcider.Cache(self.tmp.name)
     def test_single_item_kind_passes_through_to_rpc(self):
         self.client().control('play-item','song:song-2')
         self.assertEqual(Handler.calls[-1][2],{'href':'/v1/catalog/$STOREFRONT/songs/song-2'})

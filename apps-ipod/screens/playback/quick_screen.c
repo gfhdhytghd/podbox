@@ -25,6 +25,8 @@
 #include "draw/viewport.h"
 #include "audio.h"
 #include "quick_screen.h"
+#include "cider.h"
+#include "cider_controls.h"
 #include "speech/talk.h"
 #include "widgets/list.h"
 #include "widgets/option_select.h"
@@ -57,7 +59,21 @@ struct gui_quickscreen
     int button_enter;
     int result;
     int volume_item;     /* slot showing Volume, or QUICKSCREEN_ITEM_COUNT */
+    bool cider;          /* Left/Right are Cider's shuffle/repeat, not settings */
 };
+
+/* Cider mode shown in a slot of a Cider quick screen */
+static int cider_slot_mode(enum quickscreen_item i)
+{
+    return i == QUICKSCREEN_LEFT ? CIDER_MODE_SHUFFLE : CIDER_MODE_REPEAT;
+}
+
+static const char *quickscreen_title(struct gui_quickscreen *qs,
+                                     enum quickscreen_item i)
+{
+    return qs->cider ? cider_mode_title(cider_slot_mode(i))
+                     : P2STR(ID2P(qs->items[i]->lang_id));
+}
 
 /* The layout below never gives a viewport a negative width or height, nor
  * places one outside the UI viewport: a theme may shrink that to a few pixels
@@ -171,7 +187,7 @@ static void quickscreen_setup_viewports(struct gui_quickscreen *qs,
 
         if (qs->items[i] && (i == QUICKSCREEN_LEFT || i == QUICKSCREEN_RIGHT))
         {
-            const char *s = P2STR(ID2P(qs->items[i]->lang_id));
+            const char *s = quickscreen_title(qs, i);
             width = MAX(width, font_getstringsize(s, NULL, NULL, parent->font));
         }
     }
@@ -196,9 +212,15 @@ static void quickscreen_draw_item(struct gui_quickscreen *qs,
     unsigned const char *title, *value;
     int temp;
 
-    title = P2STR(ID2P(qs->items[i]->lang_id));
-    temp = option_value_as_int(qs->items[i]);
-    value = option_get_valuestring(qs->items[i], buf, MAX_PATH, temp);
+    title = quickscreen_title(qs, i);
+    if (qs->cider)
+        value = cider_mode_label(cider_slot_mode(i),
+                                 cider_mode_get(cider_slot_mode(i)));
+    else
+    {
+        temp = option_value_as_int(qs->items[i]);
+        value = option_get_valuestring(qs->items[i], buf, MAX_PATH, temp);
+    }
 
     if (single_line)
     {
@@ -342,9 +364,11 @@ static void quickscreen_draw_cb(unsigned short id, void *data, void *userdata)
         gui_quickscreen_draw((struct gui_quickscreen *)userdata, i);
 }
 
-static void talk_qs_option(const struct settings_list *opt, bool enqueue)
+static void talk_qs_option(struct gui_quickscreen *qs,
+                           enum quickscreen_item item, bool enqueue)
 {
-    if (!global_settings.talk_menu || !opt)
+    const struct settings_list *opt = qs->items[item];
+    if (!global_settings.talk_menu || !opt || qs->cider)
         return;
 
     if (enqueue)
@@ -390,8 +414,15 @@ static bool gui_quickscreen_do_button(struct gui_quickscreen * qs, int button,
     if (qs->items[item] == NULL)
         return false;
 
-    option_select_next_val(qs->items[item], previous, true);
-    talk_qs_option(qs->items[item], false);
+    if (qs->cider)
+    {
+        int mode = cider_slot_mode(item);
+        cider_mode_set(mode, cider_mode_step(mode, cider_mode_get(mode),
+                                             previous));
+    }
+    else
+        option_select_next_val(qs->items[item], previous, true);
+    talk_qs_option(qs, item, false);
     *item_out = item;
     return true;
 }
@@ -406,6 +437,10 @@ static int gui_syncquickscreen_run(struct gui_quickscreen * qs, int button_enter
      *  - an action taken while pressing the enter button,
      *    then release the enter button*/
     bool can_quit = false;
+    /* MENU leaves a screen whose top slot is empty. It is armed only once MENU
+     * has been seen up, so the long press that opened this screen (its
+     * repeats and release) cannot close it again. */
+    bool menu_armed = false;
 
     qs->button_enter = button_enter;
     qs->result = QUICKSCREEN_OK;
@@ -426,12 +461,12 @@ static int gui_syncquickscreen_run(struct gui_quickscreen * qs, int button_enter
        queued up, but can be interrupted as soon as a setting is
        changed. */
     cond_talk_ids(VOICE_QUICKSCREEN);
-    talk_qs_option(qs->items[QUICKSCREEN_TOP], true);
+    talk_qs_option(qs, QUICKSCREEN_TOP, true);
     if (qs->items[QUICKSCREEN_TOP] != qs->items[QUICKSCREEN_BOTTOM])
-        talk_qs_option(qs->items[QUICKSCREEN_BOTTOM], true);
-    talk_qs_option(qs->items[QUICKSCREEN_LEFT], true);
+        talk_qs_option(qs, QUICKSCREEN_BOTTOM, true);
+    talk_qs_option(qs, QUICKSCREEN_LEFT, true);
     if (qs->items[QUICKSCREEN_LEFT] != qs->items[QUICKSCREEN_RIGHT])
-        talk_qs_option(qs->items[QUICKSCREEN_RIGHT], true);
+        talk_qs_option(qs, QUICKSCREEN_RIGHT, true);
 
     while (true) {
         button = get_action(CONTEXT_QUICKSCREEN, HZ/5);
@@ -444,6 +479,15 @@ static int gui_syncquickscreen_run(struct gui_quickscreen * qs, int button_enter
             *usb = true;
             return qs->result | QUICKSCREEN_IN_USB;
         }
+#ifdef BUTTON_RC_MENU
+        if (!(button_status() & (BUTTON_MENU | BUTTON_RC_MENU)))
+#else
+        if (!(button_status() & BUTTON_MENU))
+#endif
+            menu_armed = true;
+        if (button == ACTION_QS_TOP && !qs->items[QUICKSCREEN_TOP] &&
+            menu_armed)
+            break;
         if (gui_quickscreen_do_button(qs, button, &changed))
         {
             qs->result |= QUICKSCREEN_CHANGED;
@@ -452,6 +496,9 @@ static int gui_syncquickscreen_run(struct gui_quickscreen * qs, int button_enter
         }
         else if (button == button_enter)
             can_quit = true;
+        else if (qs->cider && (button == ACTION_QS_VOLUP ||
+                               button == ACTION_QS_VOLDOWN))
+            cider_control("volume-step", button == ACTION_QS_VOLUP ? 1 : -1);
         else if (button == ACTION_QS_VOLUP || button == ACTION_QS_VOLDOWN)
         {
             adjust_volume(button == ACTION_QS_VOLUP ? 1 : -1);
@@ -469,7 +516,7 @@ static int gui_syncquickscreen_run(struct gui_quickscreen * qs, int button_enter
             if (qs->volume_item < QUICKSCREEN_ITEM_COUNT)
                 quickscreen_update(qs, qs->volume_item);
         }
-        else if (button == ACTION_STD_CONTEXT)
+        else if (button == ACTION_STD_CONTEXT && !qs->cider)
         {
             qs->result |= QUICKSCREEN_GOTO_SHORTCUTS_MENU;
             break;
@@ -502,6 +549,7 @@ int quick_screen_quick(int button_enter)
     int before[QUICKSCREEN_ITEM_COUNT];
     bool usb = false;
 
+    qs.cider = false;
     qs.volume_item = QUICKSCREEN_ITEM_COUNT;
 
     for (int i = 0; i < QUICKSCREEN_ITEM_COUNT; ++i)
@@ -533,6 +581,26 @@ int quick_screen_quick(int button_enter)
         return QUICKSCREEN_IN_USB;
     return ret & QUICKSCREEN_GOTO_SHORTCUTS_MENU ? QUICKSCREEN_GOTO_SHORTCUTS_MENU :
                                                    QUICKSCREEN_OK;
+}
+
+/* The same screen over Cider's shuffle (left) and repeat (right); top and
+ * bottom stay empty, since nothing else in Cider has a quick-screen meaning.
+ * Nothing here touches the local settings. */
+int quick_screen_cider(int button_enter)
+{
+    struct gui_quickscreen qs;
+    bool usb = false;
+
+    qs.cider = true;
+    qs.volume_item = QUICKSCREEN_ITEM_COUNT;
+    for (int i = 0; i < QUICKSCREEN_ITEM_COUNT; ++i)
+        qs.items[i] = NULL;
+    /* Presence markers only; titles and values come from Cider. */
+    qs.items[QUICKSCREEN_LEFT] = find_setting(&global_settings.playlist_shuffle);
+    qs.items[QUICKSCREEN_RIGHT] = find_setting(&global_settings.repeat_mode);
+
+    gui_syncquickscreen_run(&qs, button_enter, &usb);
+    return usb ? QUICKSCREEN_IN_USB : QUICKSCREEN_OK;
 }
 
 /* stuff to make the quickscreen configurable */

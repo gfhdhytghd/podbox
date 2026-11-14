@@ -44,7 +44,8 @@ static void mutex_lock(int*p){(void)p;}static void mutex_unlock(int*p){(void)p;}
 static bool storage_disk_is_active(void){return disk_active;}
 static void queue_post(int*q,int n,int v){(void)q;(void)n;(void)v;posts++;}
 static void cider_log(const char*f,...){(void)f;}
-static unsigned int cider_library_next(char*r,unsigned int n,uint32_t g){(void)r;(void)n;(void)g;return 0;}
+static bool library_pending;
+static unsigned int cider_library_next(char*r,unsigned int n,uint32_t g){if(!library_pending)return 0;library_pending=false;return snprintf(r,n,"cq\t%u\t99\thome\t0\t10",g);}
 static unsigned int art_revision;
 '''
 post=r'''
@@ -119,6 +120,34 @@ int main(void){
  cache.slot[0].dirty=false;background_start();assert(transfer.active&&transfer.fill&&!strcmp(transfer.tier,"XS"));
  /* no offers: ask for more, at most every 4 s */
  transfer.active=false;noffers=0;want_ready=false;settle_tick(current_tick+5*HZ);background_start();assert(want_ready);
+ /* FU27: both capability sets, then controls ahead of store traffic. */
+ state.generation=0;hello_at=current_tick-3*HZ;
+ assert(next(out,sizeof out)&&!strcmp(out,"ci\t1\t131072\tcn18,neighbors,warm,play-ack,localstore,modes5"));
+ state.generation=7;pin_on=false;art_used_at=current_tick;noffers=0;
+ ncommands=3;
+ strcpy(commands[0],"cc\t7\t41\tnative-context\t2|album/a");
+ strcpy(commands[1],"cc\t7\t42\tnative-play\tplay/library-songs/s");
+ strcpy(commands[2],"cc\t7\t43\trepeat5\t4");
+ cancel_request=17;cancel_all=false;library_pending=true;grant=100;granted=0;
+ transfer.active=true;transfer.fill=false;transfer.request=44;transfer.received=0;
+ strcpy(transfer.key,A);strcpy(transfer.tier,"M");disk_lookup=false;request_ready=true;request_tries=0;hold_until=0;xs_count=0;
+ warm_ready=true;strcpy(warm_tier,"S");strcpy(warm_keys,B);
+ host_store=true;store.loaded=true;ls_due=true;list_ready=true;
+ strcpy(list_page,"lv\t7\t0\t32\t0");list_len=strlen(list_page);
+ nacks=1;strcpy(acks[0].key,C);acks[0].tier=CS_M;acks[0].crc=123;want_ready=true;
+ assert(next(out,sizeof out)&&strstr(out,"\tnative-context\t2|album/a"));
+ assert(next(out,sizeof out)&&strstr(out,"\tnative-play\tplay/library-songs/s"));
+ assert(next(out,sizeof out)&&strstr(out,"\trepeat5\t4"));
+ assert(next(out,sizeof out)&&!strcmp(out,"cx\t7\t17"));
+ assert(next(out,sizeof out)&&!strncmp(out,"cq\t",3));
+ assert(next(out,sizeof out)&&!strncmp(out,"cg\t",3));
+ assert(next(out,sizeof out)&&!strncmp(out,"cr\t7\t44\t",8)&&strstr(out,"\t3\t0"));
+ assert(next(out,sizeof out)&&!strncmp(out,"cw\t",3));
+ assert(next(out,sizeof out)&&!strncmp(out,"ls\t",3));
+ assert(next(out,sizeof out)&&!strncmp(out,"lv\t",3));
+ assert(next(out,sizeof out)&&!strncmp(out,"la\t",3));
+ assert(next(out,sizeof out)&&!strncmp(out,"lw\t",3));
+ assert(!next(out,sizeof out));
   puts("Production album pin + idle fill + store hold: pinned L survives scrolling, shared with Now Playing, visible covers preempt, fills gated PASS");}
 '''
 (O/'pin.c').write_text(pre+fn('valid_key')+fn('pin_apply')+fn('cider_unpin_art')+fn('cider_pin_art')+fn('tier_name')+fn('store_local')+fn('miss_note')+fn('fill_add')+fn('store_text')+fn('begin_transfer')+fn('background_start')+fn('hex8')+fn('store_record')+fn('next')+fn('cider_request_art')+post)
