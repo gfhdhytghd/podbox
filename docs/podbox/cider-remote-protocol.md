@@ -172,7 +172,7 @@ off to 300 seconds; an unsupported kind cannot starve the others. Link reads
 and sync/art workers share guarded SQLite access, with no HTTP under that lock.
 
 Player RAM: 512-KiB compact LRU arena with 24 descriptors; 115,212-byte assembly;
-115,212-byte disk I/O buffer; 115,200-byte screen bitmap; bounded commands and
+115,712-byte disk I/O buffer (FU25); 115,200-byte screen bitmap; bounded commands and
 worker stack. Module and combined compile-time assertions cap the FU23 Cider-owned
 static RAM at **1152 KiB**, including WPS data, three pages, list history/row
 art and the carousel provider. The native carousel reuses its existing app
@@ -181,17 +181,160 @@ buffer and renderer; the Cider provider does not claim another app buffer. None 
 Only complete validated bitmaps enter it. Generation changes retain those
 entries while invalidating assembly and requests.
 
-Optional persistent player art is capped at **32 MiB**. L/S/XS use
-`/.rockbox/cider-cache/`; ready M `.aat` files use
-`/.rockbox/library/cache/art/cider-v1/<art-id>-M.aat`. The separate `cider-v1`
-namespace cannot collide with local 32-bit album hashes. The local cache pass
-purges only its named size folders, not this namespace. A visible miss does
-one open/read on its worker, with no prior existence probe. Writes use temp +
-fsync + rename, in batches of at most four. They yield, defer during database
-work, park for USB storage handover, and never wake a sleeping disk solely for
-background writes/eviction. Eviction scans run only after writes, not every
-idle wake. Idle fill uses low-priority explicit M pulls and these same gates;
-step 1 exposes that transport class, not a whole-library device prefetch loop.
+Persistent player art lives in the **iPod-local store** (FU25), below.
+The FU23 per-cover files (`/.rockbox/cider-cache/`, `.../cider-v1/`) are no
+longer read or written; they can be deleted by hand and are never migrated.
+Local-library art caches are untouched.
+
+## iPod-local cover store (FU25)
+
+Goal: a cover the player has seen once, and in the background the whole
+library at the browse tiers, loads from the player's own disk through an O(1)
+hash index with no directory scan and no USB round trip. USB serves misses.
+
+### Files
+
+`/.rockbox/cider-art/` holds `index.cst` and `p00.pak` .. `p39.pak`.
+
+- **Pack** (`pNN.pak`, at most 32 MiB, append only): sector-aligned records. A
+  record is a 64-byte self-describing head (magic, per-session sequence, 32-byte
+  art-id, tier, length, payload CRC-32, session, head CRC) then the validated
+  `.aat` payload (the same `struct art_cache_header` format). L = 226 sectors,
+  M = 65, S = 13, XS = 5.
+- **Index** (`index.cst`): one header sector (magic, epoch, session counter, CRC)
+  and 4096 bucket sectors (2 MiB). A bucket holds 24 entries of 20 bytes: first
+  8 bytes of the art-id, tier, payload CRC (the host's content version), pack,
+  sector, last-use stamp. A lookup hashes (art-id, tier) to a bucket and reads
+  **one sector**; a full bucket sets an overflow flag and the search continues
+  in at most three following buckets, then the least recently used entry of the
+  home bucket is replaced. 98,304 slots; 49,152 entries maximum (50% load).
+- **Why an on-disk table plus a RAM filter** and not a resident index: a
+  resident entry needs at least 12 bytes; 1 GiB of M covers is about 32,000
+  entries, so a full index is 380 KiB against 80 KiB of headroom in the
+  1152 KiB Cider cap. The RAM part is a 32 KiB Bloom filter (3 hashes, 2.4% false
+  positives at 30,000 entries, 8% at the 49,152 maximum). It answers "could the
+  store hold this" without touching the disk. A false positive costs one sector
+  read (and, when the disk is asleep, one spin-up that a visible cover waits
+  for anyway); a false negative cannot happen after load.
+
+### Durability
+
+Every read verifies head CRC, key, tier, length and payload CRC; the index is a
+cache of the packs. A record is appended and fsynced before its bucket is
+updated, so a power cut leaves either a durable record without an index entry
+(an orphan, reclaimed with its pack) or an entry whose record fails
+verification (dropped on first read). Each bucket carries a CRC. A missing or
+corrupt header, a wrong-size index, or one torn bucket recreates the table and
+rebuilds it from the packs (records ordered by session/sequence, newest wins),
+in bounded background steps, serving misses over USB meanwhile. A torn pack
+tail is never appended behind. Load never panics: an unusable directory simply
+leaves the store off. USB storage handover: the worker syncs, closes and
+forgets the index before acknowledging `SYS_USB_CONNECTED`, and reloads lazily
+afterwards, so files copied during Disk Mode are seen.
+
+### Capacity and eviction
+
+Default cap **1 GiB** of pack bytes (`CIDER_STORE_CAP`). Entries carry a
+per-session use stamp (updated at most once per session, on a hit). When a put
+would exceed the cap, the entry maximum or the pack count, the pack whose
+newest stamp is oldest is evicted through the index (scrub in 64 KiB table
+steps, then the file is deleted); the cover waits dirty in the RAM arena and is
+written afterwards. Compaction (copy live records of a pack that is under 30%
+live, then delete it) runs one bounded step at a time, only while the disk
+spins and the UI has been idle for 5 seconds.
+
+### Lookup policy
+
+1. RAM arena (level 1, unchanged).
+2. `cs_maybe()` (RAM only). Miss: the USB `cr` goes out at once, as before.
+3. Hit: the worker reads the record (one table sector, one record read) and
+   fills the arena; the USB request is **held** for `HOLD_ACTIVE` = 1 s when
+   the disk spins and `HOLD_ASLEEP` = 2.5 s when it must spin up, then raced
+   (whichever finishes first wins; a USB request that already left is
+   cancelled on a local hit).
+4. The visible window and neighbours (`cider_warm_art`, XS batches) that the
+   filter says are local are removed from the `cw`/`cb` host requests and are
+   read by the same worker pass, so they share one spin-up. A failed read is not
+   retried for 30 seconds.
+
+Only complete USB covers are written back, in batches of at most six, and
+only while `storage_disk_is_active()` and the UI is idle: **a sleeping disk is
+never woken for a background write, fill or maintenance step.** The store is
+loaded when the disk already spins or when a visible lookup needs it. Apple
+tokens and decoded audio never enter the store.
+
+### Album track list: pinned L cover
+
+Opening an album's track list from any entry (Albums list, Album Covers,
+Artists, search, genre...) calls `cider_pin_art(art-id)`. The L (240x240) cover
+is wanted at once: local store hit, else `cr` over USB and then written to the
+store. It ranks **above idle fills and below visible list covers**: a visible
+cover request replaces the transfer, and the pin restarts after 5 seconds
+without one. The cached slot is **pinned in the RAM arena** and is never
+evicted while the track list is open, however far the list scrolls. Leaving the
+list (or showing another route) calls `cider_unpin_art()`. Now Playing asks for
+the same art-id with `cider_request_art(id, "L")`, finds the pinned copy and
+starts no transfer.
+
+### Negotiation
+
+The player advertises `localstore` in `ci`. The host answers with
+`CF<TAB>gen<TAB>localstore` only if it supports the feature. Without `CF` the
+player sends none of `ls`, `la`, `lw`, `lv` and ignores `CO`/`CQ`; the store
+still serves local hits. A host without the feature never receives them; old
+firmware never advertises it, so the host sends no `CF`, `CO` or `CQ`.
+
+| Player -> host | Meaning |
+| --- | --- |
+| `ls gen epoch count digest used-kib cap-kib` | Store summary after load and after eviction/compaction. `digest` is the 32-bit sum over entries of CRC-32(key8 + tier byte + CRC LE); tier byte L=0, M=1, S=2, XS=3 |
+| `lv gen cursor next count` + `count` rows | One inventory page (16 rows). Row: 16 hex key prefix, tier digit, 8 hex CRC, newline. `next` below or equal to `cursor` is a failure; `next >= 131072` ends the list |
+| `la gen art-id tier crc` | The cover (and its CRC) is now in the store |
+| `lw gen n` | Idle player (disk spinning, UI idle, store has room) wants up to `n` offers; at most one per 4 s |
+
+| Host -> player | Meaning |
+| --- | --- |
+| `CF gen localstore` | Feature accepted |
+| `CQ gen cursor` | Send inventory page at `cursor` (bucket<<5 \| slot); served only while the disk spins |
+| `CO gen tier art-id,...` | Offer up to five covers of one tier. The player pulls them with a normal `cr` at **priority 4** (idle), one at a time |
+
+### Host ledger, diff and push
+
+`hrcider_store.py` keeps SQLite tables `ipod_art` (key prefix, tier, CRC) and
+`ipod_meta` (epoch). On each `ls` the ledger is compared with the player's
+(epoch, count, digest): equal means no listing; different means a paged `CQ`
+listing that replaces the ledger only if the finished listing matches the
+announced count and digest. Offers are made only against a verified ledger.
+Covers the player acknowledges (`la`) are added; evictions are discovered by
+the next `ls` mismatch.
+
+The planner (`Planner.next`) offers: **L** for now playing and the queue
+neighbours first, then **XS**, **M**, **S** for every artwork id in the indexed
+library (id order). A cover is offered when the ledger lacks it or holds a
+different CRC than the host's rendered file (changed render); a held cover the
+host never rendered is not downloaded just to compare. Offered covers are
+prepared by the existing prefetch workers so the player's pull is a cache read.
+Passes rescan after 60 seconds; an offer is not repeated for 60 seconds. The
+host never sends art unasked: the player pulls only while it wants to write.
+
+Player side, an offered fill is held in the arena marked `bg` (evicted first),
+written to the store by the worker, acknowledged, and dropped from the arena.
+Only one fill is in flight, and none starts while a cover is waiting to be
+written, the UI used art in the last 3 seconds, a user request, command or
+cancel is pending, the disk sleeps, or the store is full.
+
+### Budgets
+
+RAM (static, inside the 1152 KiB Cider cap, asserted at compile time): store
+state 34,308 bytes (32 KiB Bloom filter, 40 pack descriptors, one 512-byte
+bucket buffer), record buffer 115,712 bytes (was 115,212, now also the L record
+sector padding), inventory/offer/ack/fill tables about 2.6 KiB. The disk worker
+stack grew from 3 KiB to 6 KiB: its deepest own frames are 192 (worker) + 120
+(read_store or cs_maintain) + 96 (cs_get) + 72 (index_put) + 56 (find) bytes by
+`-fstack-usage`, plus the file system. The service-thread `next()` frame is
+136 bytes (was 56). Disk: 1 GiB default cap plus the 2 MiB index.
+
+Measured on the host (no device access): see the FU25 report for the host
+reference numbers. Spin-up and USB timings on the iPod are unverified.
 
 ## Native Cover Flow provider
 

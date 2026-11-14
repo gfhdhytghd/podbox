@@ -21,7 +21,7 @@ struct cider_slot
 {
     char key[65], tier[3];
     unsigned int offset, length, used;
-    bool dirty;
+    bool dirty, bg, pinned; /* bg: idle store fill, evicted first */
 };
 struct cider_cache
 {
@@ -34,7 +34,7 @@ struct cider_transfer
     unsigned char data[CIDER_ART_MAX];
     uint32_t request, generation, received, total, crc;
     char key[65], tier[3];
-    bool active;
+    bool active, fill; /* fill: host-offered store fill, idle priority */
 };
 int cider_state_apply(struct cider_state *s, const void *data,
                       unsigned int length, uint32_t tick);
@@ -44,6 +44,11 @@ uint32_t cider_position(const struct cider_state *s, uint32_t tick, int hz);
 int cider_cache_find(struct cider_cache *c, const char *key, const char *tier);
 bool cider_cache_put(struct cider_cache *c, const char *key, const char *tier,
                      const void *data, unsigned int length, bool dirty);
+/* Idle fills sort first for eviction; dropped once written to the store. */
+void cider_cache_demote(struct cider_cache *c, const char *key, const char *tier);
+void cider_cache_drop_bg(struct cider_cache *c, const char *key, const char *tier);
+/* A pinned slot is never evicted; one key at a time (NULL unpins all). */
+bool cider_cache_pin(struct cider_cache *c, const char *key, const char *tier);
 bool cider_art_valid(const void *data, unsigned int length, const char *tier);
 int cider_chunk(struct cider_transfer *t, const void *data,
                  unsigned int length);

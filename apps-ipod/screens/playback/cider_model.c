@@ -157,9 +157,44 @@ int cider_cache_find(struct cider_cache *c, const char *key, const char *tier)
             !strcmp(c->slot[i].tier, tier))
         {
             c->slot[i].used = ++c->clock;
+            c->slot[i].bg = false;
             return i;
         }
     return -1;
+}
+
+static int peek(struct cider_cache *c, const char *key, const char *tier)
+{
+    for (int i = 0; i < CIDER_SLOTS; i++)
+        if (c->slot[i].length && !strcmp(c->slot[i].key, key) &&
+            !strcmp(c->slot[i].tier, tier)) return i;
+    return -1;
+}
+
+void cider_cache_demote(struct cider_cache *c, const char *key, const char *tier)
+{
+    int i = peek(c, key, tier);
+    if (i >= 0) { c->slot[i].bg = true; c->slot[i].used = 0; }
+}
+
+static void remove_slot(struct cider_cache *c, int index);
+void cider_cache_drop_bg(struct cider_cache *c, const char *key, const char *tier)
+{
+    int i = peek(c, key, tier);
+    if (i >= 0 && c->slot[i].bg && !c->slot[i].pinned) remove_slot(c, i);
+}
+
+bool cider_cache_pin(struct cider_cache *c, const char *key, const char *tier)
+{
+    bool found = false;
+    for (int i = 0; i < CIDER_SLOTS; i++)
+    {
+        bool match = key && c->slot[i].length && !strcmp(c->slot[i].key, key) &&
+                     !strcmp(c->slot[i].tier, tier);
+        c->slot[i].pinned = match;
+        found |= match;
+    }
+    return found;
 }
 
 static void remove_slot(struct cider_cache *c, int index)
@@ -193,6 +228,7 @@ bool cider_cache_put(struct cider_cache *c, const char *key, const char *tier,
     if (!cider_art_valid(data, length, tier) || strlen(key) != 64)
         return false;
     int slot = cider_cache_find(c, key, tier);
+    bool was_pinned = slot >= 0 && c->slot[slot].pinned;
     if (slot >= 0) remove_slot(c, slot);
     for (;;)
     {
@@ -202,7 +238,7 @@ bool cider_cache_put(struct cider_cache *c, const char *key, const char *tier,
         if (slot >= 0 && c->bytes + length <= sizeof c->data) break;
         int oldest = -1;
         for (int i = 0; i < CIDER_SLOTS; i++)
-            if (c->slot[i].length && (oldest < 0 ||
+            if (c->slot[i].length && !c->slot[i].pinned && (oldest < 0 ||
                 c->slot[i].used < c->slot[oldest].used)) oldest = i;
         if (oldest < 0) return false;
         remove_slot(c, oldest);
@@ -210,7 +246,7 @@ bool cider_cache_put(struct cider_cache *c, const char *key, const char *tier,
     struct cider_slot *s = &c->slot[slot];
     copy(s->key, key, sizeof s->key); copy(s->tier, tier, sizeof s->tier);
     s->offset = c->bytes; s->length = length;
-    s->used = ++c->clock; s->dirty = dirty;
+    s->used = ++c->clock; s->dirty = dirty; s->pinned = was_pinned;
     memcpy(c->data + c->bytes, data, length); c->bytes += length;
     return true;
 }

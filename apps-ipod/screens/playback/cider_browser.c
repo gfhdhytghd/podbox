@@ -228,6 +228,7 @@ static void enter(const struct cider_row *r)
     snprintf(history[depth].route, sizeof history[depth].route, "%s", r->route);
     snprintf(history[depth].title, sizeof history[depth].title, "%s", r->title);
     history[depth].selected = 0;
+    history[depth].art[0] = 0;
     memset(&history[depth].header, 0, sizeof history[depth].header);
     if (r->kind == CIDER_ROW_ALBUM)
     {
@@ -241,6 +242,8 @@ static void enter(const struct cider_row *r)
         snprintf(history[depth].art, sizeof history[depth].art, "%s", r->art);
     }
     cider_cancel_art();
+    if (r->kind == CIDER_ROW_ALBUM)
+        cider_pin_art(r->art);
     cider_page_open(history[depth].route);
 }
 int cider_browse_covers(bool home)
@@ -333,6 +336,11 @@ int cider_browse(void)
         bool header = depth && !strncmp(history[depth].route, "album/", 6);
         if (header && count >= 0)
             history[depth].header.tracks = count;
+        /* The album's L cover stays resident while its track list is open. */
+        if (header && history[depth].art[0])
+            cider_pin_art(history[depth].art);
+        else
+            cider_unpin_art();
         browser_set_external_header(header ? &history[depth].header : NULL,
                                     header ? header_art : NULL);
         browser_set_showing_art(albums && global_settings.db_albumart);
@@ -507,6 +515,7 @@ int cider_browse(void)
         }
     }
     gui_synclist_scroll_stop(&list);
+    cider_unpin_art();
     browser_set_showing_art(false);
     browser_set_external_header(NULL, NULL);
     pop_current_activity();

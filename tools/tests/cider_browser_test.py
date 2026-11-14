@@ -63,6 +63,9 @@ static int cider_page_total(void){return 3;}
 static bool cider_page_stale(void){return false;}
 static bool cider_page_row(int i,struct cider_row*r){if(i<0||i>=3)return false;memset(r,0,sizeof*r);snprintf(r->title,sizeof r->title,"Album %d",i);if(!strncmp(route,"album/",6)||!strcmp(route,"random")){r->kind=CIDER_ROW_SONG;snprintf(r->route,sizeof r->route,"play/library-songs/s%d",i);}else{r->kind=CIDER_ROW_ALBUM;snprintf(r->route,sizeof r->route,"album/a%d",i);}return true;}
 static void cider_cancel_art(void){}
+static int pins;static bool pinned;
+static void cider_pin_art(const char*k){assert(strlen(k)==64);pins++;pinned=true;}
+static void cider_unpin_art(void){pinned=false;}
 static bool cider_copy_art(const char*k,const char*t,void*p,unsigned int n){(void)k;(void)t;(void)p;(void)n;return false;}
 static void cider_prefetch_art(const char*k,const char*t){(void)k;(void)t;}
 static void img_filter_apply(void*p,int w,int h,const void*f){(void)p;(void)w;(void)h;(void)f;}
@@ -92,7 +95,7 @@ int main(void){
 mode=0;depth=0;assert(cider_browse()==GO_TO_WPS&&plays==1&&!live&&depth==1);assert(root_count==5);assert(!strcmp(root_rows[3].route,"root/Album")&&!strcmp(root_rows[4].route,"root/Genre"));
 mode=1;assert(cider_browse()==GO_TO_PREVIOUS&&!live&&depth==0);
 depth=1;strcpy(history[1].route,"random");assert(cider_browse()==GO_TO_WPS&&depth==0&&!live);assert(cider_browse()==GO_TO_PREVIOUS&&!live);
-fail_play=true;depth=1;strcpy(history[1].route,"album/a0");mode=3;step=0;int raced=plays;assert(cider_browse()==GO_TO_PREVIOUS&&plays==raced&&!live);fail_play=false;
+fail_play=true;depth=1;strcpy(history[1].route,"album/a0");memset(history[1].art,'c',64);history[1].art[64]=0;pins=0;mode=3;step=0;int raced=plays;assert(cider_browse()==GO_TO_PREVIOUS&&plays==raced&&!live);assert(pins>0&&!pinned);fail_play=false;
 available=false;mode=2;step=0;int before=plays;cider_browse();assert(plays==before&&!live&&empty_list);available=true;
 for(int i=1;i<=2000;i++){rng=i;step=0;mode=2;cider_browse();assert(!live);}
 depth=0;mode=4;cider_browse_covers(true);assert(cider_browse()==GO_TO_WPS&&cider_browse_remote_return()&&!cider_browse_remote_return());

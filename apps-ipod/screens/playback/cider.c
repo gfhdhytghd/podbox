@@ -2,6 +2,7 @@
 #include "config.h"
 #include "screens/playback/cider.h"
 #include "screens/playback/cider_library.h"
+#include "screens/playback/cider_store.h"
 #include "audio.h"
 #include "podlink.h"
 #include "kernel.h"
@@ -19,9 +20,15 @@
 #include <stdlib.h>
 #include <stdarg.h>
 
-#define DISK_ROOT ROCKBOX_DIR "/cider-cache"
-#define M_ROOT ROCKBOX_DIR "/library/cache/art/cider-v1"
-#define DISK_LIMIT (32u * 1024u * 1024u)
+/* iPod-local art store: pack files + on-disk hash table (cider_store.c). The
+ * old per-cover files under cider-cache/ and cider-v1/ are ignored. */
+#define STORE_ROOT ROCKBOX_DIR "/cider-art"
+#ifndef CIDER_STORE_CAP
+#define CIDER_STORE_CAP CS_DEFAULT_CAP
+#endif
+/* How long a store hit holds back the USB request before racing it. */
+#define HOLD_ACTIVE (HZ)
+#define HOLD_ASLEEP (5 * HZ / 2)
 static struct mutex cider_mutex;
 static struct cider_state state;
 static struct cider_cache cache;
@@ -37,16 +44,36 @@ static long play_at, art_used_at;
 static char warm_keys[7 * 65], warm_tier[3];
 static bool warm_ready;
 static char commands[12][384];
+static struct cider_store store;
+static bool host_store, ls_due, want_ready, list_req, list_ready, pin_on;
+static long hold_until, want_at, pin_at;
+static uint32_t list_cursor;
+static unsigned int list_len, nfills, noffers, nacks;
+static char list_page[480], pin_key[65];
+static struct { char key[65]; unsigned char tier; } fills[8], offers[8];
+static struct { char key[65]; unsigned char tier; uint32_t crc; } acks[8];
+static struct { uint8_t key[32]; unsigned char tier; long until; } missed[8];
+static unsigned int miss_next;
+static struct { uint32_t epoch, count, digest, total; } snap;
+static struct cs_item list_items[16];
 static char xs_keys[5][65];
 static unsigned int xs_count;
 static unsigned int ncommands, art_revision;
-static unsigned char disk_data[CIDER_ART_MAX] CACHEALIGN_ATTR;
-static long disk_stack[DEFAULT_STACK_SIZE * 3 / sizeof(long)];
+static unsigned char disk_data[CS_REC_MAX] CACHEALIGN_ATTR;
+static long disk_stack[DEFAULT_STACK_SIZE * 6 / sizeof(long)];
 static struct event_queue disk_queue;
 _Static_assert(sizeof cache + sizeof transfer + sizeof disk_data +
                sizeof disk_stack + sizeof state + sizeof commands +
+               sizeof store + sizeof list_page + sizeof fills +
+               sizeof offers + sizeof acks + sizeof missed +
+               sizeof list_items +
                (120 + 112 + 56 + 36) * 1024 < 1152 * 1024,
                "Cider resident, WPS, pages, browser and carousel below 1152 KiB");
+
+static void pin_apply(void);
+static void store_text(const unsigned char *d, unsigned int n);
+static void background_start(void);
+static unsigned int store_record(char *record, unsigned int size);
 
 static void cider_log(const char *format, ...)
 {
@@ -87,6 +114,8 @@ static void reset(void)
     ncommands = grant = granted = cancel_request = 0;
     xs_count = 0; cancel_all = false;
     warm_keys[0] = 0; warm_ready = false;
+    host_store = want_ready = list_req = list_ready = false;
+    nfills = noffers = nacks = 0; hold_until = 0;
     hello_at = current_tick - 2 * HZ;
     mutex_unlock(&cider_mutex);
 }
@@ -98,7 +127,9 @@ static bool receive(const struct podlink_message *m)
     bool text = m->type == PODLINK_TEXT && m->length >= 3 &&
         (!memcmp(m->data, "CA\t", 3) || !memcmp(m->data, "CN\t", 3) ||
          !memcmp(m->data, "CK\t", 3) || !memcmp(m->data, "CL\t", 3) ||
-         !memcmp(m->data, "CG\t", 3) || !memcmp(m->data, "CP\t", 3));
+         !memcmp(m->data, "CG\t", 3) || !memcmp(m->data, "CP\t", 3) ||
+         !memcmp(m->data, "CF\t", 3) || !memcmp(m->data, "CO\t", 3) ||
+         !memcmp(m->data, "CQ\t", 3));
     if (!binary && !text) return false;
     mutex_lock(&cider_mutex);
     if (binary && !state.generation &&
@@ -151,6 +182,9 @@ static bool receive(const struct podlink_message *m)
                     disk_lookup = false;
                     cider_cache_put(&cache, transfer.key, transfer.tier,
                                     transfer.data, transfer.total, true);
+                    if (transfer.fill)
+                        cider_cache_demote(&cache, transfer.key, transfer.tier);
+                    pin_apply();
                     cider_log("CIDER art done tick=%ld req=%lu bytes=%lu",
                                current_tick, (unsigned long)transfer.request,
                                (unsigned long)transfer.total);
@@ -186,6 +220,10 @@ static bool receive(const struct podlink_message *m)
             }
         }
     }
+    else if (text && (!memcmp(m->data, "CF\t", 3) ||
+                      !memcmp(m->data, "CO\t", 3) ||
+                      !memcmp(m->data, "CQ\t", 3)))
+        store_text(m->data, m->length);
     else
     {
         uint32_t previous = state.generation;
@@ -229,11 +267,11 @@ static unsigned int next(char *record, unsigned int size)
     {
         if (TIME_AFTER(current_tick, hello_at + 2 * HZ))
         {
-            n = snprintf(record, size, "ci\t1\t%d\tcn18,neighbors,warm,play-ack", CIDER_CREDIT);
+            n = snprintf(record, size, "ci\t1\t%d\tcn18,neighbors,warm,play-ack,localstore", CIDER_CREDIT);
             hello_at = current_tick;
         }
     }
-    else if (ncommands)
+    else if (background_start(), ncommands)
     {
         n = snprintf(record, size, "%s", commands[0]);
         memmove(commands[0], commands[1], --ncommands * sizeof commands[0]);
@@ -260,7 +298,8 @@ static unsigned int next(char *record, unsigned int size)
         granted += grant; grant = 0;
     }
     else if (transfer.active &&
-             (request_ready ||
+             !(disk_lookup && TIME_BEFORE(current_tick, hold_until)) &&
+             (request_ready || (hold_until && disk_lookup) ||
               TIME_AFTER(current_tick, request_at + 3 * HZ)))
     {
         if (request_tries++ < 3)
@@ -276,14 +315,16 @@ static unsigned int next(char *record, unsigned int size)
             }
             else
                 n = snprintf(record, size,
-                             "cr\t%lu\t%lu\t%s\t%s\t%lu\t3\t0",
+                             "cr\t%lu\t%lu\t%s\t%s\t%lu\t%d\t0",
                              (unsigned long)state.generation,
                              (unsigned long)transfer.request, transfer.key,
-                             transfer.tier, (unsigned long)transfer.received);
+                             transfer.tier, (unsigned long)transfer.received,
+                             transfer.fill ? 4 : 3);
             cider_log("CIDER request tick=%ld req=%lu off=%lu",
                        current_tick, (unsigned long)transfer.request,
                        (unsigned long)transfer.received);
             request_ready = false; request_at = current_tick;
+            hold_until = 0;
         }
         else
         {
@@ -297,140 +338,427 @@ static unsigned int next(char *record, unsigned int size)
                      (unsigned long)state.generation, warm_tier, warm_keys);
         warm_ready = false;
     }
+    if (!n && state.generation) n = store_record(record, size);
     mutex_unlock(&cider_mutex);
     return n < size ? n : 0;
 }
 
-static void path_for(char *path, unsigned int size, const char *key,
-                     const char *tier, bool temporary)
+/* ---- iPod-local store plumbing. Callers hold cider_mutex unless noted. ---- */
+
+static int io_open(const char *path, int mode)
 {
-    snprintf(path, size, "%s/%s-%s.aat%s",
-             !strcmp(tier, "M") ? M_ROOT : DISK_ROOT, key, tier,
-             temporary ? ".tmp" : "");
+    return open(path, mode == CS_O_READ ? O_RDONLY : O_RDWR | O_CREAT, 0666);
+}
+static int io_read(int fd, void *buf, unsigned int n) { return read(fd, buf, n); }
+static int io_write(int fd, const void *buf, unsigned int n) { return write(fd, buf, n); }
+static int io_seek(int fd, uint32_t offset) { return lseek(fd, offset, SEEK_SET) < 0 ? -1 : 0; }
+static int io_sync(int fd) { return fsync(fd); }
+static int io_close(int fd) { return close(fd); }
+static int io_remove(const char *path) { return remove(path); }
+static int io_fsize(const char *path)
+{
+    int fd = open(path, O_RDONLY), n = -1;
+    if (fd >= 0) { n = ffilesize(fd); close(fd); }
+    return n;
+}
+static void io_mkdir(const char *path) { mkdir(ROCKBOX_DIR); mkdir(path); }
+static void io_yield(void) { yield(); }
+static const struct cs_io store_io = {io_open, io_read, io_write, io_seek,
+    io_sync, io_close, io_remove, io_fsize, io_mkdir, io_yield};
+
+/* RAM-only: could the local store hold it? Recent failed reads are skipped. */
+static bool store_local(const char *key, const char *tier)
+{
+    uint8_t kb[32];
+    int t = cs_tier(tier);
+    if (!disk_running || t < 0 || !cs_key_from_hex(key, kb) ||
+        !cs_maybe(&store, kb, t)) return false;
+    for (unsigned int i = 0; i < ARRAYLEN(missed); i++)
+        if (missed[i].until && missed[i].tier == t &&
+            !memcmp(missed[i].key, kb, 32) &&
+            TIME_BEFORE(current_tick, missed[i].until)) return false;
+    return true;
+}
+static void miss_note(const char *key, const char *tier)
+{
+    uint8_t kb[32];
+    int t = cs_tier(tier);
+    if (t < 0 || !cs_key_from_hex(key, kb)) return;
+    memcpy(missed[miss_next].key, kb, 32);
+    missed[miss_next].tier = t;
+    missed[miss_next].until = current_tick + 30 * HZ;
+    miss_next = (miss_next + 1) % ARRAYLEN(missed);
+}
+static void fill_add(const char *key, const char *tier)
+{
+    if (nfills >= ARRAYLEN(fills) || cider_cache_find(&cache, key, tier) >= 0)
+        return;
+    for (unsigned int i = 0; i < nfills; i++)
+        if (!strcmp(fills[i].key, key) && fills[i].tier == cs_tier(tier)) return;
+    snprintf(fills[nfills].key, sizeof fills[0].key, "%s", key);
+    fills[nfills++].tier = cs_tier(tier);
+    queue_post(&disk_queue, 1, 0);
+}
+static const char *tier_name(unsigned int t)
+{
+    static const char *const names[] = {"L", "M", "S", "XS"};
+    return names[t & 3];
 }
 
-/* Evict oldest on-disk entries in closed-directory batches. Cider's
- * namespace is outside the local-library pass's three size folders. */
-static void disk_evict(void)
+/* The album track list pins its L cover: never evicted while pinned. */
+static void pin_apply(void)
 {
-    for (;;)
+    if (pin_on) cider_cache_pin(&cache, pin_key, "L");
+}
+
+static void store_text(const unsigned char *d, unsigned int n)
+{
+    if (d[1] == 'F')
     {
-        if (tagcache_is_busy() || !queue_empty(&disk_queue)) break;
-        uint64_t bytes = 0;
-        time_t oldest = 0;
-        char victim[MAX_PATH] = "";
-        const char *roots[] = {DISK_ROOT, M_ROOT};
-        for (int i = 0; i < 2; i++)
+        char want[48];
+        int len = snprintf(want, sizeof want, "CF\t%lu\tlocalstore",
+                           (unsigned long)state.generation);
+        if (len > 0 && n == (unsigned int)len && !memcmp(d, want, n))
+        { host_store = true; ls_due = true; }
+    }
+    else if (d[1] == 'Q' && host_store)
+    {
+        uint32_t cursor;
+        if (cs_parse_cursor((const char *)d, n, state.generation, &cursor) == 0)
+        { list_req = true; list_cursor = cursor; queue_post(&disk_queue, 1, 0); }
+    }
+    else if (d[1] == 'O' && host_store)
+    {
+        static uint8_t keys[5][32];
+        int tier, count = cs_parse_offer((const char *)d, n, state.generation,
+                                         &tier, keys, 5);
+        for (int i = 0; i < count && noffers < ARRAYLEN(offers); i++)
         {
-            DIR *dir = opendir(roots[i]);
-            if (!dir) continue;
-            struct dirent *entry;
-            while ((entry = readdir(dir)))
-            {
-                if (entry->d_name[0] == '.') continue;
-                struct dirinfo info = dir_get_info(dir, entry);
-                if (info.attribute & ATTR_DIRECTORY) continue;
-                bytes += info.size;
-                if (!victim[0] || info.mtime < oldest)
-                {
-                    oldest = info.mtime;
-                    snprintf(victim, sizeof victim, "%s/%s",
-                             roots[i], entry->d_name);
-                }
-            }
-            closedir(dir);
+            char hex[65];
+            cs_key_to_hex(keys[i], hex);
+            bool dup = false;
+            for (unsigned int j = 0; j < noffers; j++)
+                dup |= offers[j].tier == tier && !strcmp(offers[j].key, hex);
+            if (dup) continue;
+            memcpy(offers[noffers].key, hex, sizeof hex);
+            offers[noffers++].tier = tier;
         }
-        if (bytes <= DISK_LIMIT || !victim[0]) break;
-        if (remove(victim) < 0) break;
+    }
+}
+
+static void begin_transfer(const char *key, const char *tier, bool fill)
+{
+    if (transfer.active)
+    {
+        cancel_all |= cancel_request != 0;
+        cancel_request = transfer.request;
+    }
+    xs_count = 0;
+    if (!fill) art_used_at = current_tick;
+    memset(&transfer, 0, sizeof transfer);
+    transfer.active = true; transfer.generation = state.generation;
+    transfer.request = ++next_request; transfer.fill = fill;
+    snprintf(transfer.key, sizeof transfer.key, "%s", key);
+    snprintf(transfer.tier, sizeof transfer.tier, "%s", tier);
+    /* A local hit holds the USB request back; a miss goes out at once. */
+    bool local = !fill && store_local(key, tier);
+    disk_lookup = local;
+    request_ready = !local; request_tries = 0; request_at = current_tick;
+    hold_until = local ? current_tick +
+        (storage_disk_is_active() ? HOLD_ACTIVE : HOLD_ASLEEP) : 0;
+    if (!granted) grant = CIDER_CREDIT;
+    if (disk_running) queue_post(&disk_queue, 1, 0);
+}
+
+/* Idle-time work, started from next(): the pinned L cover first (above idle
+ * fill, below any visible cover, which replaces the transfer), then fills the
+ * host offered. Fills run only while the disk already spins and the UI idles;
+ * nothing here wakes a sleeping disk. */
+static void background_start(void)
+{
+    if (!state.generation || transfer.active || ncommands || cancel_request ||
+        cancel_all || xs_count) return;
+    if (pin_on)
+    {
+        int i = cider_cache_find(&cache, pin_key, "L");
+        if (i >= 0) pin_apply();
+        else if (TIME_AFTER(current_tick, pin_at + 5 * HZ))
+        {
+            pin_at = current_tick;
+            begin_transfer(pin_key, "L", false);
+            return;
+        }
+    }
+    if (!host_store || !store.loaded || cs_busy(&store) ||
+        !storage_disk_is_active() ||
+        TIME_BEFORE(current_tick, art_used_at + 3 * HZ) ||
+        store.total + CS_REC_MAX > store.cap) return;
+    for (int i = 0; i < CIDER_SLOTS; i++)
+        if (cache.slot[i].length && cache.slot[i].dirty && cache.slot[i].bg)
+            return;                            /* previous fill not written */
+    if (noffers)
+    {
+        char key[65];
+        unsigned int tier = offers[0].tier;
+        snprintf(key, sizeof key, "%s", offers[0].key);
+        memmove(&offers[0], &offers[1], --noffers * sizeof offers[0]);
+        if (cider_cache_find(&cache, key, tier_name(tier)) < 0)
+            begin_transfer(key, tier_name(tier), true);
+    }
+    else if (noffers < 2 && TIME_AFTER(current_tick, want_at + 4 * HZ))
+        want_ready = true;
+}
+
+static unsigned int hex8(char *out, const uint8_t *p, unsigned int n)
+{
+    for (unsigned int i = 0; i < n; i++)
+    {
+        out[i * 2] = "0123456789abcdef"[p[i] >> 4];
+        out[i * 2 + 1] = "0123456789abcdef"[p[i] & 15];
+    }
+    return n * 2;
+}
+
+/* Store protocol records, lowest priority. See cider-remote-protocol.md. */
+static unsigned int store_record(char *record, unsigned int size)
+{
+    unsigned long gen = state.generation;
+    if (!host_store) return 0;
+    if (ls_due && store.loaded)
+    {
+        ls_due = false;
+        return snprintf(record, size, "ls\t%lu\t%lu\t%lu\t%lu\t%lu\t%lu", gen,
+                        (unsigned long)snap.epoch, (unsigned long)snap.count,
+                        (unsigned long)snap.digest,
+                        (unsigned long)(snap.total >> 10),
+                        (unsigned long)(store.cap >> 10));
+    }
+    if (list_ready && list_len < size)
+    {
+        memcpy(record, list_page, list_len);
+        list_ready = false;
+        return list_len;
+    }
+    if (nacks)
+    {
+        unsigned int n = snprintf(record, size, "la\t%lu\t%s\t%s\t%lu", gen,
+                                  acks[0].key, tier_name(acks[0].tier),
+                                  (unsigned long)acks[0].crc);
+        memmove(&acks[0], &acks[1], --nacks * sizeof acks[0]);
+        return n;
+    }
+    if (want_ready)
+    {
+        want_ready = false; want_at = current_tick;
+        return snprintf(record, size, "lw\t%lu\t%u", gen,
+                        (unsigned int)(ARRAYLEN(offers) - noffers));
+    }
+    return 0;
+}
+
+/* ---- worker (single owner of the store) ---- */
+
+static void snap_store(void)
+{
+    mutex_lock(&cider_mutex);
+    snap.epoch = store.epoch; snap.count = store.count;
+    snap.digest = store.digest; snap.total = store.total;
+    ls_due = true;
+    mutex_unlock(&cider_mutex);
+}
+
+static void build_list(void)
+{
+    uint32_t cursor;
+    unsigned int n = 0, len;
+    mutex_lock(&cider_mutex);
+    cursor = list_cursor;
+    mutex_unlock(&cider_mutex);
+    int next = cs_list(&store, cursor, list_items, ARRAYLEN(list_items), &n,
+                       disk_data, sizeof disk_data);
+    mutex_lock(&cider_mutex);
+    if (next < 0 || (uint32_t)next <= cursor) { next = 0; n = 0; }
+    len = snprintf(list_page, sizeof list_page, "lv\t%lu\t%lu\t%lu\t%u\n",
+                   (unsigned long)state.generation, (unsigned long)cursor,
+                   (unsigned long)next, n);
+    for (unsigned int i = 0; i < n && len + 28 < sizeof list_page; i++)
+    {
+        len += hex8(list_page + len, list_items[i].key, 8);
+        list_page[len++] = '0' + list_items[i].tier;
+        uint8_t c[4] = {list_items[i].crc >> 24, list_items[i].crc >> 16,
+                        list_items[i].crc >> 8, list_items[i].crc};
+        len += hex8(list_page + len, c, 4);
+        list_page[len++] = '\n';
+    }
+    list_len = len; list_ready = true; list_req = false;
+    mutex_unlock(&cider_mutex);
+}
+
+/* Store -> arena: one hit ends the USB wait for the transfer's cover. */
+static bool read_store(const char *key, const char *tier, bool transfer_job,
+                       uint32_t req)
+{
+    uint8_t kb[32];
+    const uint8_t *payload = NULL;
+    unsigned int length = 0;
+    int t = cs_tier(tier);
+    int r = t < 0 || !cs_key_from_hex(key, kb) ? CS_BAD :
+            cs_get(&store, kb, t, disk_data, sizeof disk_data, &payload, &length);
+    mutex_lock(&cider_mutex);
+    bool ok = r == CS_OK && cider_cache_put(&cache, key, tier, payload, length, false);
+    if (ok) { art_revision++; pin_apply(); }
+    else miss_note(key, tier);
+    if (transfer_job && transfer.active && transfer.request == req && disk_lookup)
+    {
+        if (ok)
+        {
+            if (request_tries) cancel_request = transfer.request;
+            transfer.active = false;
+        }
+        else if (!request_tries) request_ready = true;
+        disk_lookup = false;
+    }
+    mutex_unlock(&cider_mutex);
+    return ok;
+}
+
+/* Dirty arena covers -> store, a few per wake. Returns true when a started
+ * eviction means the rest must retry. Callers check the disk already spins. */
+static bool store_write_batch(void)
+{
+    char key[65], tier[3];
+    bool more = false;
+    for (int batch = 0; batch < 6; batch++)
+    {
+        unsigned int length = 0;
+        bool bg = false;
+        mutex_lock(&cider_mutex);
+        for (int i = 0; i < CIDER_SLOTS; i++)
+            if (cache.slot[i].length && cache.slot[i].dirty)
+            {
+                struct cider_slot *s = &cache.slot[i];
+                length = s->length; bg = s->bg;
+                memcpy(disk_data + CS_REC_HEAD, cache.data + s->offset, length);
+                snprintf(key, sizeof key, "%s", s->key);
+                snprintf(tier, sizeof tier, "%s", s->tier);
+                s->dirty = false;
+                break;
+            }
+        mutex_unlock(&cider_mutex);
+        if (length && (tagcache_is_busy() || !queue_empty(&disk_queue)))
+        {   /* the UI or the database needs the disk: write it next time */
+            mutex_lock(&cider_mutex);
+            int i = cider_cache_find(&cache, key, tier);
+            if (i >= 0) { cache.slot[i].dirty = true; cache.slot[i].bg = bg; }
+            mutex_unlock(&cider_mutex);
+            break;
+        }
+        if (!length) break;
+        uint8_t kb[32];
+        uint32_t crc = 0;
+        int t = cs_tier(tier);
+        int r = t < 0 || !cs_key_from_hex(key, kb) ? CS_BAD :
+                cs_put(&store, kb, t, disk_data + CS_REC_HEAD, length,
+                       disk_data, sizeof disk_data, &crc);
+        mutex_lock(&cider_mutex);
+        if (r == CS_OK || r == CS_DUP)
+        {
+            if (host_store && nacks < ARRAYLEN(acks))
+            {
+                snprintf(acks[nacks].key, sizeof acks[0].key, "%s", key);
+                acks[nacks].tier = t; acks[nacks++].crc = crc;
+            }
+            if (bg) cider_cache_drop_bg(&cache, key, tier);
+        }
+        else if (r == CS_BUSY && cs_busy(&store))
+        {   /* eviction started: keep the cover, retry after it */
+            int i = cider_cache_find(&cache, key, tier);
+            if (i >= 0) { cache.slot[i].dirty = true; cache.slot[i].bg = bg; }
+            more = true;
+            mutex_unlock(&cider_mutex);
+            break;
+        }
+        else if (bg) cider_cache_drop_bg(&cache, key, tier);
+        mutex_unlock(&cider_mutex);
+        if (r == CS_OK) snap_store();
         yield();
     }
+    return more;
 }
 
 static void disk_worker(void)
 {
-    long evict_at = current_tick;
+    bool more = false, was_busy = false;
+    long load_at = current_tick - 30 * HZ;
     for (;;)
     {
         struct queue_event ev;
-        queue_wait_w_tmo(&disk_queue, &ev, HZ);
+        queue_wait_w_tmo(&disk_queue, &ev, more ? HZ / 20 : HZ);
         if (ev.id == SYS_USB_CONNECTED)
         {
+            cs_unload(&store);            /* sync, close, forget the index */
+            mutex_lock(&cider_mutex);
+            list_req = list_ready = false;
+            mutex_unlock(&cider_mutex);
             usb_acknowledge(SYS_USB_CONNECTED_ACK, ev.data);
             do { queue_wait(&disk_queue, &ev); }
             while (ev.id != SYS_USB_DISCONNECTED);
             continue;
         }
         if (tagcache_is_busy()) continue;
-        char key[65], tier[3], path[MAX_PATH], temp[MAX_PATH];
+        bool active = storage_disk_is_active();
+        char key[65], tier[3];
         bool lookup;
         uint32_t req;
         mutex_lock(&cider_mutex);
-        lookup = disk_lookup; req = transfer.request;
+        lookup = transfer.active && disk_lookup; req = transfer.request;
         snprintf(key, sizeof key, "%s", transfer.key);
         snprintf(tier, sizeof tier, "%s", transfer.tier);
+        bool wanted = lookup || nfills;
         mutex_unlock(&cider_mutex);
-        if (lookup)
+        /* Load when the disk already spins, or when the user's browsing
+         * needs it (that spin-up is theirs, not a background wake). */
+        if (!store.loaded && (active || wanted) &&
+            TIME_AFTER(current_tick, load_at + 30 * HZ))
         {
-            path_for(path, sizeof path, key, tier, false);
-            int fd = open(path, O_RDONLY);
-            int length = -1;
-            if (fd >= 0)
-            {
-                int size = ffilesize(fd);
-                if (size > 0 && (unsigned int)size <= sizeof disk_data)
-                    length = read(fd, disk_data, size);
-                close(fd);
-            }
+            load_at = current_tick;
+            if (cs_load(&store, disk_data, sizeof disk_data,
+                        (uint32_t)current_tick * 2654435761u + 0x5bd1e995u)
+                == CS_OK) snap_store();
+        }
+        if (lookup) read_store(key, tier, true, req);
+        /* Visible window and neighbours share one spin-up. */
+        for (int n = 0; n < 6; n++)
+        {
             mutex_lock(&cider_mutex);
-            if (transfer.active && transfer.request == req && disk_lookup)
+            bool have = nfills > 0;
+            if (have)
             {
-                if (length > 0 && cider_cache_put(&cache, key, tier,
-                            disk_data, length, false))
-                {
-                    cancel_request = transfer.request;
-                    transfer.active = false; art_revision++;
-                }
-                else if (!request_tries) request_ready = true;
-                disk_lookup = false;
+                snprintf(key, sizeof key, "%s", fills[0].key);
+                snprintf(tier, sizeof tier, "%s", tier_name(fills[0].tier));
+                memmove(&fills[0], &fills[1], --nfills * sizeof fills[0]);
             }
             mutex_unlock(&cider_mutex);
+            if (!have) break;
+            read_store(key, tier, false, 0);
         }
         mutex_lock(&cider_mutex);
         bool busy = transfer.active || TIME_BEFORE(current_tick, art_used_at + HZ);
+        bool answer = list_req && !list_ready;
         mutex_unlock(&cider_mutex);
-        if (!storage_disk_is_active() || busy) continue;
-        /* Four writes amortize a wake; none wakes a sleeping disk. */
-        bool wrote = false;
-        for (int batch = 0; batch < 4; batch++)
+        active = storage_disk_is_active();
+        if (answer && active && store.loaded) build_list();
+        more = false;
+        if (active && !busy && store.loaded)
         {
-            unsigned int length = 0;
-            mutex_lock(&cider_mutex);
-            for (int i = 0; i < CIDER_SLOTS; i++)
-                if (cache.slot[i].length && cache.slot[i].dirty)
-                {
-                    struct cider_slot *s = &cache.slot[i];
-                    length = s->length;
-                    memcpy(disk_data, cache.data + s->offset, length);
-                    snprintf(key, sizeof key, "%s", s->key);
-                    snprintf(tier, sizeof tier, "%s", s->tier);
-                    s->dirty = false;
-                    break;
-                }
-            mutex_unlock(&cider_mutex);
-            if (!length || tagcache_is_busy() ||
-                !queue_empty(&disk_queue)) break;
-            mkdir(DISK_ROOT); mkdir(M_ROOT);
-            path_for(path, sizeof path, key, tier, false);
-            path_for(temp, sizeof temp, key, tier, true);
-            int fd = open(temp, O_WRONLY | O_CREAT | O_TRUNC, 0666);
-            bool ok = fd >= 0 && write(fd, disk_data, length) == (int)length;
-            if (fd >= 0) { fsync(fd); close(fd); }
-            if (ok) wrote |= rename(temp, path) == 0;
-            else remove(temp);
-            yield();
+            more = store_write_batch();
+            bool idle = TIME_AFTER(current_tick, art_used_at + 5 * HZ);
+            if (!queue_empty(&disk_queue)) continue;
+            more |= cs_maintain(&store, disk_data, sizeof disk_data, idle);
+            if (was_busy && !cs_busy(&store)) snap_store();
+            was_busy = cs_busy(&store);
         }
-        if (wrote && TIME_AFTER(current_tick, evict_at + 60 * HZ))
-        { disk_evict(); evict_at = current_tick; }
+        if (!more && queue_empty(&disk_queue)) cs_release(&store);
     }
 }
 
@@ -440,6 +768,7 @@ void cider_init(void)
     if (initialized) return;
     mutex_init(&cider_mutex);
     queue_init(&disk_queue, true);
+    cs_init(&store, &store_io, STORE_ROOT, CIDER_STORE_CAP);
     initialized = true;
     reset();
     podlink_set_resident(&consumer);
@@ -506,24 +835,28 @@ void cider_request_art(const char *key, const char *tier)
     mutex_lock(&cider_mutex);
     if (cider_cache_find(&cache, key, tier) < 0 &&
         (!transfer.active || strcmp(transfer.key, key) ||
-         strcmp(transfer.tier, tier)))
+         strcmp(transfer.tier, tier) || transfer.fill))
+        begin_transfer(key, tier, false);
+    mutex_unlock(&cider_mutex);
+}
+void cider_unpin_art(void)
+{
+    mutex_lock(&cider_mutex);
+    pin_on = false;
+    cider_cache_pin(&cache, NULL, "L");
+    mutex_unlock(&cider_mutex);
+}
+/* Album track list: keep that album's L cover resident (local store hit,
+ * else USB + store write). Visible list covers replace the transfer first. */
+void cider_pin_art(const char *key)
+{
+    if (!valid_key(key)) { cider_unpin_art(); return; }
+    mutex_lock(&cider_mutex);
+    if (!pin_on || strcmp(pin_key, key))
     {
-        if (transfer.active)
-    {
-        cancel_all |= cancel_request != 0;
-        cancel_request = transfer.request;
-    }
-        xs_count = 0;
-        art_used_at = current_tick;
-        memset(&transfer, 0, sizeof transfer);
-        transfer.active = true; transfer.generation = state.generation;
-        transfer.request = ++next_request;
-        snprintf(transfer.key, sizeof transfer.key, "%s", key);
-        snprintf(transfer.tier, sizeof transfer.tier, "%s", tier);
-        disk_lookup = disk_running && storage_disk_is_active();
-        request_ready = true; request_tries = 0;
-        if (!granted) grant = CIDER_CREDIT;
-        if (disk_running) queue_post(&disk_queue, 1, 0);
+        snprintf(pin_key, sizeof pin_key, "%s", key);
+        pin_on = true; pin_at = current_tick - 10 * HZ;
+        pin_apply();
     }
     mutex_unlock(&cider_mutex);
 }
@@ -553,7 +886,10 @@ void cider_request_xs(const char *const *keys, unsigned int count)
     xs_count = 0;
     for (unsigned int i = 0; i < count; i++)
         if (cider_cache_find(&cache, keys[i], "XS") < 0)
-            snprintf(xs_keys[xs_count++], sizeof xs_keys[0], "%s", keys[i]);
+        {
+            if (store_local(keys[i], "XS")) fill_add(keys[i], "XS");
+            else snprintf(xs_keys[xs_count++], sizeof xs_keys[0], "%s", keys[i]);
+        }
     if (xs_count)
     {
         if (transfer.active)
@@ -567,6 +903,7 @@ void cider_request_xs(const char *const *keys, unsigned int count)
         snprintf(transfer.key, sizeof transfer.key, "%s", xs_keys[0]);
         strcpy(transfer.tier, "XS");
         disk_lookup = false; request_ready = true; request_tries = 0;
+        hold_until = 0; request_at = current_tick;
         if (!granted) grant = CIDER_CREDIT;
     }
     mutex_unlock(&cider_mutex);
@@ -690,6 +1027,7 @@ void cider_warm_art(const char *const *keys, unsigned int count,
     for (unsigned int i = 0; i < count; i++)
     {
         if (!valid_key(keys[i])) continue;
+        if (store_local(keys[i], tier)) { fill_add(keys[i], tier); continue; }
         n += snprintf(joined + n, sizeof joined - n, "%s%s", n ? "," : "", keys[i]);
     }
     if (strcmp(joined, warm_keys) || strcmp(tier, warm_tier))

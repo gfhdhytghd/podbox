@@ -18,6 +18,7 @@ import zlib
 from hrcider_cache import Cache, Index, art_id, canonical_art_url
 from hrcider_volume import SystemVolume
 from hrcider_library import Library
+from hrcider_store import Ledger, Planner, offer_records, parse_rows
 
 log = logging.getLogger('herdremote.cider')
 SIZES = {'L':240,'M':128,'S':56,'XS':32}
@@ -270,6 +271,7 @@ class Bridge:
         self.prefetch=queue.Queue(10)
         self.warm_window=set();self.warm_queue=set();self.warm_jobs={};self.neighbors=None
         self.capabilities=frozenset()
+        self.ledger=Ledger(self.cache);self.planner=Planner(self.cache,self.ledger);self.offer_pairs=set()
     def start(self):
         for target,name in [(self._prefetch_worker,'cider-prefetch-'+str(i)) for i in range(4)]+[(self._poll,'cider-state'),(self._work,'cider-art'),(self._control,'cider-control'),(self._index,'cider-index'),(self._pages,'cider-pages'),(self._neighbors,'cider-neighbors')]:
             t=threading.Thread(target=target,name=name,daemon=True);t.start();self.threads.append(t)
@@ -280,21 +282,25 @@ class Bridge:
     def disconnect(self):
         with self.lock:
             self.warm_window.clear();self.warm_queue.clear();self.neighbors=None;self.capabilities=frozenset()
-            self.warm_jobs.clear()
+            self.warm_jobs.clear();self.offer_pairs.clear();self.ledger.pending=None;self.ledger.synced=False;self.planner.reset()
             self.opened=False;self.generation=0;self.requests.clear();self._drop_jobs();self.scheduler.reset(0);self.volume_delta=0
     def command(self,payload):
         try:
             fields=payload.decode().split('\t');name=fields[0]
-            if name not in ('ci','cg','cr','cx','cc','cp','ct','cb','cq','cw'):return False
+            if name not in ('ci','cg','cr','cx','cc','cp','ct','cb','cq','cw','ls','la','lw','lv'):return False
+            if name=='lv':fields=payload.decode().split('\n',1)[0].split('\t')
             with self.lock:
                 if name=='ci':
                     if len(fields) not in (3,4) or fields[1]!='1':raise ValueError('Cider protocol')
                     advertised=fields[3].split(',') if len(fields)==4 else []
                     if len(advertised)>8 or any(not re.fullmatch('[a-z0-9-]{1,24}',c) for c in advertised):raise ValueError('Invalid Cider capabilities')
-                    self.capabilities=frozenset(advertised)&{'cn18','neighbors','warm','play-ack'}
+                    self.capabilities=frozenset(advertised)&{'cn18','neighbors','warm','play-ack','localstore'}
                     window=int(fields[2]);self.volume_delta=0;self.generation=secrets.randbelow(0xfffffffe)+1;self.scheduler.reset(self.generation,window)
                     self.warm_window.clear();self.warm_queue.clear();self.warm_jobs.clear();self.neighbors=None
+                    self.offer_pairs.clear();self.ledger.pending=None;self.ledger.synced=False;self.planner.reset()
                     self.requests.clear();self._drop_jobs();self.opened=True;self.library_sent=0;self.last_state=0;self._state(True)
+                    # The store protocol is opt-in on both sides: no CF, no ls/lw/la/lv.
+                    if 'localstore' in self.capabilities:self.scheduler.push(1,2,f'CF\t{self.generation}\tlocalstore'.encode())
                     return True
                 if len(fields)<2 or int(fields[1])!=self.generation:return True
                 if name=='cg' and len(fields)==3:self.scheduler.grant(int(fields[2]))
@@ -341,11 +347,42 @@ class Bridge:
                     if tier not in SIZES or len(keys)>7 or any(not re.fullmatch('[0-9a-f]{64}',k) for k in keys):
                         raise ValueError('Invalid visible art window')
                     self.warm_window={(key,tier) for key in keys};self._schedule_warm()
+                elif name in ('ls','la','lw','lv'):self._store_command(name,fields,payload)
                 elif name=='ct':self.index.request()
             return True
         except (ValueError,UnicodeError,queue.Full):
             log.warning('Invalid or full Cider request')
             return True
+    def _store_command(self,name,fields,payload):
+        # Caller holds self.lock and has matched the session generation.
+        if 'localstore' not in self.capabilities:raise ValueError('Unadvertised local store')
+        gen=self.generation
+        if name=='ls' and len(fields)==7:
+            epoch,count,digest=int(fields[2]),int(fields[3]),int(fields[4])
+            if not self.ledger.status(epoch,count,digest):
+                self.scheduler.push(4,2,f'CQ\t{gen}\t0'.encode())
+            else:self.planner.reset()
+        elif name=='lv' and len(fields)==5:
+            cursor,nxt,count=int(fields[2]),int(fields[3]),int(fields[4])
+            rows=parse_rows(payload.decode().split('\n',1)[1] if b'\n' in payload else '')
+            if len(rows)!=count:raise ValueError('Inventory row count')
+            again=self.ledger.page(cursor,nxt,rows)
+            if again is not None:self.scheduler.push(4,2,f'CQ\t{gen}\t{again}'.encode())
+            else:self.planner.reset()
+        elif name=='la' and len(fields)==5:
+            key,tier,crc=fields[2],fields[3],int(fields[4])
+            if not re.fullmatch('[0-9a-f]{64}',key) or tier not in SIZES or not 0<=crc<=0xffffffff:raise ValueError('Invalid store ack')
+            self.ledger.ack(key,tier,crc);self.offer_pairs.discard((key,tier))
+        elif name=='lw' and len(fields)==3:
+            n=max(0,min(5,int(fields[2])))
+            if not n or not self.ledger.synced:return        # never offer against an unverified inventory
+            urgent=[]
+            if self.state and self.state.get('art') not in (None,'-'):urgent.append(self.state['art'])
+            if self.neighbors:urgent.extend(k for k in self.neighbors[2:] if k!='-')
+            pairs=self.planner.next(n,urgent)
+            for record in offer_records(gen,pairs):self.scheduler.push(4,2,record)
+            self.offer_pairs=set(pairs)|set(list(self.offer_pairs)[-8:])
+            self._schedule_warm()
     def _drop_jobs(self,request=None):
         with self.jobs.mutex:
             self.jobs.queue=[v for v in self.jobs.queue if request is not None and v[4]!=request]
@@ -467,7 +504,7 @@ class Bridge:
         result=render(raw,tier);self.cache.put_art(key,tier,result)
         return result
     def _schedule_warm(self):
-        desired=self.warm_window|self.warm_queue
+        desired=self.warm_window|self.warm_queue|self.offer_pairs
         while True:
             try:
                 generation,pair=self.prefetch.get_nowait()
@@ -487,10 +524,10 @@ class Bridge:
     def _warm(self,generation,pair):
         key,tier=pair
         with self.lock:
-            if generation!=self.generation or not self.opened or pair not in self.warm_window|self.warm_queue:return
+            if generation!=self.generation or not self.opened or pair not in self.warm_window|self.warm_queue|self.offer_pairs:return
         try:
             with self.lock:
-                if generation!=self.generation or pair not in self.warm_window|self.warm_queue:return
+                if generation!=self.generation or pair not in self.warm_window|self.warm_queue|self.offer_pairs:return
             self.artwork(key,tier)
         except (OSError,ValueError,TimeoutError):
             with self.lock:

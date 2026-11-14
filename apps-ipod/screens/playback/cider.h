@@ -16,6 +16,8 @@ void cider_prefetch_art(const char *key, const char *tier);
 void cider_warm_art(const char *const *keys, unsigned int count, const char *tier);
 void cider_request_art(const char *key, const char *tier);
 void cider_cancel_art(void);
+void cider_pin_art(const char *key);
+void cider_unpin_art(void);
 void cider_retain_art(const char *const *keys, unsigned int count,
                       const char *tier);
 unsigned int cider_art_revision(void);

@@ -155,6 +155,7 @@ screens/system/podlink_screen.c
 screens/system/agents_screen.c
 screens/playback/cider.c
 screens/playback/cider_model.c
+screens/playback/cider_store.c
 screens/playback/cider_library.c
 screens/playback/cider_browser.c
 screens/playback/cider_wps.c

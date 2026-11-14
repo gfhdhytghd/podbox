@@ -29,6 +29,9 @@ static bool disk_lookup,request_ready;
 static void mutex_lock(int*m){(void)m;}
 static void mutex_unlock(int*m){(void)m;}
 static void cider_log(const char*fmt,...){(void)fmt;}
+static int pin_calls,store_texts;
+static void pin_apply(void){pin_calls++;}
+static void store_text(const unsigned char*d,unsigned int n){(void)d;(void)n;store_texts++;}
 '''
 post=r'''
 static unsigned char art[32780],packet[12288];
@@ -39,7 +42,7 @@ const char*ca="CA\t7\t1\t";message=(struct podlink_message){.type=PODLINK_TEXT,.
 put32(art,8u<<16|0x5441);put32(art+4,128u<<16|128);put32(art+8,1);
 transfer.active=true;transfer.generation=7;transfer.request=1;strcpy(transfer.tier,"M");memset(transfer.key,'a',64);transfer.key[64]=0;granted=CIDER_CREDIT;
 for(unsigned int offset=0;offset<sizeof art;){unsigned int count=sizeof art-offset;if(count>12260)count=12260;memcpy(packet,"CAR1",4);put32(packet+4,7);put32(packet+8,1);put32(packet+12,offset);put32(packet+16,sizeof art);put32(packet+20,podlink_crc32(art,sizeof art));put32(packet+24,podlink_crc32(art+offset,count));memcpy(packet+28,art+offset,count);message=(struct podlink_message){.type=PODLINK_BINARY,.data=packet,.length=count+28};assert(receive(&message));assert(grant+granted==CIDER_CREDIT);offset+=count;}
-assert(!transfer.active&&cider_cache_find(&cache,transfer.key,"M")>=0);
+assert(!transfer.active&&cider_cache_find(&cache,transfer.key,"M")>=0&&pin_calls>0);
 unsigned int prior=granted;put32(packet+4,8);assert(receive(&message)&&granted==prior);
 state.generation=0;put32(packet+4,7);assert(receive(&message));put32(packet+4,99);assert(!receive(&message));
 message=(struct podlink_message){.type=PODLINK_TEXT,.data=(const unsigned char*)"echo",.length=4};assert(!receive(&message));
@@ -50,6 +53,8 @@ assert(receive(&message)&&play_reply==1);
 play_reply=0;ack="CK\t7\t124\t1\tOK";message.data=(const unsigned char*)ack;message.length=strlen(ack);assert(receive(&message)&&!play_reply);
 ack="CK\t7\t123\t0\tFailed";message.data=(const unsigned char*)ack;message.length=strlen(ack);assert(receive(&message)&&play_reply==-1);
 const char*neighbors="CP\t7\tsong\t-\t-";strcpy(state.id,"song");message.data=(const unsigned char*)neighbors;message.length=strlen(neighbors);assert(receive(&message)&&!state.previous_art[0]&&!state.next_art[0]);
+const char*offer="CO\t7\tM\taaaa";message.data=(const unsigned char*)offer;message.length=strlen(offer);assert(receive(&message)&&store_texts==1);
+const char*feat="CF\t7\tlocalstore";message.data=(const unsigned char*)feat;message.length=strlen(feat);assert(receive(&message)&&store_texts==2);feat="CQ\t7\t0";message.data=(const unsigned char*)feat;message.length=strlen(feat);assert(receive(&message)&&store_texts==3);
 puts("Production resident receiver: legacy raw passthrough, state negotiation, whole-cover CRC/cache, exact credit refund, stale-generation drop PASS");}
 '''
 (O/'receive.c').write_text(pre+fn('u32')+fn('receive')+post)

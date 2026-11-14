@@ -9,6 +9,7 @@ import os
 import sqlite3
 import threading
 import time
+import zlib
 from hrcider_featured import featured_guests
 
 SCHEMA = 4
@@ -53,6 +54,7 @@ class Cache:
                 CREATE INDEX IF NOT EXISTS catalog_id ON catalog(id);
                 CREATE TABLE IF NOT EXISTS art (key TEXT, tier TEXT, path TEXT,
                 bytes INTEGER, touched REAL, PRIMARY KEY(key,tier));
+                CREATE TABLE IF NOT EXISTS art_crc (key TEXT, tier TEXT, crc INTEGER, PRIMARY KEY(key,tier));
                 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value INTEGER);
                 INSERT OR IGNORE INTO settings VALUES ('generation',1);''')
             if version == 3:self._canonicalize_art_keys()
@@ -190,6 +192,22 @@ class Cache:
             self.touches[(key,tier)] = time.time()
             return raw
 
+    def art_crc(self, key, tier):
+        """CRC-32 of the rendered native payload the iPod store keeps, or None if not rendered."""
+        with self.lock:
+            row=self.db.execute('SELECT crc FROM art_crc WHERE key=? AND tier=?',(key,tier)).fetchone()
+            if row:return row[0]
+            raw=self.get_art(key,tier)
+            if raw is None:return None
+            crc=zlib.crc32(raw)
+            with self.db:self.db.execute('INSERT OR REPLACE INTO art_crc VALUES (?,?,?)',(key,tier,crc))
+            return crc
+
+    def library_arts(self, after='', limit=64):
+        """Distinct artwork ids of the indexed library, in id order, after `after`."""
+        with self.lock:
+            return [r[0] for r in self.db.execute("SELECT DISTINCT art FROM items WHERE art<>'-' AND art>? ORDER BY art LIMIT ?",(after,limit))]
+
     def put_art(self, key, tier, raw):
         if len(key) != 64 or any(c not in '0123456789abcdef' for c in key) or tier not in ('original','L','M','S','XS'):
             raise ValueError('Invalid art key')
@@ -211,7 +229,9 @@ class Cache:
                 os.fsync(out.fileno())
             os.replace(tmp,self.root/name)
             self.touches.pop((key,tier),None)
-            with self.db:self.db.execute('INSERT OR REPLACE INTO art VALUES (?,?,?,?,?)', (key,tier,name,len(raw),time.time()))
+            with self.db:
+                self.db.execute('INSERT OR REPLACE INTO art VALUES (?,?,?,?,?)', (key,tier,name,len(raw),time.time()))
+                if tier!='original':self.db.execute('INSERT OR REPLACE INTO art_crc VALUES (?,?,?)',(key,tier,zlib.crc32(raw)))
             if self.db.execute('SELECT COALESCE(SUM(bytes),0) FROM art').fetchone()[0] > self.art_limit:
                 self.evict()
 
@@ -225,6 +245,7 @@ class Cache:
                 if used > self.art_limit:
                     (self.root/path).unlink(missing_ok=True)
                     self.db.execute('DELETE FROM art WHERE key=? AND tier=?', (key,tier))
+            self.db.execute('DELETE FROM art_crc WHERE NOT EXISTS (SELECT 1 FROM art WHERE art.key=art_crc.key AND art.tier=art_crc.tier)')
             # A rename before its SQLite transaction can leave an orphan after a crash.
             known = {r[0] for r in self.db.execute('SELECT path FROM art')}
             for p in self.root.iterdir():
