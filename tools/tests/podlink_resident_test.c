@@ -48,11 +48,21 @@ static void work(void)
             input_frame(PODLINK_PONG,m.seq,m.data,m.length);
     }
 }
+static int resident_seen, resident_resets;
+static bool dedicated_art(const struct podlink_message *m)
+{
+    if (m->type == PODLINK_BINARY && m->length >= 4 &&
+        !memcmp(m->data, "CAR1", 4)) { resident_seen++; return true; }
+    return false;
+}
+static void resident_reset(void) { resident_resets++; }
+
 int main(void)
 {
     assert(!podlink_host_connected());
     usb_serial_init();podlink_init();lease=true;service_step();
     assert(!podlink_host_connected());
+    work();
     insert();work();assert(!podlink_host_connected());
     handshake(PODLINK_MAX_MESSAGE,1);work();assert(podlink_host_connected());
     /* The input callback must not try either mutex, even if the worker or
@@ -197,9 +207,25 @@ int main(void)
     bool greeting_after_pressure=false;
     while(podlink_poll(&m))if(m.type==PODLINK_TEXT&&m.length>=3&&!memcmp(m.data,"HR\t",3))greeting_after_pressure=true;
     assert(greeting_after_pressure);podlink_close();work();
+    /* Dedicated bulk bypasses both foreground byte and frame limits. */
+    static const struct podlink_resident consumer = {
+        dedicated_art, NULL, resident_reset};
+    podlink_set_resident(&consumer);
+    assert(podlink_open_agents(background));
+    while(podlink_poll(&m)){}
+    before_pressure=podlink_generation();
+    unsigned char art_frame[4096]={0};memcpy(art_frame,"CAR1",4);
+    for(int i=0;i<80;i++)
+    {input_frame(PODLINK_BINARY,1000+i,art_frame,sizeof art_frame);work();}
+    assert(resident_seen==80 && !used && !byte_used);
+    puts("PASS: 80 dedicated art frames / 327680 bytes bypass the foreground inbox");
+    assert(podlink_generation()==before_pressure);
+    podlink_close();work();
     /* Disconnect/reset invalidates the snapshot before a worker poll. */
     assert(podlink_host_connected());remove_usb();
+    work();assert(resident_resets>0);
     assert(!podlink_host_connected());
+    work();
     insert();assert(!podlink_host_connected());
     work();assert(!podlink_host_connected());
     lease=false;assert(!podlink_host_connected());

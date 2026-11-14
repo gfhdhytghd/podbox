@@ -39,6 +39,7 @@ import hrusagekeys  # noqa: E402
 import hrsession  # noqa: E402
 import hrappserver  # noqa: E402
 import hrremotelog  # noqa: E402
+import hrcider  # noqa: E402
 
 VERSION = "herdremote-1"
 DEVICE = dict(vid=0x05AC, pid=0x1261, manufacturer="PodBox",
@@ -196,6 +197,7 @@ class Daemon:
         self.next_refresh = 0.0
         self.sessions = hrsession.Sessions()
         self.appserver = hrappserver.Reader()
+        self.cider = None
         self.remote_log = hrremotelog.Writer()
         self.reset_session()
 
@@ -464,6 +466,8 @@ class Daemon:
         return True
 
     def close_link(self):
+        if self.cider is not None:
+            self.cider.disconnect()
         self.reset_session()
         if self.link and self.link.opened:
             try:
@@ -565,6 +569,11 @@ class Daemon:
 
     def command(self, payload):
         if self.remote_log.submit(payload):
+            return
+        if payload.startswith(b"ci\t1\t") and self.cider is None:
+            self.cider = hrcider.Bridge()
+            self.cider.start()
+        if self.cider is not None and self.cider.command(payload):
             return
         parsed = hrproto.parse_command(payload)
         if not parsed:
@@ -718,6 +727,8 @@ class Daemon:
         finally:
             self.stopping.set()
             self.remote_log.close()
+            if self.cider is not None:
+                self.cider.close()
             self.usage_keys.close()
             self.keys.reset()
             self.voice.stop()
@@ -750,6 +761,8 @@ class Daemon:
                 self.flush_replies()
                 self.pump_reads()
                 self.push()
+                if self.cider is not None:
+                    self.cider.poll(self.link.send)
             except podlink.LinkClosed as error:
                 log.info("PodLink closed (%s): %s", error.code, error.reason)
                 self.link.opened = False

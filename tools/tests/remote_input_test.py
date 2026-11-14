@@ -453,6 +453,9 @@ navpre='''
 #define GO_TO_PLUGIN 1
 #define GO_TO_PLAYLIST_VIEWER 2
 #define GO_TO_WPS 3
+#define GO_TO_CIDER 89
+static bool cider_available(void){return false;}
+static int __attribute__((unused)) cider_screen(void){return GO_TO_WPS;}
 #define GO_TO_ALBUM_COVERS 14
 #define GO_TO_PREVIOUS_MUSIC 4
 #define GO_TO_AGENTS 5
@@ -494,6 +497,12 @@ subprocess.run([str(O/'navigation')],check=True)
 # raw-screen replay without replacing the production input decision.
 action_source=(R/'apps-ipod/input/action.c').read_text()
 hookpre='''
+static bool cider_active(void){return false;}
+#ifndef ACTION_WPS_VOLUP
+#define ACTION_WPS_VOLUP 901
+#define ACTION_WPS_VOLDOWN 902
+#endif
+
 #define ACTION_NONE 0
 #define ACTION_REDRAW 1
 #define ACTION_AGENTS_SWITCH 400

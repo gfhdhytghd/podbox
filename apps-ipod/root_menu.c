@@ -22,6 +22,7 @@
 #include "root_menu.h"
 #ifdef HAVE_USB_PODLINK
 #include "screens/system/agents_screen.h"
+#include "screens/playback/cider.h"
 #endif
 #include "lang.h"
 #include "rbpaths.h"
@@ -1018,6 +1019,12 @@ static int settings_scrn(void * param)
 }
 
 #ifdef HAVE_USB_PODLINK
+static int cider_scrn(void *param)
+{
+    (void)param;
+    return cider_screen();
+}
+
 static int agents_scrn(void *param)
 {
     (void)param;
@@ -1031,7 +1038,8 @@ static int agents_scrn(void *param)
     }
     wps_return_agents = ret == AGENTS_SWITCH_WPS || ret == AGENTS_SWITCH_REMOTE_WPS;
     wps_menu_covers = ret == AGENTS_SWITCH_REMOTE_WPS;
-    return wps_return_agents ? GO_TO_WPS : GO_TO_PREVIOUS;
+    return wps_return_agents ?
+           (cider_available() ? GO_TO_CIDER : GO_TO_WPS) : GO_TO_PREVIOUS;
 }
 
 /* One controller, with no recursive controller/screen entry. While a
@@ -1046,17 +1054,18 @@ static void run_screen_shortcut(int screen)
         button_set_sw_poweroff_state(poweroff);
         if (screen == GO_TO_ALBUM_COVERS) cover_nav_begin(GO_TO_PREVIOUS);
         agents_nav_take(screen == GO_TO_AGENTS ? AGENTS_NAV_AGENTS :
-                        screen == GO_TO_WPS ? AGENTS_NAV_WPS :
+                        (screen == GO_TO_WPS || screen == GO_TO_CIDER) ? AGENTS_NAV_WPS :
                         screen == GO_TO_ALBUM_COVERS_TRACKS ? AGENTS_NAV_TRACKS : AGENTS_NAV_COVERS);
         int ret = screen == GO_TO_AGENTS ? agents_scrn(NULL) :
                   screen == GO_TO_WPS ? wpsscrn(NULL) :
+                  screen == GO_TO_CIDER ? cider_screen() :
                   screen == GO_TO_ALBUM_COVERS_TRACKS ? cover_tracks_scrn((void *)GO_TO_ALBUM_COVERS_TRACKS) :
                   album_covers_scrn(NULL);
         enum agents_nav_screen nav = agents_nav_pending();
         if (nav != AGENTS_NAV_NONE && nav != AGENTS_NAV_BACK)
             ret = nav == AGENTS_NAV_AGENTS ? GO_TO_AGENTS :
                   nav == AGENTS_NAV_WPS ? GO_TO_WPS : GO_TO_ALBUM_COVERS;
-        if (ret != GO_TO_AGENTS && ret != GO_TO_WPS &&
+        if (ret != GO_TO_AGENTS && ret != GO_TO_WPS && ret != GO_TO_CIDER &&
             ret != GO_TO_ALBUM_COVERS && ret != GO_TO_ALBUM_COVERS_TRACKS)
             break;
         screen = ret;
@@ -1078,7 +1087,7 @@ void root_menu_wps_shortcut(void)
     if (agents_nav_pending() == AGENTS_NAV_NONE)
         agents_nav_request(AGENTS_NAV_WPS, false);
     wps_return_agents = wps_menu_covers = false;
-    run_screen_shortcut(GO_TO_WPS);
+    run_screen_shortcut(cider_available() ? GO_TO_CIDER : GO_TO_WPS);
 }
 
 void root_menu_cover_shortcut(void)
@@ -1095,6 +1104,7 @@ static const struct root_items items[] = {
     [GO_TO_DBBROWSER] =     { browser, (void*)GO_TO_DBBROWSER, &tagcache_menu },
 #ifdef HAVE_USB_PODLINK
     [GO_TO_AGENTS] = { agents_scrn, NULL, NULL },
+    [GO_TO_CIDER] = { cider_scrn, NULL, NULL },
 #endif
     [GO_TO_WPS] =           { wpsscrn, NULL, &playback_settings },
     [GO_TO_MAINMENU] =      { settings_scrn, NULL, &manage_settings },
@@ -2077,7 +2087,8 @@ static inline int load_screen(int screen)
 
 #ifdef HAVE_USB_PODLINK
     if (screen == GO_TO_AGENTS) agents_nav_take(AGENTS_NAV_AGENTS);
-    else if (screen == GO_TO_WPS) agents_nav_take(AGENTS_NAV_WPS);
+    else if (screen == GO_TO_WPS || screen == GO_TO_CIDER)
+        agents_nav_take(AGENTS_NAV_WPS);
     else if (screen == GO_TO_ALBUM_COVERS) agents_nav_take(AGENTS_NAV_COVERS);
 #endif
     if (screen == GO_TO_ALBUM_COVERS) cover_nav_begin(old_previous);

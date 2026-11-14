@@ -92,6 +92,9 @@ nav=r'''
 #define AGENTS_SWITCH_REMOTE_WPS 4
 #define GO_TO_PREVIOUS -1
 #define GO_TO_WPS 10
+#define GO_TO_CIDER 89
+static bool cider_available(void){return false;}
+static int __attribute__((unused)) cider_screen(void){return GO_TO_WPS;}
 #define GO_TO_ALBUM_COVERS 14
 #define GO_TO_AGENTS 11
 #define GO_TO_ROOT 12

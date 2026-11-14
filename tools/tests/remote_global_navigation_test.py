@@ -75,6 +75,10 @@ prefix=pre+'''
 #define ACTIVITY_ALBUMCOVERS 9
 #define ACTION_STD_PREV 501
 #define ACTION_STD_NEXT 502
+#define ACTION_WPS_VOLUP 503
+#define ACTION_WPS_VOLDOWN 504
+static bool test_cider_mode;
+static bool cider_active(void){return test_cider_mode;}
 static int __attribute__((unused)) disable_irq_save_unused;
 typedef struct {int button,context,action;} action_cur_t;
 '''
@@ -89,6 +93,12 @@ int main(void){
  }
  activity=ACTIVITY_ALBUMCOVERS;action_cur_t cur={.button=UP,.context=CONTEXT_PLUGIN};assert(!remote_volume_action(&cur)&&cur.button==BUTTON_SCROLL_BACK);
  cur=(action_cur_t){.button=DOWN,.context=CONTEXT_PLUGIN};assert(!remote_volume_action(&cur)&&cur.button==BUTTON_SCROLL_FWD);
+ test_cider_mode=true;
+ action_cur_t cider={.button=BUTTON_RC_VOL_UP|BUTTON_REL|BUTTON_REPEAT,.context=CONTEXT_WPS};
+ assert(remote_volume_action(&cider)&&cider.action==ACTION_WPS_VOLUP);
+ cider.button=BUTTON_RC_VOL_DOWN|BUTTON_REL|BUTTON_REPEAT;
+ assert(remote_volume_action(&cider)&&cider.action==ACTION_WPS_VOLDOWN);
+ test_cider_mode=false;
  puts("production action routing: all generic contexts list-only, WPS/Agents native arms, carousel previous/next PASS");
 }
 '''

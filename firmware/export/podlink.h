@@ -82,6 +82,16 @@ void podlink_close(void);
 /* Optional screen idle wait; wakes on transport progress, bounded by ticks. */
 void podlink_wait(int ticks);
 
+/* A resident data consumer bypasses the foreground inbox. Callbacks run
+ * under the service mutex and must not call the PodLink API. */
+struct podlink_resident
+{
+    bool (*receive)(const struct podlink_message *message);
+    unsigned int (*next)(char *record, unsigned int size);
+    void (*reset)(void);
+};
+void podlink_set_resident(const struct podlink_resident *consumer);
+
 /* Portable wire codec, also built by the host tests. */
 struct podlink_parser
 {

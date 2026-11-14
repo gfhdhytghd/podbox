@@ -31,6 +31,9 @@
 #include "panic.h"
 #include "widgets/menu.h"
 #include "usb.h"
+#ifdef HAVE_USB_PODLINK
+#include "screens/playback/cider.h"
+#endif
 #include "wifi.h"
 #include "powermgmt.h"
 #include "adc.h"
@@ -634,6 +637,9 @@ static void init(void)
     adc_init();
 
     usb_init();
+#ifdef HAVE_USB_PODLINK
+    cider_init();
+#endif
 
     backlight_init();
 

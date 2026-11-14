@@ -33,6 +33,9 @@ pre=r'''
 #define GO_TO_WPS 11
 #define GO_TO_ALBUM_COVERS 12
 #define GO_TO_ALBUM_COVERS_TRACKS 13
+#define GO_TO_CIDER 14
+static bool cider_available(void){return false;}
+static int cider_screen(void){return GO_TO_WPS;}
 #define CAROUSEL_REMOTE_RETURN -22
 #define CAROUSEL_CONTEXT -21
 #define CAROUSEL_PLAY_ALBUM -20

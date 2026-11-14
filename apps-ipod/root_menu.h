@@ -139,6 +139,7 @@ enum {
      * the Audiobooks menu's built-in row */
     GO_TO_LISTEN_STATS,
     GO_TO_AGENTS,
+    GO_TO_CIDER,
 };
 extern struct menu_item_ex root_menu_;
 

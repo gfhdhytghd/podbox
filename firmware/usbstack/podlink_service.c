@@ -29,15 +29,20 @@ static unsigned int log_length, log_epoch;
 static char time_record[PODLINK_TIME_RECORD];
 static unsigned long time_received_tick;
 static bool time_pending;
+static const struct podlink_resident *resident;
+static char resident_record[512];
+static unsigned int resident_length;
 static void (*background_message)(const struct podlink_message *);
 static long service_stack[DEFAULT_STACK_SIZE * 2 / sizeof(long)];
 _Static_assert(sizeof(inbox) + sizeof(inbox_bytes) + sizeof(delivered) +
-               sizeof(service_stack) + sizeof(welcome) <
+               sizeof(service_stack) + sizeof(welcome) + sizeof(resident_record) <
                64 * 1024, "resident PodLink RAM budget");
 
 static void invalidate(void)
 {
     first = used = byte_first = byte_used = 0;
+    resident_length = 0;
+    if (resident && resident->reset) resident->reset();
     ++generation;
     welcome_length = 0;
     time_pending = false;
@@ -129,6 +134,8 @@ static void service_step(void)
             time_pending = true;
             continue;
         }
+        if (resident && resident->receive && resident->receive(&m))
+            continue;
         if (client)
         {
             if (used == INBOX || m.length > INBOX_BYTES - byte_used)
@@ -163,6 +170,17 @@ static void service_step(void)
         if (podlink_session_send(PODLINK_PING, notice, sizeof(notice)) ==
             PODLINK_SENT)
             announced = client;
+    }
+    if (started && resident && resident->next &&
+        podlink_session_state() == PODLINK_CONNECTED)
+    {
+        if (!resident_length)
+            resident_length = resident->next(resident_record,
+                                             sizeof resident_record);
+        if (resident_length &&
+            podlink_session_send(PODLINK_TEXT, resident_record,
+                                 resident_length) == PODLINK_SENT)
+            resident_length = 0;
     }
     /* Out-of-band diagnostic traffic never attaches a foreground client.
      * At most one TEXT per worker step, after control/incoming traffic. */
@@ -212,6 +230,15 @@ void podlink_init(void)
 #else
     (void)service_stack;
 #endif
+}
+
+void podlink_set_resident(const struct podlink_resident *consumer)
+{
+    if (!initialized) return;
+    mutex_lock(&service_mutex);
+    resident = consumer;
+    resident_length = 0;
+    mutex_unlock(&service_mutex);
 }
 
 static bool attach(unsigned char kind,

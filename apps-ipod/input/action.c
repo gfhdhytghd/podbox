@@ -44,6 +44,9 @@
 #include "action.h"
 #ifdef HAVE_USB_PODLINK
 #include "input/agents_shortcut.h"
+#ifdef HAVE_USB_PODLINK
+#include "screens/playback/cider.h"
+#endif
 #include "system/podlink_time.h"
 #include "thread.h"
 #include "input/remote_menu.h"
@@ -443,9 +446,15 @@ static bool remote_volume_action(action_cur_t *cur)
     int button = cur->button;
     if (button & (SYS_EVENT | BUTTON_MULTIMEDIA | BUTTON_REDRAW)) return false;
     int key = button & BUTTON_REMOTE;
-    if ((key != BUTTON_RC_VOL_UP && key != BUTTON_RC_VOL_DOWN) ||
-        cur->context == CONTEXT_AGENTS || cur->context == CONTEXT_WPS) return false;
+    if (key != BUTTON_RC_VOL_UP && key != BUTTON_RC_VOL_DOWN) return false;
     bool up = key == BUTTON_RC_VOL_UP;
+    if (cur->context == CONTEXT_WPS)
+    {
+        if (!cider_active()) return false;
+        cur->action = up ? ACTION_WPS_VOLUP : ACTION_WPS_VOLDOWN;
+        return true;
+    }
+    if (cur->context == CONTEXT_AGENTS) return false;
     if (cur->context == CONTEXT_PLUGIN &&
         get_current_activity() == ACTIVITY_ALBUMCOVERS)
     {
@@ -467,7 +476,7 @@ static inline bool action_poll_button(action_last_t *last, action_cur_t *cur)
 #endif
 
 #if defined(IPOD_ACCESSORY_PROTOCOL) && defined(HAVE_USB_PODLINK)
-    iap_volume_context(cur->context == CONTEXT_WPS);
+    iap_volume_context(cur->context == CONTEXT_WPS && !cider_active());
     int context = remote_context(cur->context);
     *button = remote_poll(cur->timeout, context);
     *button = iap_volume_filter(*button);

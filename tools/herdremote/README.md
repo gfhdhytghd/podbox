@@ -706,3 +706,14 @@ No-and-tell-only denial maps to Esc. Other dialogs stay multi-option.
 Custom options match Type something, Other/Other…, and No-and-tell … differently
 or instead. These choices remain in the full answer page. No transcription
 submits until the user presses SELECT on the input page.
+
+Cider Remote (FU22) shares this daemon and starts after the matching player
+advertises its resident Cider capability. Deploy `hrcider.py`,
+`hrcider_cache.py` and the updated `herdremote.py` together. Its Python
+environment needs Pillow (already present in this worktree's test venv).
+Optional `CIDER_API_TOKEN` sets Cider's `apptoken` header; `CIDER_API_URL`
+defaults to loopback port 10767. Tokens are not cached. Metadata/art live in
+`$XDG_CACHE_HOME/podbox-cider/`, 0700, with a 500-MiB art cap. No Cider plugin
+or additional service is needed. See `cider-remote-protocol.md` for data-plane
+budgets, disk behavior, artwork sizes and controls. Development tests use a
+mock Cider server and never control the user's active playback.
