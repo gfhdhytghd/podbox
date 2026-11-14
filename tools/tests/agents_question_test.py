@@ -4,8 +4,9 @@ import re,subprocess,sys
 R=Path(__file__).resolve().parents[2];O=Path(sys.argv[1]).resolve();O.mkdir(parents=True,exist_ok=True)
 S=Path(sys.argv[2]).resolve() if len(sys.argv)>2 else R
 s=(S/'apps-ipod/screens/system/agents_screen.c').read_text()
-def function(name):
- m=re.search(r'(?m)^[\w *]+\b'+name+r'\([^;{}]*\)\s*\{',s);assert m,name
+def function(name, source=None):
+ s=source if source is not None else (S/'apps-ipod/screens/system/agents_screen.c').read_text()
+ m=re.search(r'(?m)^[\w *]+\b'+re.escape(name)+r'\([^;{}]*\)\s*\{',s);assert m,name
  e=m.end();depth=1
  while depth:depth+=(s[e]=='{')-(s[e]=='}');e+=1
  return s[m.start():e]
@@ -42,6 +43,12 @@ static char detail_pane[16],pending_req[8],focus_req[8],focus_want[16],talk_req[
 static struct {int nruns;} key_runs;
 static bool question_custom,question_closing,detail_ready,pending_answer,talk_held;
 static int raw,status,focused,sent,wakes,shown,keys,voices,discarded;
+#define PODLINK_CLOSE 6
+#define PODLINK_TEXT 2
+struct podlink_message {int type;unsigned int length;const unsigned char *data;};
+static bool cache_valid=true,talk_discarded,talk_failed,talk_req_up,focus_for_detail;
+static long last_message,current_tick,usage_at;
+static void talk_result(const char *text,bool failed){(void)text;(void)failed;assert(0);}
 static char last_name[16],last_args[64];
 #define SCREEN_MAIN 0
 #define FONT_UI 1
@@ -49,19 +56,41 @@ static char last_name[16],last_args[64];
 #define USE_TEXT 1
 #define USE_DIM 2
 #define MIN(a,b) ((a)<(b)?(a):(b))
-struct viewport {int width,height,font;};
-struct screen {void (*set_viewport)(struct viewport*);void (*clear_viewport)(void);void (*set_foreground)(int);void (*drawrect)(int,int,int,int);void (*update_viewport)(void);};
+#include <stddef.h>
+#define LCDFN(x) x
+#define FG_FALLBACK 1
+#define BG_FALLBACK 0
+#define DRMODE_SOLID 0
+enum screen_type {main_screen=0};
+struct frame_buffer_t {void *data;void *(*get_address_fn)(int,int);ptrdiff_t stride;size_t elems;};
+struct viewport {int x,y,width,height,flags,font,drawmode;struct frame_buffer_t *buffer;unsigned fg_pattern,bg_pattern;};
+static struct frame_buffer_t framebuffer_default={.elems=320*240,.stride=320};
+static struct viewport default_vp;
+INIT_VIEWPORT
+static void set_default_align_flags(struct viewport*v){v->flags=0;}
+static int getuifont(void){return FONT_UI;}
+struct screen {void (*set_viewport)(struct viewport*);void (*clear_viewport)(void);void (*set_foreground)(int);void (*drawrect)(int,int,int,int);void (*update_viewport)(void);struct viewport *(*init_viewport)(struct viewport*);int lcdwidth,lcdheight;int (*getuifont)(void);};
 static int full_clears,input_draws,texts,yes_draws,no_draws;
 static void setvp(struct viewport*v){if(v)assert(v->width==320&&v->height==240);}
 static void clearvp(void){full_clears++;}
 static void colour(int c){(void)c;}
 static void rect(int x,int y,int w,int h){assert(x>=0&&y>=0&&x+w<=320&&y+h<=240);}
 static void update(void){}
-static struct screen screens[]={{setvp,clearvp,colour,rect,update}};
-static void viewport_set_fullscreen(struct viewport*v,int screen){assert(!screen);*v=(struct viewport){320,240,1};}
+static struct screen screens[]={{setvp,clearvp,colour,rect,update,init_viewport,320,240,getuifont}};
+FULLSCREEN
 static void text_at(struct screen*d,int x,int y,int colour,const char*t){(void)d;(void)colour;assert(x>=0&&x<320&&y>=0&&y+USE_LINE<=240);texts++;yes_draws+=strstr(t,"LEFT: Yes")!=NULL;no_draws+=strstr(t,"RIGHT: No")!=NULL;}
 struct dialog_text_line {const char*str;int len;};
-static int dialog_wrap_text(const char*t,int w,int font,struct dialog_text_line*out,int n){assert(w==308&&font==FONT_UI&&n==8);out[0]=(struct dialog_text_line){t,(int)strlen(t)};return 1;}
+typedef unsigned short ucschar_t;
+struct font {int unused;};
+static struct font metric_font;
+static struct font *font_get(int id){(void)id;return &metric_font;}
+static void font_lock(int id,bool lock){(void)id;(void)lock;}
+static int font_get_width(struct font *pf,ucschar_t ch){(void)pf;return ch>=0x3000?14:7;}
+#define IS_DIACRITIC(ch) ((ch)>=0x300 && (ch)<=0x36f)
+UTF8_DECODE
+WRAP_FUNCTIONS
+DIALOG_WRAP
+
 static int draw_input(struct screen*d,struct viewport*v,int y,bool dim){(void)d;(void)v;(void)dim;assert(y<240-3*USE_LINE);input_draws++;return y+3*USE_LINE;}
 
 static int gui_synclist_get_sel_pos(struct gui_synclist*l){return l->sel;}
@@ -77,12 +106,41 @@ static void send_key(const char*k){assert(!strcmp(k,"bs"));keys++;}
 static void start_talk(struct gui_synclist*l,bool remote){(void)l;(void)remote;voices++;talk_held=true;}
 static void finish_talk(bool discard){assert(discard);discarded++;talk_held=false;}
 '''
-code=pre+'\n'.join(function(n) for n in ['current_question','question_binary_page','draw_question_overlay','open_question','leave_question','pop_question','enter_answer','answer_number','close_input','question_action'])
+pre=pre.replace('INIT_VIEWPORT',function('LCDFN(init_viewport)',(S/'firmware/drivers/lcd-bitmap-common.c').read_text()))
+pre=pre.replace('FULLSCREEN',function('viewport_set_fullscreen',(S/'apps-ipod/draw/viewport.c').read_text()))
+pre=pre.replace('UTF8_DECODE',function('utf8decode',(S/'firmware/common/unicode.c').read_text()))
+w=(S/'apps-ipod/draw/text_wrap.c').read_text()
+pre=pre.replace('WRAP_FUNCTIONS','\n'.join(function(n,w) for n in ['is_punct_break','wrap_next','text_wrap_next']))
+pre=pre.replace('DIALOG_WRAP',function('dialog_wrap_text',(S/'apps-ipod/widgets/dialog.c').read_text()))
+code=pre+'\n'.join(function(n) for n in ['background_link','current_question','question_binary_page','draw_question_overlay','open_question','leave_question','pop_question','enter_answer','answer_number','close_input','question_action'])
 code+=r'''
 static void reset(void){memset(&model,0,sizeof model);memset(&popped,0,sizeof popped);view=VIEW_AGENTS;question_id[0]=question_pane[0]=pending_req[0]=focus_req[0]=talk_req[0]=detail_pane[0]=0;talk_held=false;focused=sent=wakes=keys=voices=discarded=0;status=raw=0;
 const char*q="Q\tid\tp1\tw1\t-\tAgent\t1\t-1\tTask\n?\tRun command?\no\t1\tYes\t-\no\t2\tAlways allow\t-\no\t3\tNo, and tell Codex differently\tc";assert(hr_model_apply(&model,q,strlen(q))=='Q');}
 static void key(struct gui_synclist*l,int action,int button){raw=button;assert(question_action(l,action));}
-int main(void){struct gui_synclist list={0};reset();
+static void real_payload(struct gui_synclist *list){
+FILE *f=fopen(REAL_PAYLOAD,"rb");assert(f);char payload[2048];size_t len=fread(payload,1,sizeof payload,f);assert(!ferror(f)&&feof(f));fclose(f);
+/* Menus, Now Playing and Cover Flow all use the resident callback with
+ * no Agents foreground client. This tests that callback, not those screens. */
+for(int outside=0;outside<3;outside++){
+ reset();int before=wakes;hr_model_reset(&model);
+ struct podlink_message m={PODLINK_TEXT,len,(const unsigned char *)payload};
+ background_link(&m);assert(view==VIEW_AGENTS&&wakes==before&&model.nquestions==1);
+ assert(!strcmp(model.questions[0].id,"e0298fe2"));
+ pop_question(list);assert(view==VIEW_ALERT);draw_question_overlay();
+}
+for(int start=VIEW_SPACES;start<=VIEW_DETAIL;start++){
+ reset();view=start;hr_model_reset(&model);assert(hr_model_apply(&model,payload,len)=='Q');
+ assert(model.questions[0].noptions==3&&model.questions[0].nlines==2&&model.questions[0].options[2].custom);
+ struct dialog_text_line lines[8];
+ for(int i=0;i<2;i++)assert(dialog_wrap_text(model.questions[0].lines[i],308,FONT_UI,lines,8)>0);
+ for(int i=0;i<3;i++)assert(dialog_wrap_text(model.questions[0].options[i].label,308,FONT_UI,lines,8)>0);
+ talk_held=true;for(int i=0;i<1000;i++)pop_question(list);assert(view==(enum view)start);
+ talk_held=false;pop_question(list);assert(view==VIEW_ALERT);draw_question_overlay();
+ leave_question(list);assert(view==(enum view)start);
+}
+puts("Exact device Q, production viewport init/wrap/UTF8: spaces/agents/detail, held Play deferral PASS");
+}
+int main(void){struct gui_synclist list={0};real_payload(&list);full_clears=yes_draws=no_draws=texts=0;reset();
 talk_held=true;pop_question(&list);assert(view==VIEW_AGENTS);talk_held=false;strcpy(talk_req,"voice");pop_question(&list);assert(view==VIEW_AGENTS);talk_req[0]=0;
 pop_question(&list);assert(view==VIEW_ALERT&&wakes==1&&focused==0&&sent==0);
 draw_question_overlay();assert(full_clears==1&&yes_draws&&no_draws&&texts>=5);
@@ -109,5 +167,5 @@ const char*bad="Q\tbad\tp\tw\t-\tAgent\t3\t2\tTask\no\t1\tYes\t-\no\t2\tNo\t-";a
 printf("FU21 production transitions: alert/defer/ignore/reopen, native+remote binary, focus gate, multi entry, voice/review/BS/submit/Esc, replacement ID, old Q: PASS\n");return 0;}
 '''
 (O/'questions.c').write_text(code)
-subprocess.run(['cc','-std=gnu11','-Wall','-Wextra','-Werror','-fsanitize=address,undefined','-fno-pie','-no-pie','-I'+str(S/'apps-ipod/screens/system'),str(O/'questions.c'),str(S/'apps-ipod/screens/system/herdremote_model.c'),'-o',str(O/'questions')],check=True)
+subprocess.run(['cc','-std=gnu11','-Wall','-Wextra','-Werror','-fsanitize=address,undefined','-fno-pie','-no-pie','-ftrivial-auto-var-init=pattern','-DREAL_PAYLOAD=\"'+str(R/'tools/tests/fixtures/fu21-hang-q.bin')+'\"','-I'+str(S/'apps-ipod/screens/system'),str(O/'questions.c'),str(S/'apps-ipod/screens/system/herdremote_model.c'),'-o',str(O/'questions')],check=True)
 subprocess.run([str(O/'questions')],check=True)

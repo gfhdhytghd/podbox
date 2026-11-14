@@ -1667,7 +1667,8 @@ static void draw_confirm(struct gui_synclist *list)
 static void draw_question_overlay(void)
 {
     struct screen *d = &screens[SCREEN_MAIN];
-    struct viewport full;
+    /* init_viewport reads buffer before applying the fullscreen geometry. */
+    struct viewport full = {0};
     viewport_set_fullscreen(&full, SCREEN_MAIN);
     full.font = FONT_UI;
     d->set_viewport(&full);
