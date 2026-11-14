@@ -15,7 +15,9 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import zlib
-from hrcider_cache import Cache, Index, art_id
+from hrcider_cache import Cache, Index, art_id, canonical_art_url
+from hrcider_volume import SystemVolume
+from hrcider_library import Library
 
 log = logging.getLogger('herdremote.cider')
 SIZES = {'L':240,'M':128,'S':56,'XS':32}
@@ -32,15 +34,21 @@ def clean(value, limit=120):
 
 
 def capped_url(template):
-    if '{w}' in template and '{h}' in template:
-        url=template.replace('{w}','240').replace('{h}','240')
-    else:
-        url,n=re.subn(r'\d+x\d+(?=(?:bb|cc|sr)?[.])','240x240',template)
-        if not n:raise ValueError('Artwork URL has no capped size variant')
+    url=canonical_art_url(template)
+    if not re.search(r'240x240(?=(?:bb|cc|sr)?[.])',url):
+        raise ValueError('Artwork URL has no capped size variant')
     parts=urllib.parse.urlsplit(url)
     if parts.scheme!='https' and not (parts.scheme=='http' and parts.hostname in ('127.0.0.1','localhost','::1')):
         raise ValueError('Artwork needs HTTPS')
     return url
+
+
+_BAYER=(0,8,2,10,12,4,14,6,3,11,1,9,15,7,13,5)
+# Native RGB565 components for each ordered-dither phase.
+_RED=[bytes((max(0,min(255,v+(d-8)//2))>>3)<<3 for v in range(256)) for d in _BAYER]
+_GREEN_HI=[bytes(max(0,min(255,v+(d-8)//4))>>5 for v in range(256)) for d in _BAYER]
+_GREEN_LO=[bytes(((max(0,min(255,v+(d-8)//4))>>2)&7)<<5 for v in range(256)) for d in _BAYER]
+_BLUE=[bytes(max(0,min(255,v+(d-8)//2))>>3 for v in range(256)) for d in _BAYER]
 
 
 def render(raw,tier):
@@ -49,16 +57,15 @@ def render(raw,tier):
     with Image.open(io.BytesIO(raw)) as source:
         if source.width>240 or source.height>240:raise ValueError('CDN exceeded 240px cap')
         image=ImageOps.fit(source.convert('RGB'),(dim,dim),method=Image.Resampling.LANCZOS)
+        column=tier=='M'
+        if column:image=image.transpose(Image.Transpose.TRANSPOSE)
+        rgb=image.tobytes();red,green,blue=rgb[0::3],rgb[1::3],rgb[2::3]
+        phase=bytes(((x&3)*4+(y&3) if column else (y&3)*4+(x&3))
+                    for y in range(dim) for x in range(dim))
         pixels=bytearray(dim*dim*2)
-        # A tiny ordered dither preserves smooth gradients without a device decoder.
-        bayer=((0,8,2,10),(12,4,14,6),(3,11,1,9),(15,7,13,5))
-        for y in range(dim):
-            for x in range(dim):
-                r,g,b=image.getpixel((x,y));d=bayer[y&3][x&3]-8
-                r=max(0,min(255,r+d//2));g=max(0,min(255,g+d//4));b=max(0,min(255,b+d//2))
-                value=(r>>3)<<11|(g>>2)<<5|b>>3
-                struct.pack_into('<H',pixels,2*(x*dim+y if tier=='M' else y*dim+x),value)
-    return AAT.pack(0x5441,8,dim,dim,int(tier=='M'),0)+pixels
+        pixels[0::2]=bytes(_GREEN_LO[p][g]|_BLUE[p][b] for p,g,b in zip(phase,green,blue))
+        pixels[1::2]=bytes(_RED[p][r]|_GREEN_HI[p][g] for p,r,g in zip(phase,red,green))
+    return AAT.pack(0x5441,8,dim,dim,int(column),0)+pixels
 
 
 def decode_chunk(payload):
@@ -114,12 +121,12 @@ class Client:
         self.base,self.token,self.timeout=base.rstrip('/'),token,timeout
         # Environment HTTP proxies must not forward local credentials.
         self.opener=opener or urllib.request.build_opener(urllib.request.ProxyHandler({}))
-    def request(self,path,body=None,timeout=None):
+    def request(self,path,body=None,timeout=None,method=None,allow_list=False):
         headers={'Accept':'application/json'}
         if self.token:headers['apptoken']=self.token
         data=None if body is None else json.dumps(body).encode()
         if data is not None:headers['Content-Type']='application/json'
-        req=urllib.request.Request(self.base+path,data=data,headers=headers)
+        req=urllib.request.Request(self.base+path,data=data,headers=headers,method=method)
         try:
             with self.opener.open(req,timeout=self.timeout if timeout is None else timeout) as r:
                 raw=r.read(2*1024*1024+1)
@@ -128,6 +135,7 @@ class Client:
         except urllib.error.HTTPError as e:
             code=e.code;e.close()
             raise OSError('Cider HTTP '+str(code)) from None
+        if allow_list and isinstance(value,list):return value
         if not isinstance(value,dict) or value.get('error'):raise OSError('Cider RPC failed')
         return value
     def snapshot(self):
@@ -139,14 +147,14 @@ class Client:
         if not isinstance(info,dict):raise ValueError('Invalid Cider now-playing item')
         playing=self.request('/api/v1/playback/is-playing').get('is_playing',False)
         timing=self.request('/api/v2/playback/time').get('data',{})
-        volume=self.request('/api/v1/playback/volume').get('volume',0)
+        volume=0
         repeat=self.request('/api/v1/playback/repeat-mode').get('value',0)
         shuffle=self.request('/api/v1/playback/shuffle-mode').get('value',0)
         artwork=info.get('artwork') or {};params=info.get('playParams') or {}
         duration=max(0,int(info.get('durationInMillis') or 0))
         position=min(duration,max(0,int(float(timing.get('currentTime',timing.get('currentPlaybackTime',0)))*1000)))
         return dict(id=str(params.get('id') or info.get('id') or ''),title=info.get('name',''),artist=info.get('artistName',''),
-                    album=info.get('albumName',''),duration=duration,
+                    album=info.get('albumName',''),composer=info.get('composerName',''),duration=duration,
                     position=position,rate=1000 if playing else 0,
                     volume=max(0,min(100,round(float(volume)*100))),repeat=int(repeat or 0),shuffle=int(shuffle or 0),
                     art=art_id(artwork.get('url','')),template=artwork.get('url',''),bg=str(artwork.get('bgColor','181818'))[:6])
@@ -154,20 +162,43 @@ class Client:
         if command in ('seek','volume') and not math.isfinite(float(value)):
             raise ValueError('Nonfinite Cider value')
         routes={'toggle':('playpause',{}),'next':('next',{}),'previous':('previous',{}),
-                'seek':('seek',{}),'volume':('volume',{})}
+                'seek':('seek',{})}
         if command=='play-item':
             kind,key=str(value).split(':',1)
             if not re.fullmatch(r'[a-z][a-z0-9-]{0,31}',kind) or not re.fullmatch(r'[\w.:-]{1,128}',key):raise ValueError('Invalid play item')
-            route,body='play-item',dict(type=kind,id=key)
+            collection=kind.removeprefix('library-')
+            collection={'song':'songs','album':'albums','playlist':'playlists'}.get(collection,collection)
+            href=('/v1/me/library/' if kind.startswith('library-') else
+                  '/v1/catalog/$STOREFRONT/')+collection+'/'+urllib.parse.quote(key,safe='')
+            # Cider's lightweight mkPlayItem drops songs without playParams.
+            # Its href route resolves the complete resource before playback.
+            reply=self.request('/api/v1/amapi/run-v3',{'path':href})
+            if isinstance(reply.get('data'),dict):reply=reply['data']
+            items=reply.get('data',[])
+            if not isinstance(items,list) or not items:raise ValueError('Selected item unavailable')
+            item=items[0];params=item.get('attributes',{}).get('playParams',{})
+            if collection=='songs' and not params:raise ValueError('Selected song is not playable')
+            result=self.request('/api/v1/playback/play-item-href',{'href':href})
+            if collection=='songs':
+                result['expected_ids']=list({str(v) for v in
+                    (item.get('id'),params.get('id'),params.get('catalogId'),params.get('libraryId')) if v})
+            return result
         else:
             if command not in routes:raise ValueError('Unknown Cider control')
             route,body=routes[command]
             if command=='seek':body={'position':max(0,float(value))/1000}
-            if command=='volume':body={'volume':max(0,min(100,float(value)))/100}
         # A control timeout is never retried: toggle/skip are not idempotent.
         return self.request('/api/v1/playback/'+route,body)
     def library(self,kind,offset,limit):
-        return self.request('/api/v1/amapi/run-v3',{'path':f'/v1/me/library/{kind}?limit={limit}&offset={offset}'},timeout=3)
+        return self.request('/api/v1/amapi/run-v3',{'path':f'/v1/me/library/{kind}?limit={limit}&offset={offset}'+('&include=albums,catalog' if kind=='songs' else '')},timeout=3)
+
+    def library_path(self,path):
+        if not path.startswith('/v1/me/') or len(path)>1024:
+            raise ValueError('Invalid library path')
+        return self.request('/api/v1/amapi/run-v3',{'path':path},timeout=3)
+    def shuffle_library(self):
+        self.request('/api/v2/playback/shuffle',{'enabled':True},method='PUT')
+        return self.request('/api/v2/playback/play-href',{'href':'/v1/me/library/songs'})
 
 
 class Scheduler:
@@ -225,7 +256,7 @@ class Window:
 
 
 class Bridge:
-    def __init__(self,client=None,cache=None,fetch=None):
+    def __init__(self,client=None,cache=None,fetch=None,volume=None):
         self.client=client or Client(os.environ.get('CIDER_API_URL','http://127.0.0.1:10767'),os.environ.get('CIDER_API_TOKEN'))
         self.fetch=fetch or urllib.request.urlopen
         self.cache=cache or Cache();self.scheduler=Scheduler();self.lock=threading.RLock()
@@ -233,8 +264,14 @@ class Bridge:
         self.state=None;self.available=False;self.reason='Starting';self.state_seq=0;self.last_state=0
         self.opened=False;self.state_dirty=False;self.library_sent=0;self.wake=threading.Event();self.failures=0;self.templates={};self.generation=0;self.threads=[]
         self.index=Index(self.cache,self.client)
+        self.library=Library(self.cache,self.client);self.volume=volume or SystemVolume()
+        self.volume_delta=0;self.pages=queue.Queue(1);self.page_token=0
+        self.art_locks=[threading.RLock() for _ in range(32)]
+        self.prefetch=queue.Queue(10)
+        self.warm_window=set();self.warm_queue=set();self.warm_jobs={};self.neighbors=None
+        self.capabilities=frozenset()
     def start(self):
-        for target,name in [(self._poll,'cider-state'),(self._work,'cider-art'),(self._control,'cider-control'),(self._index,'cider-index')]:
+        for target,name in [(self._prefetch_worker,'cider-prefetch-'+str(i)) for i in range(4)]+[(self._poll,'cider-state'),(self._work,'cider-art'),(self._control,'cider-control'),(self._index,'cider-index'),(self._pages,'cider-pages'),(self._neighbors,'cider-neighbors')]:
             t=threading.Thread(target=target,name=name,daemon=True);t.start();self.threads.append(t)
     def close(self):
         self.stop.set()
@@ -242,15 +279,21 @@ class Bridge:
         if not any(t.is_alive() for t in self.threads):self.cache.close()
     def disconnect(self):
         with self.lock:
-            self.opened=False;self.generation=0;self.requests.clear();self._drop_jobs();self.scheduler.reset(0)
+            self.warm_window.clear();self.warm_queue.clear();self.neighbors=None;self.capabilities=frozenset()
+            self.warm_jobs.clear()
+            self.opened=False;self.generation=0;self.requests.clear();self._drop_jobs();self.scheduler.reset(0);self.volume_delta=0
     def command(self,payload):
         try:
             fields=payload.decode().split('\t');name=fields[0]
-            if name not in ('ci','cg','cr','cx','cc','cp','ct','cb'):return False
+            if name not in ('ci','cg','cr','cx','cc','cp','ct','cb','cq','cw'):return False
             with self.lock:
                 if name=='ci':
-                    if len(fields)!=3 or fields[1]!='1':raise ValueError('Cider protocol')
-                    window=int(fields[2]);self.generation=secrets.randbelow(0xfffffffe)+1;self.scheduler.reset(self.generation,window)
+                    if len(fields) not in (3,4) or fields[1]!='1':raise ValueError('Cider protocol')
+                    advertised=fields[3].split(',') if len(fields)==4 else []
+                    if len(advertised)>8 or any(not re.fullmatch('[a-z0-9-]{1,24}',c) for c in advertised):raise ValueError('Invalid Cider capabilities')
+                    self.capabilities=frozenset(advertised)&{'cn18','neighbors','warm','play-ack'}
+                    window=int(fields[2]);self.volume_delta=0;self.generation=secrets.randbelow(0xfffffffe)+1;self.scheduler.reset(self.generation,window)
+                    self.warm_window.clear();self.warm_queue.clear();self.warm_jobs.clear();self.neighbors=None
                     self.requests.clear();self._drop_jobs();self.opened=True;self.library_sent=0;self.last_state=0;self._state(True)
                     return True
                 if len(fields)<2 or int(fields[1])!=self.generation:return True
@@ -262,7 +305,11 @@ class Bridge:
                         for r in list(self.scheduler.live):self.scheduler.cancel(r)
                     else:self.requests.pop(req,None);self.scheduler.cancel(req);self._drop_jobs(req)
                 elif name=='cc' and len(fields)==5:
-                    req=int(fields[2]);self.controls.put_nowait((self.generation,req,fields[3],fields[4]))
+                    req=int(fields[2])
+                    if fields[3]=='volume-step':
+                        self.volume_delta=max(-100,min(100,self.volume_delta+int(fields[4])))
+                    elif fields[3]=='volume':raise ValueError('Cider volume disabled')
+                    else:self.controls.put_nowait((self.generation,req,fields[3],fields[4]))
                 elif name=='cr' and len(fields)==8:
                     req=int(fields[2]);key,tier=fields[3:5];offset,priority,distance=map(int,fields[5:])
                     if not 0<req<=0xffffffff:raise ValueError('Invalid request id')
@@ -282,6 +329,18 @@ class Bridge:
                 elif name=='cp' and len(fields)==7:
                     req=int(fields[2]);page=self.cache.page(fields[3],int(fields[4]),int(fields[5]),stale=not self.available or self.index.initial or self.index.force)
                     self.scheduler.push(2,2,page_frame(self.generation,req,page),req,bulk=True)
+                elif name=='cq' and len(fields)==6:
+                    self.page_token+=1
+                    try:self.pages.get_nowait()
+                    except queue.Empty:pass
+                    self.scheduler.heap=[v for v in self.scheduler.heap if v[5][:3]!=b'CL\t'];heapq.heapify(self.scheduler.heap)
+                    self.pages.put_nowait((self.generation,int(fields[2]),int(fields[3]),int(fields[4]),fields[5],self.page_token))
+                elif name=='cw' and len(fields)==4:
+                    if 'warm' not in self.capabilities:raise ValueError('Unadvertised art window')
+                    tier=fields[2];keys=fields[3].split(',') if fields[3] else []
+                    if tier not in SIZES or len(keys)>7 or any(not re.fullmatch('[0-9a-f]{64}',k) for k in keys):
+                        raise ValueError('Invalid visible art window')
+                    self.warm_window={(key,tier) for key in keys};self._schedule_warm()
                 elif name=='ct':self.index.request()
             return True
         except (ValueError,UnicodeError,queue.Full):
@@ -302,6 +361,7 @@ class Bridge:
         if self.available and self.state:
             s=self.state;self.state_seq+=1
             fields=['CN',self.generation,self.state_seq,int(now*1000)&0xffffffff,s['duration'],s['position'],s['rate'],s['volume'],s['shuffle'],s['repeat'],s['id'],s['art'],s['bg'],s['title'],s['artist'],s['album']]
+            if 'cn18' in self.capabilities:fields.extend([int(s.get('muted',False)),s.get('composer','')])
             self.scheduler.push(1,2,'\t'.join(clean(v) for v in fields).encode())
         self.last_state=now;self.state_dirty=False
     def _poll(self):
@@ -312,11 +372,13 @@ class Bridge:
             if now<next_poll:self.stop.wait(min(.2,next_poll-now));continue
             try:
                 state=self.client.snapshot()
+                try:state['volume'],state['muted']=self.volume.read()
+                except OSError:state['volume'],state['muted']=0,False
                 with self.lock:
                     changed=not self.available or published is None or any(state[k]!=published[k] for k in state if k not in ('position','template'))
                     predicted=published['position']+(now-anchor)*published['rate'] if published else 0
                     changed |= abs(state['position']-predicted)>2000 or now-self.last_state>=15
-                    self.available=True;self.reason='';self.state=state
+                    self.available=True;self.reason='';self.state=state;self.library.state=state
                     if state['template']:
                         self.templates[state['art']]=state['template']
                         if len(self.templates)>128:self.templates.pop(next(iter(self.templates)))
@@ -327,20 +389,66 @@ class Bridge:
                     if self.available or self.reason=='Starting':self.available=False;self.reason=clean(str(error),80) or 'Cider unavailable';self._state()
                 self.failures=min(8,self.failures+1);next_poll=now+min(30,2**(self.failures-1))
     def _index(self):
-        while not self.stop.is_set():self.index.step();self.stop.wait(.25)
+        while not self.stop.is_set():
+            self.index.step();self.stop.wait(.25)
+    def _pages(self):
+        while not self.stop.is_set():
+            try:
+                generation,req,offset,limit,query,token=self.pages.get(timeout=.1)
+            except queue.Empty:continue
+            with self.lock:
+                if generation!=self.generation or not self.opened:continue
+            started=time.monotonic()
+            try:page=self.library.page(query,offset,limit,stale=not self.available or self.index.initial)
+            except (ValueError,OSError,TimeoutError):page=dict(generation=self.cache.generation,offset=offset,total=0,stale=True,items=[])
+            with self.lock:
+                if generation==self.generation and self.opened and token==self.page_token:
+                    self.scheduler.push(2,2,native_page_frame(generation,req,page),req,bulk=True)
+                    log.info('page ready gen=%d req=%d offset=%d rows=%d ms=%.1f',generation,req,offset,len(page['items']),1000*(time.monotonic()-started))
     def _control(self):
         while not self.stop.is_set():
-            try:generation,req,command,value=self.controls.get(timeout=.2)
+            with self.lock:
+                delta=self.volume_delta;self.volume_delta=0
+            if delta:
+                # One aggregated relative command per worker turn; no stale absolute target.
+                try:self.volume.step(delta);self.wake.set()
+                except OSError:log.warning('Host system volume unavailable')
+                self.stop.wait(.04)
+            try:generation,req,command,value=self.controls.get(timeout=.04)
             except queue.Empty:continue
             with self.lock:
                 if generation!=self.generation or not self.opened:continue
             try:
                 if not self.available:raise OSError('Cider unavailable')
-                self.client.control(command,value);ok=True;text='OK';self.wake.set()
-            except (OSError,ValueError,TimeoutError):ok=False;text='Control failed; not retried'
+                log.info('control request gen=%d req=%d command=%s',generation,req,command)
+                if command=='native-play':
+                    result=self.library.play(value)
+                    expected=result.get('expected_ids',[]) if isinstance(result,dict) else []
+                    if expected:
+                        deadline=time.monotonic()+2.5
+                        while True:
+                            info=self.client.request('/api/v1/playback/now-playing').get('info') or {}
+                            params=info.get('playParams') or {}
+                            ids={str(v) for v in (info.get('id'),params.get('id'),params.get('catalogId'),params.get('libraryId')) if v}
+                            if ids.intersection(expected):break
+                            if self.stop.is_set() or time.monotonic()>=deadline:
+                                raise OSError('Cider did not select the requested song')
+                            self.stop.wait(.05)
+                elif command=='source-local':
+                    if self.client.request('/api/v1/playback/is-playing').get('is_playing'):self.client.control('toggle')
+                else:self.client.control(command,value)
+                ok=True;text='OK';self.wake.set()
+            except (OSError,ValueError,TimeoutError) as error:
+                ok=False;text='Control failed; not retried'
+                log.warning('control failed gen=%d req=%d command=%s reason=%s',generation,req,command,clean(error,120))
+            log.info('control result gen=%d req=%d ok=%s',generation,req,ok)
             with self.lock:
                 if generation==self.generation and self.opened:self.scheduler.push(0,2,f'CK\t{generation}\t{req}\t{int(ok)}\t{text}'.encode())
     def artwork(self,key,tier):
+        # One CDN download per key even when a visible request joins prefetch.
+        with self.art_locks[int(key[:2],16)%len(self.art_locks)]:
+            return self._artwork(key,tier)
+    def _artwork(self,key,tier):
         cached=self.cache.get_art(key,tier)
         expected=AAT.pack(0x5441,8,SIZES[tier],SIZES[tier],int(tier=='M'),0)
         if cached is not None and len(cached)==12+SIZES[tier]**2*2 and cached[:12]==expected:return cached
@@ -358,6 +466,68 @@ class Bridge:
             self.cache.put_art(key,'original',raw)
         result=render(raw,tier);self.cache.put_art(key,tier,result)
         return result
+    def _schedule_warm(self):
+        desired=self.warm_window|self.warm_queue
+        while True:
+            try:
+                generation,pair=self.prefetch.get_nowait()
+                if self.warm_jobs.get(pair)==generation:self.warm_jobs.pop(pair,None)
+            except queue.Empty:break
+        for pair in list(self.warm_jobs):
+            if pair not in desired:self.warm_jobs.pop(pair,None)
+        for pair in sorted(desired):
+            if pair not in self.warm_jobs:
+                self.warm_jobs[pair]=self.generation
+                self.prefetch.put_nowait((self.generation,pair))
+    def _prefetch_worker(self):
+        while not self.stop.is_set():
+            try:generation,pair=self.prefetch.get(timeout=.1)
+            except queue.Empty:continue
+            self._warm(generation,pair)
+    def _warm(self,generation,pair):
+        key,tier=pair
+        with self.lock:
+            if generation!=self.generation or not self.opened or pair not in self.warm_window|self.warm_queue:return
+        try:
+            with self.lock:
+                if generation!=self.generation or pair not in self.warm_window|self.warm_queue:return
+            self.artwork(key,tier)
+        except (OSError,ValueError,TimeoutError):
+            with self.lock:
+                if self.warm_jobs.get(pair)==generation:self.warm_jobs.pop(pair,None)
+    def _neighbors(self):
+        while not self.stop.is_set():
+            try:
+                with self.lock:
+                    current=self.state.get('id') if self.state else None
+                    generation=self.generation;opened=self.opened
+                if current and opened and 'neighbors' in self.capabilities:
+                    rows=self.client.request('/api/v1/playback/queue',allow_list=True)
+                    if isinstance(rows,dict):rows=rows.get('data',[])
+                    if not isinstance(rows,list):raise ValueError('Invalid Cider queue')
+                    at=None
+                    for i,row in enumerate(rows):
+                        params=row.get('attributes',{}).get('playParams',{})
+                        if current in {str(v) for v in (row.get('id'),params.get('id'),params.get('catalogId'),params.get('libraryId')) if v}:
+                            at=i;break
+                    keys=[];templates={}
+                    for i in ((at-1,at+1) if at is not None else (-1,-1)):
+                        template=rows[i].get('attributes',{}).get('artwork',{}).get('url','') if 0<=i<len(rows) else ''
+                        key=art_id(template);keys.append(key)
+                        if template:templates[key]=template
+                    signature=(generation,current,*keys)
+                    with self.lock:
+                        if generation==self.generation and self.opened and self.state.get('id')==current:
+                            self.templates.update(templates)
+                            while len(self.templates)>128:self.templates.pop(next(iter(self.templates)))
+                            self.warm_queue={(key,'L') for key in keys if key!='-'} if any(tier=='L' for _,tier in self.warm_window) else set()
+                            self._schedule_warm()
+                            if signature!=self.neighbors:
+                                self.neighbors=signature
+                                self.scheduler.push(1,2,('CP\t'+'\t'.join(map(str,signature))).encode())
+            except (OSError,ValueError,TimeoutError,AttributeError,TypeError):
+                pass
+            self.stop.wait(1)
     def _work(self):
         while not self.stop.is_set():
             try:priority,distance,order,generation,req,key,tier,offset,token=self.jobs.get(timeout=.2)
@@ -366,7 +536,15 @@ class Bridge:
             with self.lock:
                 if generation!=self.generation or self.requests.get(req) is not token:continue
             try:
-                raw=pack_xs(generation,req,[(k,self.artwork(k,'XS')) for k in key]) if isinstance(key,tuple) else self.artwork(key,tier)
+                if isinstance(key,tuple):
+                    items=[]
+                    for item in key:
+                        with self.lock:
+                            if generation!=self.generation or self.requests.get(req) is not token:break
+                        items.append((item,self.artwork(item,'XS')))
+                    if len(items)!=len(key):continue
+                    raw=pack_xs(generation,req,items)
+                else:raw=self.artwork(key,tier)
             except (OSError,ValueError,TimeoutError):
                 with self.lock:
                     if generation==self.generation and self.requests.get(req) is token:
@@ -388,4 +566,16 @@ class Bridge:
             for _ in range(4):
                 frame=self.scheduler.next_frame()
                 if not frame:break
+                if frame[0]==2 and frame[1].startswith(b'CP\t') and 'neighbors' not in self.capabilities:continue
                 send(*frame)
+
+
+def native_page_frame(generation,request,page):
+    rows=[];size=0
+    for item in page['items']:
+        fields=[item.get(k,'') for k in ('id','title','subtitle','art','duration','count','kind','route','bg','year')]
+        line='\t'.join(clean(v,380 if i==7 else 120) for i,v in enumerate(fields))+'\n'
+        if size+len(line.encode())>15000:break
+        rows.append(line);size+=len(line.encode())
+    header=f"CL\t{generation}\t{request}\t{page['generation']}\t{page['offset']}\t{page['total']}\t{int(page['stale'])}\t{len(rows)}\n"
+    return (header+''.join(rows)).encode()

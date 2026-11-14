@@ -115,6 +115,10 @@ struct carousel_model {
     void (*speak)(int index); /* say a slide, once it comes to rest */
     bool owns_cache_version;                           /* honours pf_cfg.cache_version */
     const char *title;                                 /* status-bar title */
+    bool external;                                    /* independent library */
+    bool (*read_art)(int index, struct bitmap *bitmap); /* native columns */
+    unsigned int (*art_version)(int index);
+    void (*tick)(void);                                /* nonblocking provider */
 };
 
 /* Engine-owned persistent config for the album carousel (cache version + resume
@@ -169,6 +173,8 @@ void carousel_text_end(struct viewport *saved);
 /* Where the caption's lines go, centred in the space the band opens up. y2 is
  * meaningful only when two_lines is set. */
 void carousel_caption_layout(bool two_lines, struct pf_caption *out);
+void carousel_album_caption(const char *album, const char *artist,
+                            int year, bool untagged, int revision);
 /* build_artist_index() belongs to the index builder -- see
  * database/db_summary.h. */
 /* Persist the engine's pf_cfg to its config file (album model calls this after
@@ -197,5 +203,6 @@ void carousel_refresh(void);
  * look. They are treated as they are loaded, so the ones already in the buffer
  * keep the old treatment until something evicts them. */
 void carousel_drop_slides(void);
+void carousel_provider_changed(void);
 
 #endif /* _CAROUSEL_H_ */

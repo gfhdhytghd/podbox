@@ -10,6 +10,8 @@
  * viewer, album art placement and A-B markers.
  ****************************************************************************/
 #include "config.h"
+#include "screens/playback/cider.h"
+#include "screens/playback/cider_wps.h"
 #include <stdio.h>
 #include "string-extra.h"
 #include "core_alloc.h"
@@ -433,7 +435,9 @@ void draw_progressbar(struct gui_wps *gwps, struct skin_viewport* skin_viewport,
         int minvol = sound_min(SOUND_VOLUME);
         int maxvol = sound_max(SOUND_VOLUME);
         length = 1000;
-        end = to_normalized_volume(global_status.volume, minvol, maxvol, length);
+        bool muted;
+        end = cider_active() ? cider_wps_volume(&muted) * 10 :
+              to_normalized_volume(global_status.volume, minvol, maxvol, length);
     }
     else if (pb->type == SKIN_TOKEN_BATTERY_PERCENTBAR)
     {
@@ -980,7 +984,7 @@ void draw_album_art(struct gui_wps *gwps, struct skin_albumart *aa,
     }
     else
     {
-        if (bufgetdata(handle_id, 0, (void *)&bmp) <= 0)
+        if (!wps_art_bitmap(handle_id, &bmp))
             return;
         pixels = (const fb_data *)bmp->data;
         src_w = bmp->width;

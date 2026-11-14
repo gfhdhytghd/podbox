@@ -319,6 +319,7 @@ void browser_db_enter_menu_row_on_next_load(const char *menu_id,
  * for the row set it was chosen against, so it is stored alongside
  * browser_db_root_row_signature() and discarded when the two disagree. */
 int browser_db_root_row_count(void);
+const char *browser_db_root_row_key(int index);
 bool browser_db_get_root_row(int n, int *out_index,
                              const unsigned char **out_name);
 int browser_db_root_row_signature(void);

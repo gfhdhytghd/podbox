@@ -38,6 +38,8 @@
 #include "strlcat.h"
 
 #include "config.h"
+#include "screens/playback/cider.h"
+#include "screens/playback/cider_wps.h"
 #include "core_alloc.h"
 #include "kernel.h"
 #include "system/appevents.h"
@@ -800,7 +802,7 @@ do_non_text_tags(struct gui_wps *gwps, struct skin_draw_info *info,
                 struct skin_albumart *aa = cd_albumart(data, ad);
                 if (aa)
                 {
-                    aa->draw_handle = playback_current_aa_hid(aa->slot);
+                    aa->draw_handle = wps_art_handle(aa->slot);
                     aa->draw_win = PTRTOSKINOFFSET(skin_buffer, ad);
                 }
             }
@@ -1148,7 +1150,7 @@ static void do_tags_in_hidden_conditional(struct skin_element* branch,
                     /* Clear the same rectangle this %Cd would have drawn */
                     aa->draw_win = PTRTOSKINOFFSET(skin_buffer, ad);
                     draw_album_art(gwps, aa,
-                                   playback_current_aa_hid(aa->slot), true);
+                                   wps_art_handle(aa->slot), true);
                     info->drew = true;
                 }
             }

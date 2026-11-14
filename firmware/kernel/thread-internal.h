@@ -115,6 +115,7 @@ struct thread_entry
     int __errno;                 /* Thread error number (errno tls) */
 #ifdef HAVE_PRIORITY_SCHEDULING
     /* Priority summary of owned objects that support inheritance */
+    void *blk_ra;                /* DIAG: caller of the blocking primitive */
     struct blocker *blocker;     /* Pointer to blocker when this thread is blocked
                                     on an object that supports PIP -
                                     states: STATE_BLOCKED/STATE_BLOCKED_W_TMO  */
@@ -257,6 +258,7 @@ void block_thread_(struct thread_entry *current, int timeout);
 #define block_thread(thread, timeout, __wqp, bl) \
     ({ struct thread_entry *__t = (thread);   \
        __t->wqp = (__wqp);                    \
+       __t->blk_ra = __builtin_return_address(0); \
        if (!__builtin_constant_p(bl) || (bl)) \
            __t->blocker = (bl);               \
        block_thread_(__t, (timeout)); })
@@ -285,6 +287,8 @@ enum wakeup_thread_protocol
     WAKEUP_TRANSFER_MULTI,
 };
 
+/* DIAG: who asked for the last wakeup, on which object */
+extern void *wake_dbg_ra, *wake_dbg_obj;
 unsigned int wakeup_thread_(struct thread_entry *thread
                             IF_PRIO(, enum wakeup_thread_protocol proto));
 

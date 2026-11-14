@@ -367,7 +367,14 @@ void queue_wait_w_tmo(struct event_queue *q, struct queue_event *ev, int ticks)
         wr = q->write;
 
         if(rd != wr)
+        {
+            /* A timed-out waiter that was not first in line is still
+             * linked: a post wakes (and unlinks) only the list head. Leaving
+             * it linked lets a later post on this queue issue a DEFAULT
+             * wakeup to it while it is blocked on a mutex. */
+            wait_queue_try_remove(current);
             break;
+        }
 
         if(ticks < 0)
             continue; /* empty again, infinite block */
@@ -415,6 +422,7 @@ void queue_post(struct event_queue *q, long id, intptr_t data)
     corelock_lock(&q->cl);
 
     wr = q->write++ & QUEUE_LENGTH_MASK;
+    IF_PRIO( wake_dbg_ra = __builtin_return_address(0); wake_dbg_obj = q; )
 
     KERNEL_ASSERT((q->write - q->read) <= QUEUE_LENGTH,
                   "queue_post ovf q=%p", q);

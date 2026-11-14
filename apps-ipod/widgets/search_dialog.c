@@ -313,7 +313,9 @@ static int search_on_action(struct dialog *d, int action, void *data)
             return DIALOG_CANCEL;
 
         case ACTION_NONE:
-            /* The settle timer. Nothing else drives the scan. */
+            if (!s->pending && s->p->refresh && s->p->refresh(s->ctx))
+                s->count = s->p->scan(s->query, s->ctx);
+            /* The settle timer. */
             if (s->pending
                 && current_tick - s->last_edit_tick >= SETTLE_TICKS)
             {

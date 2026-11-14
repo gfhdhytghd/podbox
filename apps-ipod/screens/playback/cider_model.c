@@ -40,14 +40,14 @@ static bool number(const char *text, uint32_t *out)
 int cider_state_apply(struct cider_state *s, const void *data,
                       unsigned int length, uint32_t tick)
 {
-    char buf[1024], *f[16];
+    char buf[1024], *f[18];
     if (length >= sizeof buf || memchr(data, 0, length)) return 0;
     memcpy(buf, data, length); buf[length] = 0;
     int n = 1; f[0] = buf;
     for (unsigned int i = 0; i < length; i++)
         if (buf[i] == '\t')
         {
-            if (n == 16) return 0;
+            if (n == 18) return 0;
             buf[i] = 0; f[n++] = &buf[i + 1];
         }
     uint32_t gen;
@@ -57,7 +57,7 @@ int cider_state_apply(struct cider_state *s, const void *data,
         if (strcmp(f[2], "0") && strcmp(f[2], "1")) return 0;
         if (gen != s->generation)
         {
-            memset(s, 0, sizeof *s);
+            s->seq = 0; s->have = false;
             s->generation = gen;
         }
         s->available = f[2][0] == '1';
@@ -72,7 +72,23 @@ int cider_state_apply(struct cider_state *s, const void *data,
         s->library_generation = library;
         return 1;
     }
-    if (n != 16 || strcmp(f[0], "CN") || gen != s->generation)
+    if (n == 5 && !strcmp(f[0], "CP") && gen == s->generation &&
+        s->have && !strcmp(f[2], s->id))
+    {
+        for (int i = 3; i < 5; i++)
+        {
+            if (!strcmp(f[i], "-")) continue;
+            if (strlen(f[i]) != 64) return 0;
+            for (int j = 0; j < 64; j++)
+                if (!((f[i][j] >= '0' && f[i][j] <= '9') ||
+                      (f[i][j] >= 'a' && f[i][j] <= 'f'))) return 0;
+        }
+        /* "-" means no neighbour: keep the slot empty, never the dash. */
+        copy(s->previous_art, strcmp(f[3], "-") ? f[3] : "", sizeof s->previous_art);
+        copy(s->next_art, strcmp(f[4], "-") ? f[4] : "", sizeof s->next_art);
+        return 1;
+    }
+    if ((n != 16 && n != 18) || strcmp(f[0], "CN") || gen != s->generation)
         return 0;
     uint32_t values[8];
     for (int i = 0; i < 8; i++)
@@ -86,14 +102,44 @@ int cider_state_apply(struct cider_state *s, const void *data,
     s->duration = values[2]; s->position = values[3];
     s->rate = values[4]; s->volume = values[5];
     s->shuffle = values[6]; s->repeat = values[7];
+    if (strcmp(s->id, f[10]))
+        s->previous_art[0] = s->next_art[0] = 0;
     copy(s->id, f[10], sizeof s->id);
     copy(s->art, f[11], sizeof s->art);
     s->bg = strtoul(f[12], NULL, 16) & 0xffffff;
     copy(s->title, f[13], sizeof s->title);
     copy(s->artist, f[14], sizeof s->artist);
     copy(s->album, f[15], sizeof s->album);
+    s->muted = n == 18 && !strcmp(f[16], "1");
+    if (n == 18) copy(s->composer, f[17], sizeof s->composer);
     s->received = tick; s->have = true;
     return 1;
+}
+
+/* Firmware scanf has no %u/%lu conversion. Parse unsigned wire fields directly. */
+int cider_reply_status(const void *data, unsigned int length,
+                       uint32_t generation, uint32_t request)
+{
+    const char *p = data, *end = p + length;
+    if (!request || length < 10 || memchr(data, 0, length) ||
+        memcmp(p, "CK\t", 3)) return 0;
+    p += 3;
+    uint32_t fields[3];
+    for (int i = 0; i < 3; i++)
+    {
+        char text[11]; unsigned int n = 0;
+        while (p < end && *p != '\t')
+        {
+            if (n + 1 >= sizeof text) return 0;
+            text[n++] = *p++;
+        }
+        text[n] = 0;
+        if (p == end || !number(text, &fields[i])) return 0;
+        p++;
+    }
+    if (fields[0] != generation || fields[1] != request || fields[2] > 1)
+        return 0;
+    return fields[2] ? 1 : -1;
 }
 
 uint32_t cider_position(const struct cider_state *s, uint32_t tick, int hz)

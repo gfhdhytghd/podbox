@@ -1,3 +1,8 @@
+- **Cider Remote appears second on Home while available, with a music icon.**
+  It disappears when the host or Cider is unavailable. MENU returns through
+  album tracks, Cover Flow and Cider Remote to Home. Picking a song waits for
+  Cider to confirm the selection before opening Now Playing. Visible artwork
+  loads in parallel; Now Playing preloads the previous and next queue covers.
 - **PodLink stays connected while Agents is in the background.** Switching
   to Now Playing and leaving Agents through MENU keep USB connected.
   Returning shows the cached page immediately. Disk consent on the first
@@ -77,3 +82,11 @@
 - **Spike's Audio Offset setting is gone.** It never moved where a press was
   judged, so play is unchanged; the line it leaves in `config.cfg` is
   ignored.
+- **Cider Remote uses the system's screens.** Its Home row opens the native
+  Music lists and Album Covers. Now Playing uses the unchanged selected skin
+  for either Local or Cider. Picking Cider music pauses the local queue;
+  starting local music switches back. Remote volume in Cider now changes the
+  computer's default sink, capped at 100%, rather than Cider's volume.
+  Deploy the matching five Cider Python modules. Host cache schema 3 rebuilds
+  its metadata/art index once. Firmware installation alone does not update
+  the computer's daemon.

@@ -84,6 +84,7 @@ static long raw_ui_filter(long button)
     if (thread_self() != ui_thread || ui_polling) return button;
     podlink_time_sync();
     if (button & SYS_EVENT) return button;
+    cider_play_status();
 #ifdef IPOD_ACCESSORY_PROTOCOL
     iap_volume_context(false);
     if (button == BUTTON_NONE) button = iap_agents_volume_take();

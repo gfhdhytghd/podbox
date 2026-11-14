@@ -79,6 +79,9 @@
 #include "widgets/option_select.h"
 #include "playlist/viewer.h"
 #include "wps.h"
+#include "cider.h"
+#include "cider_wps.h"
+#include "cider_library.h"
 #include "skin/statusbar_skinned.h"
 #include "database/sound_mix.h"
 #include "database/tagcache.h"
@@ -122,6 +125,19 @@ static void update_non_static(void)
 
 void wps_do_action(enum wps_do_action_type action, bool updatewps)
 {
+    if (cider_active() && get_current_activity() != ACTIVITY_WPS &&
+        (action == WPS_PLAY || action == WPS_PLAYPAUSE))
+        cider_local_play();
+    if (cider_active())
+    {
+        struct cider_status source;
+        cider_status(&source);
+        if (source.available && (action == WPS_PLAYPAUSE ||
+            (action == WPS_PLAY && !source.rate) ||
+            (action == WPS_PAUSE && source.rate)))
+            cider_control("toggle", 0);
+        return;
+    }
     announce_user_pause();
 
     if (action == WPS_PLAYPAUSE) /* toggle the status */
@@ -236,9 +252,9 @@ static bool ffwd_rew(int button, bool seek_from_end)
                 }
                 else
                 {
-                    if ((audio_status() & AUDIO_STATUS_PLAY) && id3 && id3->length )
+                    if (((audio_status() & AUDIO_STATUS_PLAY) || cider_active()) && id3 && id3->length )
                     {
-                        audio_pre_ff_rewind();
+                        if (!cider_active()) audio_pre_ff_rewind();
                         if (direction > 0)
                             play_status_set_ffmode(STATUS_FASTFORWARD);
                         else
@@ -276,7 +292,8 @@ static bool ffwd_rew(int button, bool seek_from_end)
 
             case ACTION_WPS_STOPSEEK:
                 id3->elapsed = id3->elapsed + ff_rewind_count;
-                audio_ff_rewind(id3->elapsed);
+                if (cider_active()) cider_control("seek", id3->elapsed);
+                else audio_ff_rewind(id3->elapsed);
                 gstate->ff_rewind_count = 0;
                 ff_rewind = false;
                 play_status_set_ffmode(0);
@@ -656,6 +673,12 @@ static bool show_album_covers(long *go_to, bool *menu_covers)
 {
     int ret;
 
+    if (cider_active())
+    {
+        gwps_leave_wps(true);
+        *go_to = cider_browse_covers(true);
+        return true;
+    }
     gwps_leave_wps(false);
     bool was_music = cover_nav_playing();
     cover_nav_begin(GO_TO_WPS);
@@ -781,7 +804,9 @@ static long wps_run(bool return_agents, bool menu_covers)
             if (show_album_covers(&go_to, &menu_covers)) return go_to;
             restore = true;
         }
-        bool audio_paused = (audio_status() & AUDIO_STATUS_PAUSE)?true:false;
+        if (cider_active()) cider_wps_update(state);
+        bool audio_paused = cider_active() ? state->paused :
+                            (audio_status() & AUDIO_STATUS_PAUSE) != 0;
         /* did someone else (i.e power thread) change audio pause mode? */
         if (state->paused != audio_paused) {
             state->paused = audio_paused;
@@ -840,8 +865,20 @@ static long wps_run(bool return_agents, bool menu_covers)
 
         /* Exit if audio has stopped playing. This happens e.g. at end of
            playlist or if using the sleep timer. */
-        if (!(audio_status() & AUDIO_STATUS_PLAY))
+        if (!cider_active() && !(audio_status() & AUDIO_STATUS_PLAY))
             exit = true;
+        if (cider_wps_action(button))
+        {
+            update = true;
+            continue;
+        }
+        if (cider_active() && (button == ACTION_WPS_SEEKFWD ||
+                              button == ACTION_WPS_SEEKBACK))
+        {
+            ffwd_rew(button, false);
+            update = true;
+            continue;
+        }
         button = do_party_mode(button); /* block select actions in party mode */
 
         button = action_wpsab_single(button); /* iPods/X5/M5 */
@@ -1042,6 +1079,12 @@ static long wps_run(bool return_agents, bool menu_covers)
                 break;
             /* menu key functions */
             case ACTION_WPS_MENU:
+                if (cider_active())
+                {
+                    gwps_leave_wps(true);
+                    if (menu_covers) return cider_browse_covers(true);
+                    return return_agents ? GO_TO_AGENTS : GO_TO_PREVIOUS;
+                }
                 if (cover_nav_playing() && album_covers_reopen_tracks())
                 {
                     gwps_leave_wps(true);
@@ -1130,9 +1173,9 @@ static long wps_run(bool return_agents, bool menu_covers)
             case ACTION_WPS_ID3SCREEN:
             {
                 gwps_leave_wps(true);
-                if (browse_id3(audio_current_track(),
-                        playlist_get_display_index(),
-                        playlist_amount(), NULL, 1, NULL))
+                if (browse_id3(cider_active() ? state->id3 : audio_current_track(),
+                        cider_active() ? 1 : playlist_get_display_index(),
+                        cider_active() ? 1 : playlist_amount(), NULL, 1, NULL))
                     return GO_TO_ROOT;
                 restore = true;
             }
@@ -1169,6 +1212,17 @@ static long wps_run(bool return_agents, bool menu_covers)
 
 struct wps_state *get_wps_state(void)
 {
+    static bool remote;
+    bool source = cider_active();
+    if (source) cider_wps_update(&wps_state);
+    else if (remote)
+    {
+        wps_state.id3 = audio_current_track();
+        wps_state.nid3 = audio_next_track();
+        wps_state.ff_rewind_count = 0;
+        wps_state.paused = (audio_status() & AUDIO_STATUS_PAUSE) != 0;
+    }
+    remote = source;
     return &wps_state;
 }
 
@@ -1187,6 +1241,7 @@ void wps_set_seek_preview(struct mp3entry *id3, unsigned long position)
 /* this is called from the playback thread so NO DRAWING! */
 static void track_info_callback(unsigned short id, void *param)
 {
+    if (cider_active()) return;
     struct wps_state *state = get_wps_state();
 
     if (id == PLAYBACK_EVENT_TRACK_CHANGE || id == PLAYBACK_EVENT_CUR_TRACK_READY)
@@ -1211,7 +1266,11 @@ static void wps_state_init(void)
 {
     struct wps_state *state = get_wps_state();
     state->paused = false;
-    if(audio_status() & AUDIO_STATUS_PLAY)
+    if (cider_active())
+    {
+        cider_wps_update(state);
+    }
+    else if(audio_status() & AUDIO_STATUS_PLAY)
     {
         state->id3 = audio_current_track();
         state->nid3 = audio_next_track();

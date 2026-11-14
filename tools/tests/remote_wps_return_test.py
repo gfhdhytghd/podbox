@@ -15,6 +15,8 @@ menu = wps[a:b]
 source = r'''
 #include <assert.h>
 #include <stdbool.h>
+static bool cider_active(void){return false;}
+static int cider_browse_covers(bool home){(void)home;return 999;}
 #include <stdio.h>
 #define GO_TO_AGENTS 1
 #define GO_TO_PREVIOUS 2
@@ -50,6 +52,6 @@ subprocess.run(['cc','-std=gnu11','-Wall','-Wextra','-Werror','-g',
 subprocess.run([str(O/'return')],check=True)
 # The flag is consumed before any no-audio/USB-audio early return.
 wrapper = root[root.index('static int wpsscrn('):root.index('static int wpsscrn(')+1300]
-assert wrapper.index('wps_return_agents = false') < wrapper.index('if (usb_audio_get_active')
+assert wrapper.index('wps_return_agents = false') < wrapper.index('usb_audio_get_active()')
 assert root.count('gui_wps_show(return_agents, menu_covers)') == 3
 assert 'gui_wps_show(bool return_agents, bool menu_covers)' in wps

@@ -50,6 +50,7 @@ SECTIONS
         *(.glue_7)
         *(.glue_7t)
         . = ALIGN(0x4);
+        _textend = .;
     } > DRAM
 
     .rodata :
@@ -94,7 +95,9 @@ SECTIONS
        *(.stack)
        stackbegin = .;
        _stackbegin = .;
-       . += 0x2000;
+       /* 12 KiB: the 8 KiB main stack overflowed into __thread_entries,
+        * which sit directly below it (FU24). The rest of IRAM was unused. */
+       . += 0x3000;
        stackend = .;
        _stackend = .;
        _irqstackbegin = .;

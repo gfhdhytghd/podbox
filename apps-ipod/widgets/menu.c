@@ -746,6 +746,24 @@ int do_menu(const struct menu_item_ex *start_menu, int *start_selected,
         redraw_lists = query_audio_status(&old_audio_status);
 
 
+        if (menu == &root_menu_)
+        {
+            const struct menu_item_ex *row = current_subitems_count
+                ? menu->submenus[get_menu_selection(lists.selected_item, menu)]
+                : NULL;
+            if (root_menu_refresh())
+            {
+                int selection = 0;
+                for (unsigned int i = 0; i < MENU_GET_COUNT(menu->flags); i++)
+                    if (menu->submenus[i] == row) selection = i;
+                init_menu_lists(menu, &lists, selection, false, vps,
+                                buf, sizeof buf);
+                redraw_lists = true;
+                if (row && menu->submenus[selection] != row)
+                    action = ACTION_NONE;
+            }
+        }
+
         int new_action = menu_callback(action, menu, &lists);
         if (new_action == ACTION_EXIT_AFTER_THIS_MENUITEM)
             ret = MENU_SELECTED_EXIT; /* exit after return from selection */

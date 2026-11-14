@@ -16,6 +16,8 @@ a=root.index('            if (cover_nav_active())',root.index('        case GO_T
 pre=r'''
 #include <assert.h>
 #include <stdbool.h>
+static bool cider_active(void){return false;}
+static int cider_browse_covers(bool home){(void)home;return 999;}
 #include <stdio.h>
 #include <string.h>
 #define GO_TO_ROOT -2

@@ -15,6 +15,8 @@
 #include "widgets/list.h"               /* enum list_row_kind */
 
 void root_menu(void) NORETURN_ATTR;
+/* Reconcile transient Home rows; true when the list must be rebuilt. */
+bool root_menu_refresh(void);
 #ifdef HAVE_USB_PODLINK
 void root_menu_agents_shortcut(void);
 void root_menu_wps_shortcut(void);

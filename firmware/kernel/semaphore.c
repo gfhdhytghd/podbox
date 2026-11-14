@@ -110,6 +110,7 @@ void semaphore_release(struct semaphore *s)
         /* a thread was queued - wake it up and keep count at 0 */
         KERNEL_ASSERT(s->count == 0,
             "semaphore_release->threads queued but count=%d!\n", s->count);
+        IF_PRIO( wake_dbg_ra = __builtin_return_address(0); wake_dbg_obj = s; )
         result = wakeup_thread(thread, WAKEUP_DEFAULT);
     }
     else

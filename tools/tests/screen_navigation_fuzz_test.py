@@ -23,6 +23,10 @@ nav=c[c.index('static bool cover_journey'):c.index('int agents_shortcut_button('
 pre=r'''
 #include <assert.h>
 #include <stdbool.h>
+static bool cider_active(void){return false;}
+static struct {bool paused;} test_wps_state, *state=&test_wps_state;
+static void __attribute__((unused)) cider_wps_update(void*s){(void)s;}
+
 #include <stdio.h>
 #include <stdint.h>
 #include <stddef.h>
@@ -34,8 +38,10 @@ pre=r'''
 #define GO_TO_ALBUM_COVERS 12
 #define GO_TO_ALBUM_COVERS_TRACKS 13
 #define GO_TO_CIDER 14
-static bool cider_available(void){return false;}
-static int cider_screen(void){return GO_TO_WPS;}
+static bool __attribute__((unused)) cider_available(void){return false;}
+static int cider_browse(void){return GO_TO_WPS;}
+static int cider_scrn(void*p){(void)p;return cider_browse();}
+static int cider_browse_covers(bool h){(void)h;return GO_TO_CIDER;}
 #define CAROUSEL_REMOTE_RETURN -22
 #define CAROUSEL_CONTEXT -21
 #define CAROUSEL_PLAY_ALBUM -20

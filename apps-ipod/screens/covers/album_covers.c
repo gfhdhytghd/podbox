@@ -606,88 +606,13 @@ struct bg_task album_covers_task =
  * -- not a double-drawn faux bold, which does not look right. */
 static void draw_album_text(void)
 {
-    char album_and_year[MAX_PATH];
-    char albumtxt[TAGCACHE_BUFSZ], artisttxt[TAGCACHE_BUFSZ];
-    char album_fit[TEXT_FIT_BUF], artist_fit[TEXT_FIT_BUF];
-    const char *album_line, *artist_line;
-    struct pf_caption cap;
-    int albumtxt_x, albumtxt_y, artisttxt_x;
-    bool show_artist;
-
-    if (global_settings.album_covers_show_album_name == ALBUM_NAME_HIDE)
-        return;
-
-    show_artist = (global_settings.album_covers_show_album_name == ALBUM_AND_ARTIST_TOP
-                || global_settings.album_covers_show_album_name == ALBUM_AND_ARTIST_BOTTOM);
-
-    get_album_name(center_index, albumtxt, sizeof(albumtxt));
-    if (global_settings.album_covers_show_year == ALBUM_YEAR_BEFORE
-        && carousel_idx.album_index[center_index].year > 0)
-    {
-        snprintf(album_and_year, sizeof(album_and_year), "%d \xe2\x80\x93 %s",
-                  carousel_idx.album_index[center_index].year, albumtxt);
-    }
-    else if (global_settings.album_covers_show_year == ALBUM_YEAR_AFTER
-        && carousel_idx.album_index[center_index].year > 0)
-    {
-        snprintf(album_and_year, sizeof(album_and_year), "%s \xe2\x80\x93 %d",
-                  albumtxt, carousel_idx.album_index[center_index].year);
-    }
-    else
-        snprintf(album_and_year, sizeof(album_and_year), "%s", albumtxt);
-
-    struct viewport *saved_vp = carousel_text_begin();
-    lcd_set_foreground(pf_fg_color);
-
-    /* The year is the caption's other input: moving it changes the string
-     * without moving the selection. */
-    bool album_changed = carousel_caption_changed(
-                             center_index, global_settings.album_covers_show_year);
-
-    /* Switched to pf_bold_font (plain FONT_UI, a no-op, if no bold font is
-     * configured -- see its declaration) *before* set_scroll_line() below:
-     * that measures the string's pixel width against whatever font is
-     * currently active, to center/scroll it, so it has to see the album
-     * name's *actual* rendering font, not FONT_UI, or a bold font with a
-     * different average glyph width would end up mis-centered. */
-    lcd_setfont(pf_bold_font);
-    album_line = carousel_caption_fit(album_and_year, album_fit,
-                                      sizeof(album_fit));
-    if (album_changed)
-        set_scroll_line(album_line, PF_SCROLL_ALBUM);
-
-    /* The engine measures both fonts and centres the block for us, so top and
-     * bottom captions need no separate arithmetic here. */
-    carousel_caption_layout(show_artist, &cap);
-    albumtxt_y = cap.y1;
-
-    albumtxt_x = get_scroll_line_offset(PF_SCROLL_ALBUM);
-
-    if (show_artist)
-    {
-        if (carousel_idx.album_index[center_index].seek
-            != carousel_idx.album_untagged_seek)
-            lcd_putsxy(albumtxt_x, albumtxt_y, album_line);
-        /* Restored before the artist line: render_all_slides()/the FPS
-         * overlay/etc all assume pf_vp's font is the real UI font, and the
-         * artist name itself is never bold. screens[SCREEN_MAIN].getuifont(),
-         * not the FONT_UI constant -- see init()'s comment on pf_bold_font. */
-        lcd_setfont(screens[SCREEN_MAIN].getuifont());
-
-        get_album_artist(center_index, artisttxt, sizeof(artisttxt));
-        artist_line = carousel_caption_fit(artisttxt, artist_fit,
-                                           sizeof(artist_fit));
-        if (album_changed)
-            set_scroll_line(artist_line, PF_SCROLL_ARTIST);
-        artisttxt_x = get_scroll_line_offset(PF_SCROLL_ARTIST);
-        lcd_putsxy(artisttxt_x, cap.y2, artist_line);
-    }
-    else
-    {
-        lcd_putsxy(albumtxt_x, albumtxt_y, album_line);
-        lcd_setfont(screens[SCREEN_MAIN].getuifont());
-    }
-    carousel_text_end(saved_vp);
+    char album[TAGCACHE_BUFSZ], artist[TAGCACHE_BUFSZ];
+    get_album_name(center_index,album,sizeof album);
+    get_album_artist(center_index,artist,sizeof artist);
+    carousel_album_caption(album,artist,
+                           carousel_idx.album_index[center_index].year,
+                           carousel_idx.album_index[center_index].seek ==
+                               carousel_idx.album_untagged_seek,0);
 }
 
 /* Rebuild the album carousel in place (after a settings change or cache

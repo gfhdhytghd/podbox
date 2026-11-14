@@ -1,3 +1,4 @@
+import re
 """Cider control is exercised only against this loopback mock, never the user app."""
 from pathlib import Path
 import sys,unittest,tempfile,threading,json,time,io,zlib,struct
@@ -12,6 +13,7 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self,*args):pass
     def do_GET(self): self.respond()
     def do_POST(self): self.respond()
+    def do_PUT(self): self.respond()
     def respond(self):
         body=self.rfile.read(int(self.headers.get('Content-Length',0)))
         self.calls.append((self.command,self.path,json.loads(body) if body else None,self.headers.get('apptoken')))
@@ -29,6 +31,8 @@ class Handler(BaseHTTPRequestHandler):
             path=json.loads(body)['path'];query=urllib.parse.parse_qs(urllib.parse.urlsplit(path).query)
             offset=int(query.get('offset',['0'])[0]);limit=int(query.get('limit',['50'])[0])
             items=self.library_items if self.library_items is not None else [{'id':'a1','type':'library-albums','attributes':{'name':'Album','artistName':'Artist','dateAdded':'2026-01-01','trackCount':2}}]
+            if re.search(r'/(?:songs|albums|playlists)/[^/?]+$',path):
+                key=path.rsplit('/',1)[1];items=[{'id':key,'attributes':{'name':'Selected','playParams':{'id':key}}}]
             value={'data':items[offset:offset+limit],'meta':{'total':len(items)}}
             if offset+limit<len(items):value['next']=path
         else:value={'status':'ok'}
@@ -42,7 +46,7 @@ class LocalOpener:
         parsed=urllib.parse.urlsplit(url)
         connection=http.client.HTTPConnection('127.0.0.1',parsed.port,timeout=timeout)
         data=getattr(request,'data',None);headers=dict(getattr(request,'headers',{}))
-        connection.request('POST' if data is not None else 'GET',parsed.path+('?' + parsed.query if parsed.query else ''),data,headers)
+        connection.request(request.get_method() if hasattr(request,'get_method') else 'GET',parsed.path+('?' + parsed.query if parsed.query else ''),data,headers)
         response=connection.getresponse()
         if response.status>=400:
             response.close();connection.close()
@@ -61,16 +65,18 @@ class Cider(unittest.TestCase):
     def fetch(self,url,timeout):return LocalOpener(self.url).open(url,timeout)
     def test_routes_auth_poll_and_no_auto_controls(self):
         c=self.client(token='mock-token');state=c.snapshot()
-        self.assertEqual((state['id'],state['position'],state['volume']),('song-1',12000,50))
+        self.assertEqual((state['id'],state['position'],state['volume']),('song-1',12000,0))
         self.assertFalse(any(m=='POST' for m,*_ in Handler.calls))
-        for cmd,value in [('toggle',0),('next',0),('previous',0),('seek',12000),('volume',55),('play-item','songs:song-1')]:c.control(cmd,value)
+        for cmd,value in [('toggle',0),('next',0),('previous',0),('seek',12000),('play-item','songs:song-1')]:c.control(cmd,value)
         posts=[v for v in Handler.calls if v[0]=='POST']
-        self.assertEqual([p[1] for p in posts],['/api/v1/playback/'+x for x in ['playpause','next','previous','seek','volume','play-item']])
-        self.assertEqual(posts[3][2],{'position':12.0});self.assertEqual(posts[4][2],{'volume':.55})
+        self.assertEqual([p[1] for p in posts],['/api/v1/playback/'+x for x in ['playpause','next','previous','seek']]+['/api/v1/amapi/run-v3','/api/v1/playback/play-item-href'])
+        self.assertEqual(posts[3][2],{'position':12.0});self.assertEqual(posts[-1][2],{'href':'/v1/catalog/$STOREFRONT/songs/song-1'})
+        with self.assertRaises(ValueError):c.control('volume',55)
+        self.assertFalse(any(path.endswith('/volume') for _,path,*_ in Handler.calls))
         self.assertTrue(all(p[3]=='mock-token' for p in Handler.calls))
     def test_single_item_kind_passes_through_to_rpc(self):
         self.client().control('play-item','song:song-2')
-        self.assertEqual(Handler.calls[-1][2],{'type':'song','id':'song-2'})
+        self.assertEqual(Handler.calls[-1][2],{'href':'/v1/catalog/$STOREFRONT/songs/song-2'})
     def test_native_columns_with_nonuniform_pixels(self):
         from PIL import Image
         image=Image.new('RGB',(240,240),(255,0,0))
@@ -81,7 +87,7 @@ class Cider(unittest.TestCase):
         self.assertEqual(struct.unpack_from('<H',data,12+2*(100*128+5))[0],0x001f)
 
     def test_empty_queue_never_retains_old_progress(self):
-        c=self.client();c.request=mock.Mock(side_effect=[{'info':None},{'is_playing':False},{'data':{'currentTime':174.5}},{'volume':1},{'value':0},{'value':0}])
+        c=self.client();c.request=mock.Mock(side_effect=[{'info':None},{'is_playing':False},{'data':{'currentTime':174.5}},{'value':0},{'value':0}])
         state=c.snapshot()
         self.assertEqual((state['duration'],state['position'],state['rate']),(0,0,0))
 
@@ -147,7 +153,7 @@ class Cider(unittest.TestCase):
         with self.assertRaises(ValueError):self.cache.put_art('a'*64,'original',out.getvalue())
         self.assertIsNone(self.cache.get_art('a'*64,'original'))
     def test_state_coalescing_and_library_generation(self):
-        b=hrcider.Bridge(client=self.client(),cache=self.cache,fetch=self.fetch)
+        b=hrcider.Bridge(client=self.client(),cache=self.cache,fetch=self.fetch,volume=mock.Mock(read=mock.Mock(return_value=(42,False))))
         b.opened=True;b.generation=42;b.scheduler.reset(42)
         b.state=self.client().snapshot();now=[100.]
         with mock.patch.object(hrcider.time,'monotonic',side_effect=lambda:now[0]):
@@ -161,12 +167,12 @@ class Cider(unittest.TestCase):
         payload=hrcider.page_frame(1,2,self.cache.page('albums'))
         self.assertLessEqual(len(payload),12288)
         self.assertEqual(int(payload.split(b'\n')[0].split(b'\t')[-1]),len(payload.split(b'\n'))-1)
-        b=hrcider.Bridge(client=self.client(),cache=self.cache,fetch=self.fetch);b.command(b'ci\t1\t24576')
+        b=hrcider.Bridge(client=self.client(),cache=self.cache,fetch=self.fetch,volume=mock.Mock(read=mock.Mock(return_value=(42,False))));b.command(b'ci\t1\t24576')
         command=f'cr\t{b.generation}\t-1\t'+('a'*64)+'\tM\t0\t3\t0'
         self.assertTrue(b.command(command.encode()));self.assertFalse(b.requests)
 
     def test_art_cache_hit_stale_and_capped_download_no_token(self):
-        b=hrcider.Bridge(client=self.client(token='mock-token'),cache=self.cache,fetch=self.fetch)
+        b=hrcider.Bridge(client=self.client(token='mock-token'),cache=self.cache,fetch=self.fetch,volume=mock.Mock(read=mock.Mock(return_value=(42,False))))
         template=self.url+'/art/{w}x{h}bb.png';key=hrcider.art_id(template);b.templates[key]=template
         first=b.artwork(key,'M');self.assertEqual(len(first),32780)
         self.assertEqual(Handler.calls[-1],('GET','/art/240x240bb.png',None,None))
@@ -194,7 +200,7 @@ class Cider(unittest.TestCase):
         with self.assertRaises(OSError):c.control('toggle')
         self.assertEqual(len(Handler.calls),1)
     def test_bridge_workers_full_cover_xs_controls_and_cancel(self):
-        b=hrcider.Bridge(client=self.client(),cache=self.cache,fetch=self.fetch)
+        b=hrcider.Bridge(client=self.client(),cache=self.cache,fetch=self.fetch,volume=mock.Mock(read=mock.Mock(return_value=(42,False))))
         b.start()
         try:
             end=time.monotonic()+4
@@ -214,10 +220,11 @@ class Cider(unittest.TestCase):
             whole=b''.join(v['data'] for v in chunks)
             self.assertEqual(len(whole),32780);self.assertEqual(zlib.crc32(whole),chunks[0]['crc'])
             self.assertLessEqual(sum(len(p) for k,p in frames if k==3),131072)
-            b.command(f'cc\t{gen}\t9\tvolume\t55'.encode())
+            b.command(f'cc\t{gen}\t9\tvolume-step\t1'.encode())
             end=time.monotonic()+3
-            while not any(path.endswith('/volume') and m=='POST' for m,path,*_ in Handler.calls) and time.monotonic()<end:time.sleep(.01)
-            self.assertTrue(any(path.endswith('/volume') and m=='POST' for m,path,*_ in Handler.calls))
+            while not b.volume.step.called and time.monotonic()<end:time.sleep(.01)
+            b.volume.step.assert_called_with(1)
+            self.assertFalse(any(path.endswith('/volume') for _,path,*_ in Handler.calls))
             b.command(f'cb\t{gen}\t2\t{key},{key}'.encode());frames=[];end=time.monotonic()+3
             while not any(k==3 and p.startswith(b'CXS1') for k,p in frames) and time.monotonic()<end:
                 b.poll(lambda *v:frames.append(v));time.sleep(.005)

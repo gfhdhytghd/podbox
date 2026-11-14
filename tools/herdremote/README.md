@@ -717,3 +717,31 @@ defaults to loopback port 10767. Tokens are not cached. Metadata/art live in
 or additional service is needed. See `cider-remote-protocol.md` for data-plane
 budgets, disk behavior, artwork sizes and controls. Development tests use a
 mock Cider server and never control the user's active playback.
+
+FU23 replaces the separate Cider screen with the system Now Playing. Home's
+always-visible **Cider Remote** row opens native Music lists and Album Covers.
+Deploy updated `hrcider.py`, `hrcider_cache.py`, and new `hrcider_library.py`,
+`hrcider_volume.py`, `hrcider_featured.py` beside the existing HerdRemote runtime.
+Cache schema 4 preserves the FU23 library index and native artwork while
+normalizing artwork keys across template and fixed-size CDN URLs. Older schemas
+rebuild the index in the background.
+
+Cider Remote volume controls the computer's default audio sink with `wpctl`,
+or `pactl` if wpctl is missing. Neither reads nor writes Cider's volume RPC.
+Rapid 1% steps are combined; the maximum is 100%. Host volume/mute changes
+are published with playback state. No sudo or audio-service restart is needed.
+A matching firmware and all five Cider modules are required. No deployment or
+real playback-control test is performed by the offline regression suite.
+
+Starting a Cider item selects Cider as the system playback source and pauses
+the local queue. Starting local playback selects Local and requests one Cider
+pause if Cider is playing. Link loss leaves the Cider source paused/unavailable;
+it never resumes the local queue automatically. Reboot selects Local.
+
+
+Cider artwork uses four bounded prefetch workers for the current visible
+window. Now Playing also preloads the actual queue's adjacent L240 covers on
+the host and iPod. Install the matching firmware and `hrcider.py` together.
+Song selection uses full resource playback and confirms the selected track
+before the iPod opens Now Playing. The journal includes control request/result
+IDs and failures; no automatic playback retry occurs.

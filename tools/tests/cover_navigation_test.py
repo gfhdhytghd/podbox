@@ -23,6 +23,7 @@ static int held,clock_pumps;
 static struct agents_cover_chord_state cover_chord;
 static unsigned int thread_self(void){return caller;}
 static int button_status(void){return held;}
+static int cider_play_status(void){return 0;}
 static void podlink_time_sync(void){clock_pumps++;}
 '''
 c=re.sub(r'^#include .*$', '',(S/'apps-ipod/input/agents_shortcut.c').read_text(),flags=re.M)

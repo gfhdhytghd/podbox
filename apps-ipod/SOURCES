@@ -155,7 +155,10 @@ screens/system/podlink_screen.c
 screens/system/agents_screen.c
 screens/playback/cider.c
 screens/playback/cider_model.c
-screens/playback/cider_screen.c
+screens/playback/cider_library.c
+screens/playback/cider_browser.c
+screens/playback/cider_wps.c
+screens/covers/cider_covers.c
 input/agents_shortcut.c
 screens/system/herdremote_model.c
 screens/system/detail_layout.c

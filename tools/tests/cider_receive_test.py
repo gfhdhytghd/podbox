@@ -10,6 +10,8 @@ def fn(name):
  return s[m.start():e]
 pre=r'''
 #include <assert.h>
+#define MIN(a,b) ((a)<(b)?(a):(b))
+static unsigned int play_request;static int play_reply;
 #include <stdio.h>
 #include <string.h>
 #include <stdarg.h>
@@ -19,7 +21,10 @@ static struct cider_state state;
 static struct cider_transfer transfer;
 static struct cider_cache cache;
 static int cider_mutex;static unsigned long current_tick;
-static unsigned int granted,grant,cancel_request,ncommands;
+static unsigned int granted,grant,cancel_request,ncommands,art_revision;
+#define HZ 100
+static void cider_library_invalidate(uint32_t n){(void)n;}
+static bool cider_library_receive(const void*d,unsigned int n,uint32_t g,uint32_t l){(void)d;(void)n;(void)g;(void)l;return true;}
 static bool disk_lookup,request_ready;
 static void mutex_lock(int*m){(void)m;}
 static void mutex_unlock(int*m){(void)m;}
@@ -38,6 +43,13 @@ assert(!transfer.active&&cider_cache_find(&cache,transfer.key,"M")>=0);
 unsigned int prior=granted;put32(packet+4,8);assert(receive(&message)&&granted==prior);
 state.generation=0;put32(packet+4,7);assert(receive(&message));put32(packet+4,99);assert(!receive(&message));
 message=(struct podlink_message){.type=PODLINK_TEXT,.data=(const unsigned char*)"echo",.length=4};assert(!receive(&message));
+state.generation=7;play_request=123;
+const char*ack="CK\t7\t123\t1\tOK";
+message=(struct podlink_message){.type=PODLINK_TEXT,.data=(const unsigned char*)ack,.length=strlen(ack)};
+assert(receive(&message)&&play_reply==1);
+play_reply=0;ack="CK\t7\t124\t1\tOK";message.data=(const unsigned char*)ack;message.length=strlen(ack);assert(receive(&message)&&!play_reply);
+ack="CK\t7\t123\t0\tFailed";message.data=(const unsigned char*)ack;message.length=strlen(ack);assert(receive(&message)&&play_reply==-1);
+const char*neighbors="CP\t7\tsong\t-\t-";strcpy(state.id,"song");message.data=(const unsigned char*)neighbors;message.length=strlen(neighbors);assert(receive(&message)&&!state.previous_art[0]&&!state.next_art[0]);
 puts("Production resident receiver: legacy raw passthrough, state negotiation, whole-cover CRC/cache, exact credit refund, stale-generation drop PASS");}
 '''
 (O/'receive.c').write_text(pre+fn('u32')+fn('receive')+post)

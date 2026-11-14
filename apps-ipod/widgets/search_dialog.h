@@ -55,6 +55,8 @@ struct search_provider
      * A query below the provider's own minimum length is its business, not the
      * dialog's -- return 0 and the list empties. */
     int (*scan)(const char *query, void *ctx);
+    /* Optional asynchronous provider: true once a new result is ready. */
+    bool (*refresh)(void *ctx);
 
     /* Row `i` of the last scan, 0 <= i < the count scan() returned. The
      * returned pointer only has to stay valid until the next call. */

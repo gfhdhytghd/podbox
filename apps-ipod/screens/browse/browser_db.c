@@ -3817,6 +3817,13 @@ static uint32_t root_hide_mask(void)
     return (uint32_t)global_settings.music_menu_hidden;
 }
 
+const char *browser_db_root_row_key(int index)
+{
+    struct menu_root *root = parsed_root_menu();
+    return root && index >= 0 && index < root->itemcount ?
+           root->items[index]->_name : "";
+}
+
 int browser_db_root_row_count(void)
 {
     struct menu_root *root = parsed_root_menu();

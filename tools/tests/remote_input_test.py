@@ -454,8 +454,8 @@ navpre='''
 #define GO_TO_PLAYLIST_VIEWER 2
 #define GO_TO_WPS 3
 #define GO_TO_CIDER 89
-static bool cider_available(void){return false;}
-static int __attribute__((unused)) cider_screen(void){return GO_TO_WPS;}
+static bool __attribute__((unused)) cider_available(void){return false;}
+static int __attribute__((unused)) cider_browse(void){return GO_TO_WPS;}
 #define GO_TO_ALBUM_COVERS 14
 #define GO_TO_PREVIOUS_MUSIC 4
 #define GO_TO_AGENTS 5
@@ -527,6 +527,7 @@ static int iap_volume_filter(int b){return b;}
 static int raw_volume_button(int b){return b;}
 bool ui_polling;
 void podlink_time_sync(void) {}
+int cider_play_status(void) {return 0;}
 struct agents_shortcut_state shortcut;
 static struct agents_cover_chord_state cover_chord;
 static bool shortcut_talking;

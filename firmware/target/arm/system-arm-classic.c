@@ -26,6 +26,9 @@
 
 #include <get_sp.h>
 #include <backtrace.h>
+#ifndef BOOTLOADER
+const char *thread_current_name(void);
+#endif
 
 static const char* const uiename[] = {
     "Undefined instruction",
@@ -95,6 +98,44 @@ void NORETURN_ATTR UIE(unsigned int pc, unsigned int num)
      * memory regions which cause abort
      */
     static bool triggered = false;
+#ifndef BOOTLOADER
+    unsigned int exception_mode = 0, saved_status = 0;
+    unsigned int user_context[2] = {0, 0}, saved_sp = 0, saved_lr = 0;
+    asm volatile("mrs %0, cpsr" : "=r"(exception_mode));
+    bool banked = (exception_mode & 0x1f) == 0x17 ||
+                  (exception_mode & 0x1f) == 0x1b;
+    if (banked)
+    {
+        asm volatile("mrs %0, spsr" : "=r"(saved_status));
+        /* ABT has its own SP/LR. Read the interrupted SYS/USR bank separately. */
+        asm volatile("stmia %0, {r13, r14}^\n\tnop"
+                     : : "r"(user_context) : "memory");
+        /* Threads run in SVC: briefly enter the interrupted mode (IRQ/FIQ
+         * masked) to read its banked SP/LR, then return to this mode. */
+        if ((saved_status & 0x1f) != 0x10 && (saved_status & 0x1f) != 0x1f)
+        {
+            unsigned int here, there;
+            asm volatile(
+                "mrs   %2, cpsr        \n"
+                "bic   %3, %2, #0x1f   \n"
+                "orr   %3, %3, %4      \n"
+                "orr   %3, %3, #0xc0   \n"
+                "msr   cpsr_c, %3      \n"
+                "mov   %0, sp          \n"
+                "mov   %1, lr          \n"
+                "msr   cpsr_c, %2      \n"
+                : "=&r"(saved_sp), "=&r"(saved_lr), "=&r"(here), "=&r"(there)
+                : "r"(saved_status & 0x1f));
+        }
+        else
+        {
+            saved_sp = user_context[0];
+            saved_lr = user_context[1];
+        }
+    }
+    /* An exception can interrupt a screen whose viewport lives on its stack. */
+    lcd_set_viewport(NULL);
+#endif
 
 #if LCD_DEPTH > 1
     lcd_set_backdrop(NULL);
@@ -103,7 +144,9 @@ void NORETURN_ATTR UIE(unsigned int pc, unsigned int num)
     unsigned line = 0;
 
     lcd_setfont(FONT_SYSFIXED);
+#ifdef BOOTLOADER
     lcd_set_viewport(NULL);
+#endif
     lcd_clear_display();
     lcd_putsf(0, line++, "%s at %08x" IF_COP(" (%d)"), uiename[num], pc IF_COP(, CURRENT_CORE));
 
@@ -142,6 +185,32 @@ void NORETURN_ATTR UIE(unsigned int pc, unsigned int num)
     }   /* num == 1 || num == 2 // prefetch/data abort */
 #endif /* !defined(CPU_ARM7TDMI */
 
+#ifndef BOOTLOADER
+    if (banked)
+    {
+        extern char _textstart[], _textend[], _end[];
+        lcd_putsf(0, line++, "mode:%02x thr:%.20s", saved_status & 0x1f,
+                  thread_current_name());
+        lcd_putsf(0, line++, "sp:%08x lr:%08x", saved_sp, saved_lr);
+        /* Candidate return addresses on the interrupted stack. */
+        unsigned int found = 0, text[12];
+        const unsigned int *word = (const unsigned int *)(saved_sp & ~3u);
+        bool dram = saved_sp >= 0x08000000u && saved_sp < (uintptr_t)_end;
+        bool iram = saved_sp >= 0x60u && saved_sp < 0x10000u;
+        for (unsigned int i = 0; (dram || iram) && i < 384 && found < 12; i++)
+        {
+            if ((uintptr_t)(word + i) >= (dram ? (uintptr_t)_end : 0x10000u))
+                break;
+            unsigned int value = word[i];
+            if (value >= (uintptr_t)_textstart && value < (uintptr_t)_textend)
+                text[found++] = value;
+        }
+        for (unsigned int i = 0; i < found; i += 3)
+            lcd_putsf(0, line++, "%08x %08x %08x", text[i],
+                      i + 1 < found ? text[i + 1] : 0,
+                      i + 2 < found ? text[i + 2] : 0);
+    }
+#endif
 #ifdef HAVE_RB_BACKTRACE
     if (!triggered)
     {

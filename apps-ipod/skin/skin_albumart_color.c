@@ -47,6 +47,8 @@
  ****************************************************************************/
 
 #include "config.h"
+#include "screens/playback/cider.h"
+#include "screens/playback/cider_wps.h"
 
 
 #include <string.h>
@@ -1075,14 +1077,14 @@ static bool palette_from_slot(int handle)
 
     if (art_filtered(handle))
         return false;
-    if (!buf_pin_handle(handle, true))
+    if (!wps_art_pin(handle, true))
         return false;
 
-    got = bufgetdata(handle, 0, (void *)&bmp) > 0;
+    got = wps_art_bitmap(handle, &bmp);
     if (got)
         extract_colors(bmp);
 
-    buf_pin_handle(handle, false);
+    wps_art_pin(handle, false);
     return got;
 }
 
@@ -1319,7 +1321,7 @@ void skin_albumart_filter(int aa_slot, struct skin_albumart *aa)
     if (aa_slot < 0 || aa_slot >= AA_FILTER_SLOTS)
         return;
 
-    handle = playback_current_aa_hid(aa_slot);
+    handle = wps_art_handle(aa_slot);
     if (handle < 0)
         return;                                  /* not buffered yet */
 
@@ -1360,7 +1362,7 @@ void skin_albumart_filter(int aa_slot, struct skin_albumart *aa)
      * Width and height rather than the drawing stride: a levels filter is
      * per-pixel and cares only that it covers the whole buffer. A positional
      * one (dither) would need the real row length. */
-    if (bufgetdata(handle, 0, (void *)&bmp) <= 0)
+    if (!wps_art_bitmap(handle, &bmp))
         return;
 
     /* An adaptive chain names no amount and is not fit to run until it has
@@ -1589,6 +1591,14 @@ void dynamic_colors_save_theme(void)
 
 void dynamic_colors_check_extraction(int aa_slot)
 {
+    static bool remote;
+    static unsigned int remote_gen;
+    if (remote != cider_active() || (remote && remote_gen != filter_gen))
+    {
+        remote = cider_active(); remote_gen = filter_gen;
+        needs_extraction = true;
+        cache.track_change_tick = current_tick;
+    }
     /* Remember valid AA slots from skin_render calls so list_draw
      * can trigger extraction with aa_slot = -1 (use last known) */
     static int last_aa_slot = -1;
@@ -1603,7 +1613,7 @@ void dynamic_colors_check_extraction(int aa_slot)
      * below), the setting going off, or a theme change.
      *
      * Do not add a revert here. A stop frees the buffered art, and
-     * playback_current_aa_hid() reports none once stopped, so cache.accent
+     * wps_art_handle() reports none once stopped, so cache.accent
      * and cache.dominant are the last copy of the palette anywhere -- a
      * revert would discard it with no way to derive it again. */
 
@@ -1637,13 +1647,13 @@ void dynamic_colors_check_extraction(int aa_slot)
     /* The cache first. It needs no album-art slot, so this works on a theme
      * that declares no %Cl -- which is why there is no "give up without a
      * slot" test here any more. */
-    if (palette_from_cache())
+    if (!cider_active() && palette_from_cache())
     {
         needs_extraction = false;
         return;
     }
 
-    int handle = aa_slot >= 0 ? playback_current_aa_hid(aa_slot) : -1;
+    int handle = aa_slot >= 0 ? wps_art_handle(aa_slot) : -1;
     if (handle >= 0)
     {
         if (palette_from_slot(handle))

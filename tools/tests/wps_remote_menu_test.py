@@ -9,6 +9,11 @@ menu=wps[a:b]
 pre=r'''
 #include <assert.h>
 #include <stdbool.h>
+static bool cider_active(void){return false;}
+static int cider_browse_covers(bool home){(void)home;return 999;}
+static struct {bool paused;} test_wps_state, *state __attribute__((unused))=&test_wps_state;
+static void __attribute__((unused)) cider_wps_update(void*s){(void)s;}
+
 #include <stdio.h>
 #define GO_TO_AGENTS 1
 #define GO_TO_PREVIOUS 2
@@ -69,8 +74,8 @@ nav=r'''
 #define GO_TO_PREVIOUS -1
 #define GO_TO_WPS 10
 #define GO_TO_CIDER 89
-static bool cider_available(void){return false;}
-static int __attribute__((unused)) cider_screen(void){return GO_TO_WPS;}
+static bool __attribute__((unused)) cider_available(void){return false;}
+static int __attribute__((unused)) cider_browse(void){return GO_TO_WPS;}
 #define GO_TO_AGENTS 11
 #define GO_TO_ROOT 12
 #define GO_TO_ALBUM_COVERS_TRACKS 13
@@ -93,6 +98,7 @@ static int db_summary_play_pending(void){return 1;}
 int album_covers_return(const char*,bool*);
 '''
 nav+='\n#define AGENTS_NAV_WPS 2\nstatic bool agents_nav_has(int screen){(void)screen;return false;}\nstatic bool cover_nav_active(void){return false;}\nstatic bool cover_nav_playing(void){return false;}\nstatic void cover_nav_begin(int i){(void)i;}\nstatic int cover_nav_finish(void){return GO_TO_PREVIOUS;}\nstatic void cover_nav_set_playing(bool b){(void)b;}\n'
+nav+='\nstatic bool cider_active(void){return false;}\nstatic int cider_browse_covers(bool h){(void)h;return GO_TO_ROOT;}\n'
 nav+=function(albums,'album_covers')+function(albums,'album_covers_return')
 nav+=function((R/'apps-ipod/screens/playback/wps.c').read_text(),'show_album_covers')
 nav+=function(root,'agents_scrn')
@@ -124,7 +130,7 @@ int main(void){
 subprocess.run(['cc','-std=gnu11','-Wall','-Wextra','-Werror','-fsanitize=address,undefined','-fno-pie','-no-pie',str(O/'origins.c'),'-o',str(O/'origins')],check=True)
 subprocess.run([str(O/'origins')],check=True)
 assert root.count('gui_wps_show(return_agents, menu_covers)')==3
-assert root.index('wps_menu_covers = false',root.index('static int wpsscrn('))<root.index('if (usb_audio_get_active',root.index('static int wpsscrn('))
+assert root.index('wps_menu_covers = false',root.index('static int wpsscrn('))<root.index('usb_audio_get_active()',root.index('static int wpsscrn('))
 keys=(R/'apps-ipod/input/keymap_ipod.c').read_text()
 for button in ['BUTTON_MENU','BUTTON_RC_MENU']:
  assert re.search(r'ACTION_WPS_MENU,\s*'+button+r'\|BUTTON_REL',keys)

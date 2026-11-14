@@ -11,10 +11,11 @@ struct cider_state
 {
     uint32_t generation, seq, host_ms, duration, position, received;
     uint32_t library_generation;
-    bool available, have;
+    bool available, have, muted;
     int rate, volume, shuffle, repeat;
     uint32_t bg;
-    char id[80], art[65], title[124], artist[124], album[124], reason[96];
+    char previous_art[65], next_art[65];
+    char id[80], art[65], title[124], artist[124], album[124], composer[124], reason[96];
 };
 struct cider_slot
 {
@@ -37,6 +38,8 @@ struct cider_transfer
 };
 int cider_state_apply(struct cider_state *s, const void *data,
                       unsigned int length, uint32_t tick);
+int cider_reply_status(const void *data, unsigned int length,
+                       uint32_t generation, uint32_t request);
 uint32_t cider_position(const struct cider_state *s, uint32_t tick, int hz);
 int cider_cache_find(struct cider_cache *c, const char *key, const char *tier);
 bool cider_cache_put(struct cider_cache *c, const char *key, const char *tier,

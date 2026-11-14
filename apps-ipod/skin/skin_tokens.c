@@ -31,6 +31,8 @@
 #include "font.h"
 #include "draw/text_wrap.h"
 #include <stdio.h>
+#include "screens/playback/cider.h"
+#include "screens/playback/cider_wps.h"
 #include "string-extra.h"
 #include <stdlib.h>
 #include <limits.h>
@@ -703,7 +705,7 @@ static struct mp3entry* get_mp3entry_from_offset(int offset, char **filename)
         pid3 = state->id3;
     else if (offset == 1)
         pid3 = state->nid3;
-    else if (audio_status() & AUDIO_STATUS_PLAY)
+    else if (!cider_active() && (audio_status() & AUDIO_STATUS_PLAY))
     {
         struct mp3entry *bufid3 = &offset_id3;
         wipe_mp3entry(bufid3);
@@ -1676,7 +1678,7 @@ const char *get_token_value(struct gui_wps *gwps,
                                    (char*)P2STR(ID2P(token->value.i)) : "<ERR>";
 
         case SKIN_TOKEN_PLAYLIST_ENTRIES:
-            numeric_ret = playlist_amount();
+            numeric_ret = cider_active() ? 1 : playlist_amount();
             itoa_buf(buf, buf_size, numeric_ret);
             numeric_buf = buf;
             goto gtv_ret_numeric_tag_info;
@@ -1829,10 +1831,10 @@ const char *get_token_value(struct gui_wps *gwps,
         case SKIN_TOKEN_LIST_NEEDS_SCROLLBAR:
             return skinlist_needs_scrollbar(gwps->display->screen_type) ? "s" : "";
         case SKIN_TOKEN_PLAYLIST_NAME:
-            return playlist_name(NULL, buf, buf_size);
+            return cider_active() ? "Cider" : playlist_name(NULL, buf, buf_size);
 
         case SKIN_TOKEN_PLAYLIST_POSITION:
-            numeric_ret = playlist_get_display_index()+offset;
+            numeric_ret = cider_active() ? 1 : playlist_get_display_index()+offset;
             itoa_buf(buf, buf_size, numeric_ret);
             numeric_buf = buf;
             goto gtv_ret_numeric_tag_info;
@@ -1863,13 +1865,30 @@ const char *get_token_value(struct gui_wps *gwps,
             goto gtv_ret_numeric_tag_info;
         }
         case SKIN_TOKEN_PLAYLIST_SHUFFLE:
-            if ( global_settings.playlist_shuffle )
+            if (cider_active())
+            {
+                struct cider_status source;
+                cider_status(&source);
+                return source.shuffle ? "s" : NULL;
+            }
+            if (global_settings.playlist_shuffle)
                 return "s";
             else
                 return NULL;
             break;
 
         case SKIN_TOKEN_VOLUME:
+            if (cider_active())
+            {
+                bool muted;
+                int volume = cider_wps_volume(&muted);
+                snprintf(buf, buf_size, "%d%%", volume);
+                if (limit == TOKEN_VALUE_ONLY) numeric_ret = volume;
+                else if (muted || !volume) numeric_ret = 1;
+                else numeric_ret = MIN(limit,2 + volume * (MAX(2,limit)-2) / 100);
+                numeric_buf = buf;
+                goto gtv_ret_numeric_tag_info;
+            }
             format_sound_value_ex(buf, buf_size, SOUND_VOLUME,
                                   global_status.volume, true);
 
@@ -1914,7 +1933,7 @@ const char *get_token_value(struct gui_wps *gwps,
             while (node)
             {
                 struct skin_albumart *aa = skin_albumart_of(skinbuf, node);
-                if (aa && playback_current_aa_hid(aa->slot) >= 0)
+                if (aa && wps_art_handle(aa->slot) >= 0)
                     return "C";
                 node = SKINOFFSETTOPTR(skinbuf, node->next);
             }
@@ -2044,11 +2063,21 @@ const char *get_token_value(struct gui_wps *gwps,
         }
 
         case SKIN_TOKEN_REPEAT_MODE:
-            itoa_buf(buf, buf_size, global_settings.repeat_mode);
-            numeric_ret = global_settings.repeat_mode + 1;
+        {
+            int repeat = global_settings.repeat_mode;
+            if (cider_active())
+            {
+                struct cider_status source;
+                cider_status(&source);
+                repeat = source.repeat == 1 ? REPEAT_ONE :
+                         source.repeat == 2 ? REPEAT_ALL : REPEAT_OFF;
+            }
+            itoa_buf(buf, buf_size, repeat);
+            numeric_ret = repeat + 1;
             numeric_buf = buf;
             goto gtv_ret_numeric_tag_info;
 
+        }
         case SKIN_TOKEN_RTC_PRESENT:
             return "c";
         /* peakmeter */

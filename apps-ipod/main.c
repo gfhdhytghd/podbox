@@ -575,6 +575,22 @@ static void init_tagcache(void)
 
 #include "errno.h"
 
+#if !defined(SIMULATOR) && !defined(APPLICATION)
+/* The main stack sits directly above __thread_entries in IRAM, so an
+ * overflow silently corrupts other threads. crt0 fills it with 0xdeadbeef;
+ * panic by name once usage reaches the bottom 2 KiB, before any damage. */
+static void main_stack_guard(void)
+{
+    extern uintptr_t stackbegin[];
+    static bool fired;
+    if (!fired && stackbegin[2048 / sizeof(uintptr_t)] != 0xdeadbeef)
+    {
+        fired = true;
+        panicf("MAIN STACK OVF");
+    }
+}
+#endif
+
 static void init(void) INIT_ATTR;
 static void init(void)
 {
@@ -584,6 +600,9 @@ static void init(void)
     system_init();
     core_allocator_init();
     kernel_init();
+#if !defined(SIMULATOR) && !defined(APPLICATION)
+    tick_add_task(main_stack_guard);
+#endif
 
 
 

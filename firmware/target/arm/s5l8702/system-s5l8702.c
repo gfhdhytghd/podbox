@@ -213,6 +213,50 @@ static void vic_init(void)
     VIC1EDGE1 = ~0;
 }
 
+#ifndef BOOTLOADER
+/* Diagnostic: a call through NULL (or into the hole between the vectors and
+ * IRAM code) lands in low IRAM. The real boot enters the DRAM copy at
+ * 0x08000000, so address 0 and 0x44..0x5b are only reached by such a call.
+ * Point them all at one literal that names the caller instead of silently
+ * re-running crt0. */
+const char *thread_current_name(void);
+uint32_t null_call_regs[7] USED_ATTR; /* r0-r3, sp, lr, cpsr */
+
+static void NORETURN_ATTR USED_ATTR null_call_report(void)
+{
+    const uint32_t *r = null_call_regs;
+    panicf("NULL call lr:%08lx sp:%08lx mode:%02lx thr:%.16s "
+           "r0:%08lx r1:%08lx r2:%08lx r3:%08lx",
+           (unsigned long)r[5], (unsigned long)r[4],
+           (unsigned long)(r[6] & 0x1f), thread_current_name(),
+           (unsigned long)r[0], (unsigned long)r[1],
+           (unsigned long)r[2], (unsigned long)r[3]);
+}
+
+void __attribute__((naked)) null_call_trap(void)
+{
+    asm volatile(
+        "ldr   r12, =null_call_regs   \n"
+        "stmia r12, {r0-r3, sp, lr}   \n"
+        "mrs   r0, cpsr               \n"
+        "str   r0, [r12, #24]         \n"
+        "b     null_call_report       \n"
+        ".ltorg                       \n");
+}
+
+static void null_call_trap_install(void)
+{
+    uint32_t *low;
+    asm volatile("mov %0, #0" : "=r"(low)); /* not a C null pointer */
+    low[0] = 0xe59ff000 | (0x5c - 8);       /* ldr pc, [pc, #0x54] */
+    for (uint32_t a = 0x44; a < 0x5c; a += 4)
+        low[a / 4] = a + 8 <= 0x5c ? 0xe59ff000 | (0x5c - (a + 8))
+                                   : 0xe51ff000 | ((a + 8) - 0x5c);
+    low[0x5c / 4] = (uint32_t)null_call_trap;
+    commit_discard_idcache();
+}
+#endif
+
 void system_init(void)
 {
     /*
@@ -244,6 +288,9 @@ void system_init(void)
 #if defined(IPOD_6G)
     VIC0INTENABLE = 1 << IRQ_ATA;
     VIC1INTENABLE = 1 << (IRQ_MMC - 32);
+#endif
+#ifndef BOOTLOADER
+    null_call_trap_install();
 #endif
 }
 

@@ -20,9 +20,10 @@
 #include "system/appevents.h"
 #include "widgets/menu.h"
 #include "root_menu.h"
+#include "screens/playback/cider.h"
 #ifdef HAVE_USB_PODLINK
 #include "screens/system/agents_screen.h"
-#include "screens/playback/cider.h"
+#include "screens/playback/cider_library.h"
 #endif
 #include "lang.h"
 #include "rbpaths.h"
@@ -689,7 +690,7 @@ static int wpsscrn(void* param)
      * before the activity changes: pushing it redraws the screen for a WPS
      * that would then not open. Not while the player streams to a DAC, where
      * its playback carries on. */
-    if (usb_audio_get_active() && usb_audio_get_playing())
+    if (!cider_active() && usb_audio_get_active() && usb_audio_get_playing())
     {
         splash(HZ*2, ID2P(LANG_USB_DAC_ACTIVE));
         return GO_TO_PREVIOUS;
@@ -697,7 +698,7 @@ static int wpsscrn(void* param)
 #endif
     push_current_activity(ACTIVITY_WPS);
 
-    if (audstatus)
+    if (audstatus || cider_active())
     {
         talk_shutup();
         ret_val = gui_wps_show(return_agents, menu_covers);
@@ -768,6 +769,9 @@ static int wps_back_to(int screen)
         case GO_TO_PODCASTS:
         case GO_TO_PLAYLISTS_SCREEN:
         case GO_TO_PLAYLIST_VIEWER:
+#ifdef HAVE_USB_PODLINK
+        case GO_TO_CIDER:
+#endif
         case GO_TO_ALBUM_COVERS:
         case GO_TO_ARTIST_PORTRAITS:
             return screen;
@@ -841,6 +845,9 @@ static int playlist_view(void * param)
 static int album_covers_scrn(void* param)
 {
     (void)param;
+#ifdef HAVE_USB_PODLINK
+    if (cider_active()) return cider_browse_covers(false);
+#endif
     if (!cover_nav_active()) cover_nav_begin(GO_TO_PREVIOUS);
     int ret = wait_for_album_tables() ? album_covers_return(NULL, NULL) : GO_TO_PREVIOUS;
     if (ret == GO_TO_PREVIOUS)
@@ -1022,7 +1029,9 @@ static int settings_scrn(void * param)
 static int cider_scrn(void *param)
 {
     (void)param;
-    return cider_screen();
+    int result = cider_browse();
+    if (cider_browse_remote_return()) wps_menu_covers = true;
+    return result;
 }
 
 static int agents_scrn(void *param)
@@ -1039,7 +1048,7 @@ static int agents_scrn(void *param)
     wps_return_agents = ret == AGENTS_SWITCH_WPS || ret == AGENTS_SWITCH_REMOTE_WPS;
     wps_menu_covers = ret == AGENTS_SWITCH_REMOTE_WPS;
     return wps_return_agents ?
-           (cider_available() ? GO_TO_CIDER : GO_TO_WPS) : GO_TO_PREVIOUS;
+           GO_TO_WPS : GO_TO_PREVIOUS;
 }
 
 /* One controller, with no recursive controller/screen entry. While a
@@ -1054,11 +1063,12 @@ static void run_screen_shortcut(int screen)
         button_set_sw_poweroff_state(poweroff);
         if (screen == GO_TO_ALBUM_COVERS) cover_nav_begin(GO_TO_PREVIOUS);
         agents_nav_take(screen == GO_TO_AGENTS ? AGENTS_NAV_AGENTS :
-                        (screen == GO_TO_WPS || screen == GO_TO_CIDER) ? AGENTS_NAV_WPS :
+                        screen == GO_TO_WPS ? AGENTS_NAV_WPS :
+                        screen == GO_TO_CIDER ? AGENTS_NAV_TRACKS :
                         screen == GO_TO_ALBUM_COVERS_TRACKS ? AGENTS_NAV_TRACKS : AGENTS_NAV_COVERS);
         int ret = screen == GO_TO_AGENTS ? agents_scrn(NULL) :
                   screen == GO_TO_WPS ? wpsscrn(NULL) :
-                  screen == GO_TO_CIDER ? cider_screen() :
+                  screen == GO_TO_CIDER ? cider_scrn(NULL) :
                   screen == GO_TO_ALBUM_COVERS_TRACKS ? cover_tracks_scrn((void *)GO_TO_ALBUM_COVERS_TRACKS) :
                   album_covers_scrn(NULL);
         enum agents_nav_screen nav = agents_nav_pending();
@@ -1087,7 +1097,7 @@ void root_menu_wps_shortcut(void)
     if (agents_nav_pending() == AGENTS_NAV_NONE)
         agents_nav_request(AGENTS_NAV_WPS, false);
     wps_return_agents = wps_menu_covers = false;
-    run_screen_shortcut(cider_available() ? GO_TO_CIDER : GO_TO_WPS);
+    run_screen_shortcut(GO_TO_WPS);
 }
 
 void root_menu_cover_shortcut(void)
@@ -1267,7 +1277,7 @@ static char *get_wps_item_name(int selected_item, void * data,
                                char *buffer, size_t buffer_len)
 {
     (void)selected_item; (void)data; (void)buffer; (void)buffer_len;
-    if (audio_status())
+    if (audio_status() || cider_active())
         return ID2P(LANG_NOW_PLAYING);
     return ID2P(LANG_RESUME_PLAYBACK);
 }
@@ -1286,6 +1296,10 @@ MENUITEM_RETURNVALUE(current_playlist, ID2P(LANG_CURRENT_PLAYLIST),
 MENUITEM_RETURNVALUE(system_menu_, ID2P(LANG_SYSTEM), GO_TO_SYSTEM_SCREEN,
                      NULL, Icon_System_menu);
 
+#ifdef HAVE_USB_PODLINK
+MENUITEM_RETURNVALUE(cider_item, "Cider Remote", GO_TO_CIDER,
+                     item_callback, Icon_Playlist);
+#endif
 struct menu_item_ex root_menu_;
 static struct menu_callback_with_desc root_menu_desc = {
         item_callback, ID2P(LANG_ROCKBOX_TITLE), Icon_Rockbox };
@@ -1298,6 +1312,9 @@ static struct menu_table menu_table[] = {
     { "pictureflow", &album_covers_item },
     { "artistportraits", &artist_portraits_item },
     { "database", &db_browser },
+#ifdef HAVE_USB_PODLINK
+    { "cider", &cider_item },
+#endif
     { "files", &file_browser },
     { "wps", &wps_item },
     { "reading", &continue_reading },
@@ -1331,6 +1348,46 @@ static struct menu_table menu_table[] = {
 #define MAX_MENU_ITEMS (sizeof(menu_table) / sizeof(struct menu_table))
 static struct menu_item_ex *root_menu__[MAX_MENU_ITEMS];
 
+/* Availability is transient; preserve the order of every other Home row. */
+static bool root_menu_place_cider(void)
+{
+#ifdef HAVE_USB_PODLINK
+    unsigned count = MENU_GET_COUNT(root_menu_.flags), out = 0;
+    struct menu_item_ex *ordered[MAX_MENU_ITEMS];
+    for (unsigned i = 0; i < count; i++)
+        if (root_menu__[i] != &cider_item) ordered[out++] = root_menu__[i];
+    if (cider_available() && out < MAX_MENU_ITEMS)
+    {
+        unsigned at = 0;
+        while (at < out)
+        {
+            const struct menu_item_ex *item = ordered[at++];
+            int visible = item == &shortcut_menu
+                ? shortcut_menu_callback(ACTION_REQUEST_MENUITEM, item, NULL)
+                : item_callback(ACTION_REQUEST_MENUITEM, item, NULL);
+            if (visible != ACTION_EXIT_MENUITEM) break;
+        }
+        memmove(ordered + at + 1, ordered + at,
+                (out - at) * sizeof ordered[0]);
+        ordered[at] = (struct menu_item_ex *)&cider_item;
+        out++;
+    }
+    bool changed = out != count ||
+        memcmp(root_menu__, ordered, out * sizeof ordered[0]);
+    memcpy(root_menu__, ordered, out * sizeof ordered[0]);
+    root_menu_.flags &= ~(MENU_COUNT_MASK << MENU_COUNT_SHIFT);
+    root_menu_.flags |= MENU_ITEM_COUNT(out);
+    return changed;
+#else
+    return false;
+#endif
+}
+
+bool root_menu_refresh(void)
+{
+    return root_menu_place_cider();
+}
+
 /* How many of root_menu__[] the menu shows. */
 static void root_menu_set_count(unsigned count)
 {
@@ -1354,7 +1411,11 @@ static void root_menu_apply_canonical_order(void)
 {
     static const struct menu_item_ex * const before_tagnavi[] = {
         &wps_item, &continue_reading,
-        &db_browser, &album_covers_item, &artist_portraits_item,
+        &db_browser,
+#ifdef HAVE_USB_PODLINK
+        &cider_item,
+#endif
+        &album_covers_item, &artist_portraits_item,
         &random_album_item,
     };
     static const struct menu_item_ex * const after_tagnavi[] = {
@@ -1636,6 +1697,7 @@ static void spoken_row(struct menu_item_ex *item,
     }
 
     root_menu_set_count(count);
+    root_menu_place_cider();
 }
 
 /* The Audiobooks row: the main menu's tagnavi row opening the audiobooks
@@ -1695,8 +1757,12 @@ struct menu_table *root_menu_get_options(int *nb_options)
     int i, n = 0;
 
     for (i = 0; i < root_menu_active_count(); i++)
-        if (i < tagnavi_start
-            || browser_db_get_main_menu_row(i - tagnavi_start, NULL))
+        if (
+#ifdef HAVE_USB_PODLINK
+            menu_table[i].item != &cider_item &&
+#endif
+            (i < tagnavi_start
+             || browser_db_get_main_menu_row(i - tagnavi_start, NULL)))
             shown[n++] = menu_table[i];
 
     *nb_options = n;
@@ -1800,6 +1866,7 @@ void root_menu_load_from_cfg(void* setting, char *value)
     }
     root_menu_.flags |= MENU_ITEM_COUNT(menu_item_count);
     root_menu_place_unlisted();
+    root_menu_place_cider();
     /* A .cfg loaded once tagnavi.config is parsed gets no first entry to
      * drop the slots it names that have no row. */
     if (browser_db_ready())
@@ -1981,6 +2048,7 @@ void root_menu_set_default(void* setting, void* defaultval)
     root_menu_.flags |= MENU_ITEM_COUNT(out);
     root_menu_apply_canonical_order();
     root_menu_place_unlisted();
+    root_menu_place_cider();
     audiobooks_row(global_settings.segregate_audiobooks, false);
     podcasts_row(global_settings.segregate_podcasts, false);
     *(bool*)setting = false;
@@ -2002,6 +2070,10 @@ static int item_callback(int action,
         case ACTION_TREE_STOP:
             return ACTION_REDRAW;
         case ACTION_REQUEST_MENUITEM:
+#ifdef HAVE_USB_PODLINK
+            if (this_item == &cider_item && !cider_available())
+                return ACTION_EXIT_MENUITEM;
+#endif
             if (this_item == &wps_item)
             {
                 /* Hide the row when choosing it could only report "nothing to
@@ -2010,7 +2082,7 @@ static int item_callback(int action,
                  * finished playlist it can offer to replay -- so the two must
                  * be kept in step: if they drift, the row either lies or hides
                  * something that would have worked. */
-                if (!audio_status() &&
+                if (!audio_status() && !cider_active() &&
                     global_status.resume_index == -1 &&
                     !file_exists(PLAYLIST_CONTROL_FILE))
                     return ACTION_EXIT_MENUITEM;
@@ -2087,8 +2159,8 @@ static inline int load_screen(int screen)
 
 #ifdef HAVE_USB_PODLINK
     if (screen == GO_TO_AGENTS) agents_nav_take(AGENTS_NAV_AGENTS);
-    else if (screen == GO_TO_WPS || screen == GO_TO_CIDER)
-        agents_nav_take(AGENTS_NAV_WPS);
+    else if (screen == GO_TO_WPS) agents_nav_take(AGENTS_NAV_WPS);
+    else if (screen == GO_TO_CIDER) agents_nav_take(AGENTS_NAV_TRACKS);
     else if (screen == GO_TO_ALBUM_COVERS) agents_nav_take(AGENTS_NAV_COVERS);
 #endif
     if (screen == GO_TO_ALBUM_COVERS) cover_nav_begin(old_previous);

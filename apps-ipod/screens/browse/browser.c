@@ -820,6 +820,7 @@ static void browser_set_showing_episodes(bool on)
 /* And for an album's tracks, whose skin can draw the album over them (%LH) */
 static bool db_showing_header;
 static struct browser_db_header db_header;
+static const struct bitmap *(*external_header_art)(struct dim *size);
 
 static void browser_set_header(bool on)
 {
@@ -829,6 +830,14 @@ static void browser_set_header(bool on)
         FOR_NB_SCREENS(i)
             sb_skin_settle(i);
     }
+}
+
+void browser_set_external_header(const struct browser_db_header *header,
+                    const struct bitmap *(*art)(struct dim *size))
+{
+    external_header_art = art;
+    if (header) db_header = *header;
+    browser_set_header(header != NULL);
 }
 
 const char *browser_header_text(int field, char *buf, size_t size)
@@ -877,6 +886,7 @@ static unsigned int header_art_hash(int selected_item, void *data)
  * album is never drawn over another's tracks */
 const struct bitmap *browser_header_art(struct dim *size)
 {
+    if (db_showing_header && external_header_art) return external_header_art(size);
     if (!db_showing_header || !db_header.art_hash)
         return NULL;
     return browser_art_row(-2 - db_header.album_row, NULL, header_art_hash,

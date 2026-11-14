@@ -33,6 +33,9 @@
  *   - the public audio_* API, settings hooks, and startup
  ****************************************************************************/
 #include "config.h"
+#ifdef HAVE_USB_PODLINK
+#include "screens/playback/cider.h"
+#endif
 #include "system/library_files.h"
 #include "timefuncs.h" /* get_time, mktime */
 #include "system.h"
@@ -4407,6 +4410,9 @@ bool audio_pausing_at_chapter_end(void)
 /* Start playback at the specified elapsed time or offset */
 void audio_play(unsigned long elapsed, unsigned long offset)
 {
+#ifdef HAVE_USB_PODLINK
+    cider_local_play();
+#endif
     logf("audio_play");
 
     audio_pause_at_chapter_end(false);
@@ -4456,6 +4462,9 @@ void audio_hard_stop(void)
 /* Resume playback if paused */
 void audio_resume(void)
 {
+#ifdef HAVE_USB_PODLINK
+    cider_local_play();
+#endif
     LOGFQUEUE("audio >| audio Q_AUDIO_PAUSE resume");
     audio_queue_send(Q_AUDIO_PAUSE, false);
 }

@@ -158,6 +158,9 @@ const struct bitmap *browser_art_row(int selected_item, void *data,
                                      uint32_t filter_hash);
 /* %LH(art): the header's cover at the size given, from the same cache */
 const struct bitmap *browser_header_art(struct dim *size);
+struct browser_db_header;
+void browser_set_external_header(const struct browser_db_header *header,
+                    const struct bitmap *(*art)(struct dim *size));
 
 bool bookmark_play(char* resume_file, int index, unsigned long elapsed,
                    unsigned long offset, int seed, char *filename);

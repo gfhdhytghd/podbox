@@ -150,6 +150,7 @@ unsigned int wait_queue_wake(struct __wait_queue *wqp)
     unsigned result = THREAD_NONE;
     struct thread_entry *thread;
 
+    IF_PRIO( wake_dbg_ra = __builtin_return_address(0); wake_dbg_obj = wqp; )
     while ((thread = WQ_THREAD_FIRST(wqp)))
         result |= wakeup_thread(thread, WAKEUP_DEFAULT);
 

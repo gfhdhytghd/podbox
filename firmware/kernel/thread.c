@@ -188,6 +188,13 @@ static FORCE_INLINE void load_context(const void* addr);
  * End Processor-specific section
  ***************************************************************************/
 
+/* Exception screens name the interrupted thread without allocating. */
+const char *thread_current_name(void)
+{
+    struct thread_entry *thread = __running_self_entry();
+    return thread && thread->name ? thread->name : "?";
+}
+
 static NO_INLINE NORETURN_ATTR
   void thread_panicf(const char *msg, struct thread_entry *thread)
 {
@@ -846,6 +853,7 @@ static void wakeup_thread_release(struct thread_entry *thread)
  * INTERNAL: Intended for use by kernel and not programs.
  *---------------------------------------------------------------------------
  */
+void *wake_dbg_ra, *wake_dbg_obj;
 unsigned int wakeup_thread_(struct thread_entry *thread
                             IF_PRIO(, enum wakeup_thread_protocol proto))
 {
@@ -869,6 +877,18 @@ unsigned int wakeup_thread_(struct thread_entry *thread
                 [WAKEUP_TRANSFER_MULTI] = wakeup_thread_queue_multi_transfer,
             };
 
+            /* DIAG: a DEFAULT wakeup of a PIP-blocked thread would call
+             * funcs[WAKEUP_DEFAULT] == NULL. Name everything first. */
+            if (UNLIKELY(funcs[proto] == NULL))
+            {
+                struct thread_entry *cur = __running_self_entry();
+                panicf("DEFWAKE %.12s blk:%p wqp:%p bra:%p by %.12s "
+                       "wra:%p obj:%p",
+                       thread->name ? thread->name : "?", thread->blocker,
+                       thread->wqp, thread->blk_ra,
+                       cur && cur->name ? cur->name : "?",
+                       wake_dbg_ra, wake_dbg_obj);
+            }
             /* Call the specified unblocking PIP (does the rest) */
             funcs[proto](thread);
         }

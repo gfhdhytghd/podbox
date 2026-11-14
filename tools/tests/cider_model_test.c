@@ -84,6 +84,34 @@ int main(void)
         assert(cider_slide_slot(slots,center,center+5)<0);
         for(int j=0;j<9;j++)for(int k=j+1;k<9;k++)assert(slots[j]<0||slots[j]!=slots[k]);
     }
+    /* FU24: CP/CK are parsed without firmware scanf (no %u/%lu there; the
+     * FU23-fix "%lu\t%79s" wrote a track id over a 4-byte stack slot). */
+    {
+        char rec[1024], key[65];
+        memset(key,'a',64);key[64]=0;
+        strcpy(s.id,"song");s.have=true;
+        snprintf(rec,sizeof rec,"CP\t7\tsong\t%s\t-",key);
+        assert(cider_state_apply(&s,rec,strlen(rec),300)==1);
+        assert(!strcmp(s.previous_art,key)&&!s.next_art[0]);
+        /* overlong id, non-hex key, wrong generation and wrong song all refused */
+        char longid[400];memset(longid,'9',sizeof longid-1);longid[sizeof longid-1]=0;
+        snprintf(rec,sizeof rec,"CP\t7\t%s\t%s\t%s",longid,key,key);
+        assert(!cider_state_apply(&s,rec,strlen(rec),300));
+        snprintf(rec,sizeof rec,"CP\t7\tsong\tZZ%s\t-",key+2);
+        assert(!cider_state_apply(&s,rec,strlen(rec),300));
+        snprintf(rec,sizeof rec,"CP\t8\tsong\t-\t%s",key);
+        assert(!cider_state_apply(&s,rec,strlen(rec),300));
+        snprintf(rec,sizeof rec,"CP\t7\tother\t-\t%s",key);
+        assert(!cider_state_apply(&s,rec,strlen(rec),300));
+        assert(!strcmp(s.previous_art,key));
+        const char *ok="CK\t7\t42\t1\tOK",*no="CK\t7\t42\t0\tFailed",*stale="CK\t6\t42\t1\tOK";
+        assert(cider_reply_status(ok,strlen(ok),7,42)==1);
+        assert(cider_reply_status(no,strlen(no),7,42)==-1);
+        assert(!cider_reply_status(stale,strlen(stale),7,42));
+        assert(!cider_reply_status(ok,strlen(ok),7,43));
+        const char *big="CK\t99999999999\t42\t1";
+        assert(!cider_reply_status(big,strlen(big),7,42));
+    }
     available="CA\t8\t0\tOffline";
     assert(cider_state_apply(&s,available,strlen(available),200)==1);
     assert(!s.have&&!s.available&&s.generation==8);

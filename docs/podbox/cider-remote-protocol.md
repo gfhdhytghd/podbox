@@ -1,8 +1,9 @@
 # Cider Remote v1: resident data channel and cache
 
-This is an internal protocol and implementation reference. Step 1 provides
-Cider Now Playing. Library browsing and the Cider Cover Flow source adapter
-belong to steps 2 and 3; native Cover Flow stays native in this package.
+This is an internal protocol and implementation reference. FU23 uses the
+system WPS, native list widgets/search dialog/header and native carousel.
+The Scrim skin files are unchanged. There is no separate Cider playing page.
+The transport remains owned by the existing HerdRemote session.
 
 ## Ownership and connection
 
@@ -75,19 +76,27 @@ id title subtitle art-id duration-ms track-count
 ```
 
 `rate` is 0 or 1000; `volume` is 0..100; shuffle is 0/1 and repeat is 0/1/2
-(none/one/all). `host-ms` is monotonic milliseconds modulo 2^32. The player
+(none/one/all). `CN` appends `muted` (0/1) and composer after album in FU23.
+`host-ms` is monotonic milliseconds modulo 2^32. The player
 anchors at reception and extrapolates position locally; no per-second position
 traffic is needed. Polling compares position against the last published
 anchor, sends real changes/seeks, and sends a 15-second liveness anchor.
-Unavailability disables controls and routes Now Playing back to native WPS.
+Unavailability disables Cider controls and retains its last track as paused.
+It never changes the selected playback source or starts local playback.
 Now-playing is **never** loaded from the persistent cache.
 
 List ids are preserved, with compact title/subtitle fields. A frame returns as
 many rows as fit, at most 50; the next offset is `offset + count`. Each page
 carries its library generation. A future list view discards pages older than
 `CG`, reissues at the new generation, and prefetches the next page near its end.
-Step 1 implements the host cache/page sender and resident credit route; page
-view storage/rendering is a step 2 responsibility.
+FU23 sends `cq gen req offset limit route` for native Music pages. Routes are
+bounded escaped tree paths, not arbitrary Apple API URLs. `CL` rows append kind,
+child route, bgColor and year to their original six fields. Replies may contain
+fewer than 50 rows to fit the frame; continue at offset + count. Three 50-row
+slots serve the native list/carousel. Prefetch starts eight rows before the end.
+A library generation change invalidates all old pages. Superseded unstarted
+host requests and obsolete in-flight results are dropped. A dedicated page
+worker prevents background library sync HTTP from blocking visible queries.
 
 ## Artwork identity, geometry and framing
 
@@ -108,15 +117,20 @@ The host's "original" is this capped download, never a 4000-pixel original.
 All classes derive from the capped source using Pillow, with a small ordered
 dither before RGB565 quantization. M replaces the preliminary 140-pixel tier.
 M is **column-major**, matching the native carousel. Other tiers are row-major.
-No JPEG decoding, resize, transpose or dither runs on the player.
+No JPEG decode or dither runs on the player. L/M arrive ready to draw.
+The native carousel uses pixel dimensions as physical slide dimensions, so its
+XS adapter expands 32px rows into a 128px nearest-neighbor column surface on
+the loader thread. This keeps the same geometry while sending only 2060 bytes;
+M needs no scaling or transpose. The same native renderer draws every tier.
 
 The payload is exactly `struct art_cache_header` (six little-endian u16 fields)
 then native little-endian RGB565 pixels: magic 0x5441, version 8, width, height,
 layout (M=1, others=0), zero pad. A native format change requires the matching
 host renderer/cache schema to change too. Native local WPS caches are 300px
-(`art_sizes.h`); that is unchanged. This Cider screen draws a 240x240 art box
-at x=40, with its bottom overlaid by track information. Its L is always 240,
-including when native WPS happens to use a 300px cache.
+(`art_sizes.h`); that is unchanged. The system WPS passes the L240 bitmap through the same skin slots,
+filter chains, dynamic-color extraction, alignment and drawing as local art.
+Scrim's unchanged `%Cl` is 240 pixels. Local WPS's cached source remains 300px.
+Lists downsample S56 into the native requested box (Scrim rows/header are 44px).
 
 A normal artwork PodLink BINARY payload begins with little-endian `<4s6I>`:
 
@@ -159,7 +173,10 @@ and sync/art workers share guarded SQLite access, with no HTTP under that lock.
 
 Player RAM: 512-KiB compact LRU arena with 24 descriptors; 115,212-byte assembly;
 115,212-byte disk I/O buffer; 115,200-byte screen bitmap; bounded commands and
-worker stack. A compile-time assertion keeps this below **1 MiB**. None uses
+worker stack. Module and combined compile-time assertions cap the FU23 Cider-owned
+static RAM at **1152 KiB**, including WPS data, three pages, list history/row
+art and the carousel provider. The native carousel reuses its existing app
+buffer and renderer; the Cider provider does not claim another app buffer. None uses
 `app_buffer`. The arena can hold one L plus nine M and nine XS covers together.
 Only complete validated bitmaps enter it. Generation changes retain those
 entries while invalidating assembly and requests.
@@ -176,7 +193,7 @@ background writes/eviction. Eviction scans run only after writes, not every
 idle wake. Idle fill uses low-priority explicit M pulls and these same gates;
 step 1 exposes that transport class, not a whole-library device prefetch loop.
 
-## Fast Cover Flow contract for step 3
+## Native Cover Flow provider
 
 Reuse the existing renderer and slide slots. Native references:
 
@@ -199,12 +216,57 @@ Never flush/re-request an unchanged cached window. Evict/cancel farthest-first
 only to admit a nearer cover. Batch XS for the whole visible range and weight
 the next prefetch range by direction/speed.
 
-A source adapter is still necessary: the native `load_and_prepare_surface()`
-resolves albums through the local database's numeric indices/hashes, whereas
-Cider has Apple string ids and an independently paged generation. Step 3 adds
-an album-provider/path adapter to that function and hands the ready M file to
-its existing `read_aat()` path. It must not introduce a parallel renderer or a
-nested app_buffer owner. This package does not replace the native carousel.
+FU23 supplies a third `carousel_model`. Its nonblocking `read_art` callback
+feeds ready M columns through `load_and_prepare_surface()` into the existing
+buflib slide layout; XS is expanded to that same 128px layout and bgColor supplies
+the instant placeholder. The existing renderer, animations, captions, keymap,
+contiguous run and farthest eviction remain shared. Cache arrivals wake the
+loader, which upgrades only changed visible slots in place, keeping the linked
+run and retaining better M surfaces if the smaller resident art LRU evicts one.
+Center moves cancel obsolete transfers but do not restart the native engine.
+An identity/version change revalidates the affected slots; library count
+changes use the native center/slot path, not nested carousel instances.
+
+## System source and native Music menu
+
+There is one system Now Playing route (`GO_TO_WPS`). `GO_TO_CIDER` now opens
+only the Home Cider Remote menu. Source is RAM state, Local after reboot.
+Starting a Cider song/album/playlist/random/shuffle pauses the local queue
+without clearing it and selects Cider. Native `audio_play`/`audio_resume`
+switch to Local; the host checks live Cider play state and pauses it once if
+playing. PLAY on a paused local queue outside the WPS selects Local too.
+Home Now Playing, list PLAY shortcuts and Agents' double/chord all open the
+same system WPS. Disconnect retains Cider metadata and source, with a paused
+icon and inactive controls. Reconnect refreshes it; it never auto-starts Local.
+
+Home shows Cider Remote as its second visible row only while the connected
+host reports Cider available. The row has the theme's music icon. It is
+excluded from the editable Home rows. Its native list adds Album Covers first,
+Playlists second, and the native Now Playing/Resume action, then enumerates the
+actual parsed tagnavi main rows using their native names and hidden mask.
+Native menu order/filtering is not duplicated in a second firmware table.
+Every directory reuses one native list instance with 12 bounded history slots.
+Album tracks feed the native `%LH` header and the skin's list art callback.
+Search uses the native edit-line/voice search dialog, with async result refresh.
+Search-by filters reuse the native keyboard; ranges ask start/end separately.
+
+The host SQLite index supplies albums/songs/playlists and derives album artists,
+artists, genre, release year and composers. Album membership uses Apple's
+stable library-album relationship, with name fallback when none is available.
+Album artist falls back to artistName when Apple omits albumArtistName.
+Missing composer/release data produces native empty lists. Featured Artists
+ports the native byte/marker/bracket/known-band rules; parity tests compare
+against the real native parser. Filename maps to title. Search-by Filename,
+Score and Comment are omitted. Search-by rating maps Apple's loved/disliked
+values to 1/2 (0 unrated); the background index reads catalog ratings in bounded
+50-id batches. Native play counts/scores/forgotten/favourite charts cannot be
+derived and are omitted. History uses recent tracks/resources; recent artists
+are deduplicated from recent tracks, not a fabricated play-count chart.
+Unsupported custom native queries and data without an Apple equivalent show
+native empty lists. First Letter uses native Numeric, A–Z and Special Character
+buckets. Track labels match fmt_title/title-with-duration; filename is title.
+Search is bounded to the first 50 matches/type from Apple's three library
+result types; the native search dialog shows its first 50 combined matches.
 
 ## Cider API and acceptance
 
@@ -216,12 +278,10 @@ hash and bounded excerpts are in the FU22 evidence (`cider-api-proof.json`).
 | GET `/api/v1/playback/now-playing` | `info` attributes and playParams |
 | GET `/api/v1/playback/is-playing` | `is_playing` |
 | GET `/api/v2/playback/time` | `data.currentTime`, seconds (legacy `currentPlaybackTime` also accepted) |
-| GET `/api/v1/playback/volume` | `volume`, 0..1 |
 | GET `/api/v1/playback/repeat-mode`, `shuffle-mode` | `value` |
 | POST `/api/v1/playback/playpause` | `{}` |
 | POST `/api/v1/playback/next`, `previous` | `{}` |
 | POST `/api/v1/playback/seek` | `{"position": seconds}` |
-| POST `/api/v1/playback/volume` | `{"volume": 0..1}` |
 | POST `/api/v1/playback/play-item` | `{"type": kind, "id": stable-id}` |
 | POST `/api/v1/amapi/run-v3` | `{"path":"/v1/me/library/...?..."}` |
 
@@ -234,15 +294,19 @@ REST polling fallback, with change detection, avoiding another socket dependency
 Pillow is already present in the build/test venv; no package installation is
 needed for this work. A deployed daemon needs Pillow in its own environment.
 
-Native WPS destinations of Agents' double-Play/SELECT+PLAY shortcuts resolve
-to Cider when available, native WPS otherwise. Existing Agents destinations
-from other screens remain Agents; Cider double/chord returns to Agents. Triple
-still opens the native Cover Flow. Cider Play tap toggles, Left/Right skip,
-held Left/Right preview seek (5 seconds per repeat, one seek on release),
-volume changes by one point per report, and MENU returns. Cider uses the WPS
-keymap but disables real iPod volume mutation; existing PC-only connected /
-Dock-only disconnected source filtering remains in force. Losing the host
-falls back to native WPS, where normal Dock behavior resumes.
+Cider volume uses host `wpctl get-volume @DEFAULT_AUDIO_SINK@` and
+`wpctl set-volume -l 1.0 @DEFAULT_AUDIO_SINK@ N%+` / `N%-`. Fallback when
+wpctl is absent: pactl get-sink-volume/get-sink-mute/set-sink-volume on
+`@DEFAULT_SINK@`, bounded to 100%. Accepted reports contribute ±1%, combined
+in one pending delta instead of a command backlog. No Cider volume endpoint
+is called, even for reads. Host volume/mute are polled with state about once
+per second and coalesced. Local WPS volume and transport behavior stay local.
+Native hold seek uses the existing acceleration/step settings and preview path,
+sending one Cider seek on release and never seeking the paused local audio.
+Unsupported local file/queue actions are no-ops; track information uses the
+current source. Status-bar play mode, WPS tags, volume overlay and Home's
+Now Playing label follow the source. Quick Settings' setting editors remain
+local settings; they do not gain remote source semantics.
 
 Control endpoint tests use an ephemeral loopback mock Cider server. The
 permission update also permits direct Cider changes, with per-file backups
@@ -262,3 +326,44 @@ request id/offset/tick, granted/outstanding credits, chunk bytes/result and
 completion tick/size. The host journal also records fetch/cache-ready latency.
 The existing bounded diagnostic ring reports loss; logging never holds up art
 or foreground keepalives. No token, decoded audio or artwork pixels enter logs.
+
+
+### Artwork prefetch and confirmed selection
+
+`cw<TAB>generation<TAB>tier<TAB>comma-separated-art-keys` replaces the host's
+visible artwork window (at most seven keys). Four bounded workers prepare the
+window concurrently. They share one download per key across native tiers.
+Queued work outside the newest window is removed; each original remains capped
+at 240 pixels. An empty window cancels queued visible prefetch.
+
+`CP<TAB>generation<TAB>current-track-id<TAB>previous-art-key<TAB>next-art-key`
+publishes artwork neighbors from Cider's actual playback queue, including its
+shuffle order. Missing neighbors use `-`. The receiver accepts only its current
+generation and track ID. The WPS loads the current L240 first, then retains and
+preloads the previous and next L240 covers in device RAM. No local playlist is
+used to guess the Cider queue. Host queue reads do not control playback.
+
+Library selections resolve complete resources through Cider's `play-item-href`
+route. The ID-only `play-item` route can silently reject tracks without
+`attributes.playParams`. For songs, the host confirms that now-playing matches
+the selected library/catalog ID before sending successful `CK`. The iPod waits
+for this ACK before pausing Local and selecting Cider/opening WPS. Failure or
+six-second timeout keeps the list and playback source; controls are never
+retried automatically. A full command queue rejects selection explicitly.
+
+MENU uses the native list's Menu action as Back. The cached return chain is
+WPS -> album tracks -> Cider Cover Flow -> Cider Remote -> Home. Cover Flow
+opened from WPS by a screen shortcut exits to Home; local source routes retain
+their existing rules. WPS and Cover Flow shortcuts unwind before opening a new
+Cider browser. The native Scrim skin is unchanged.
+
+Artwork identity normalizes CDN templates and fixed-size URLs to the same
+240-pixel URL, so a prefetched queue image is the next WPS image. Schema 3 is
+migrated to schema 4 without discarding the library index or compatible native
+files. The cache keeps atomic, fsynced art writes and WAL transactions; NORMAL
+SQLite sync avoids flushing each derived-cache metadata change. Full-directory
+orphan scans run at startup/eviction, not for every new cover.
+
+Cover Flow preserves the remote-triple sentinel separately from MENU. A triple
+returns to its WPS/Agents origin (or the Cider list); an ordinary MENU uses the
+back chain. Returning to WPS by triple keeps the remote MENU-to-Cover rule.

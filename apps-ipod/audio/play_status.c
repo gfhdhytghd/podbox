@@ -10,6 +10,7 @@
 #include <string.h>
 #include <stdbool.h>
 #include "config.h"
+#include "screens/playback/cider.h"
 #include "play_status.h"
 #include "audio.h"
 
@@ -29,6 +30,13 @@ enum playmode play_status_get_ffmode(void)
 
 int current_playmode(void)
 {
+    if (cider_active())
+    {
+        struct cider_status source;
+        cider_status(&source);
+        return ff_mode ? ff_mode : source.available && source.rate ?
+               STATUS_PLAY : STATUS_PAUSE;
+    }
     int audio_stat = audio_status();
 
     /* ff_mode can be either STATUS_FASTFORWARD or STATUS_FASTBACKWARD

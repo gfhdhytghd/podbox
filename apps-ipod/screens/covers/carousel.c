@@ -346,6 +346,7 @@ struct slide_data {
 struct slide_cache {
     int index;      /* index of the cached slide */
     int hid;        /* handle ID of the cached slide */
+    unsigned int version;
     short next; /* "next" slide, with LRU last */
     short prev; /* "previous" slide */
 };
@@ -600,6 +601,7 @@ static int pf_state;
 
 /** code */
 static bool free_slide_prio(int prio);
+static inline bool load_and_prepare_surface(int slide_index,int cache_index,int prio);
 bool load_new_slide(void);
 int load_surface(int);
 static void free_all_slide_prio(int prio);
@@ -1274,6 +1276,27 @@ static void thread(void)
                     break;
 
                 buf_ctx_lock();
+                if (model->art_version)
+                {
+                    for (int slot = 0; slot < SLIDE_CACHE_SIZE; slot++)
+                    {
+                        int index = pf_sldcache.cache[slot].index;
+                        if (pf_sldcache.cache[slot].hid <= 0 ||
+                            index < MAX(0,center_index - 4) ||
+                            index > center_index + 4)
+                            continue;
+                        unsigned int version = model->art_version(index);
+                        unsigned int previous = pf_sldcache.cache[slot].version;
+                        if (!version || version == previous ||
+                            ((version >> 2) == (previous >> 2) &&
+                             (version & 3) <= (previous & 3)))
+                            continue;
+                        int old = pf_sldcache.cache[slot].hid;
+                        if (load_and_prepare_surface(index,slot,abs(center_index-index)) &&
+                            old != empty_slide_hid)
+                            buflib_free(&buf_ctx,old);
+                    }
+                }
                 bool slide_loaded = load_new_slide();
                 buf_ctx_unlock();
                 if (!slide_loaded)
@@ -1324,6 +1347,90 @@ static bool create_pf_thread(void)
     thread_is_running = true;
     queue_post(&thread_q, EV_WAKEUP, 0);
     return true;
+}
+
+
+void carousel_album_caption(const char *albumtxt, const char *artisttxt,
+                            int year, bool untagged, int revision)
+{
+    char album_and_year[MAX_PATH];
+    char album_fit[TEXT_FIT_BUF], artist_fit[TEXT_FIT_BUF];
+    const char *album_line, *artist_line;
+    struct pf_caption cap;
+    int albumtxt_x, albumtxt_y, artisttxt_x;
+    bool show_artist;
+
+    if (global_settings.album_covers_show_album_name == ALBUM_NAME_HIDE)
+        return;
+
+    show_artist = (global_settings.album_covers_show_album_name == ALBUM_AND_ARTIST_TOP
+                || global_settings.album_covers_show_album_name == ALBUM_AND_ARTIST_BOTTOM);
+
+    if (global_settings.album_covers_show_year == ALBUM_YEAR_BEFORE
+        && year > 0)
+    {
+        snprintf(album_and_year, sizeof(album_and_year), "%d \xe2\x80\x93 %s",
+                  year, albumtxt);
+    }
+    else if (global_settings.album_covers_show_year == ALBUM_YEAR_AFTER
+        && year > 0)
+    {
+        snprintf(album_and_year, sizeof(album_and_year), "%s \xe2\x80\x93 %d",
+                  albumtxt, year);
+    }
+    else
+        snprintf(album_and_year, sizeof(album_and_year), "%s", albumtxt);
+
+    struct viewport *saved_vp = carousel_text_begin();
+    lcd_set_foreground(pf_fg_color);
+
+    /* The year is the caption's other input: moving it changes the string
+     * without moving the selection. */
+    bool album_changed = carousel_caption_changed(
+                             center_index, revision ^ global_settings.album_covers_show_year);
+
+    /* Switched to pf_bold_font (plain FONT_UI, a no-op, if no bold font is
+     * configured -- see its declaration) *before* set_scroll_line() below:
+     * that measures the string's pixel width against whatever font is
+     * currently active, to center/scroll it, so it has to see the album
+     * name's *actual* rendering font, not FONT_UI, or a bold font with a
+     * different average glyph width would end up mis-centered. */
+    lcd_setfont(pf_bold_font);
+    album_line = carousel_caption_fit(album_and_year, album_fit,
+                                      sizeof(album_fit));
+    if (album_changed)
+        set_scroll_line(album_line, PF_SCROLL_ALBUM);
+
+    /* The engine measures both fonts and centres the block for us, so top and
+     * bottom captions need no separate arithmetic here. */
+    carousel_caption_layout(show_artist, &cap);
+    albumtxt_y = cap.y1;
+
+    albumtxt_x = get_scroll_line_offset(PF_SCROLL_ALBUM);
+
+    if (show_artist)
+    {
+        if (!untagged)
+            lcd_putsxy(albumtxt_x, albumtxt_y, album_line);
+        /* Restored before the artist line: render_all_slides()/the FPS
+         * overlay/etc all assume pf_vp's font is the real UI font, and the
+         * artist name itself is never bold. screens[SCREEN_MAIN].getuifont(),
+         * not the FONT_UI constant -- see init()'s comment on pf_bold_font. */
+        lcd_setfont(screens[SCREEN_MAIN].getuifont());
+
+        artist_line = carousel_caption_fit(artisttxt, artist_fit,
+                                           sizeof(artist_fit));
+        if (album_changed)
+            set_scroll_line(artist_line, PF_SCROLL_ARTIST);
+        artisttxt_x = get_scroll_line_offset(PF_SCROLL_ARTIST);
+        lcd_putsxy(artisttxt_x, cap.y2, artist_line);
+    }
+    else
+    {
+        lcd_putsxy(albumtxt_x, albumtxt_y, album_line);
+        lcd_setfont(screens[SCREEN_MAIN].getuifont());
+    }
+    carousel_text_end(saved_vp);
 }
 
 
@@ -1533,6 +1640,12 @@ void carousel_drop_slides(void)
     buf_ctx_lock();
     free_all_slide_prio(-1);
     buf_ctx_unlock();
+    queue_remove_from_head(&thread_q, EV_WAKEUP);
+    queue_post(&thread_q, EV_WAKEUP, 0);
+}
+
+void carousel_provider_changed(void)
+{
     queue_remove_from_head(&thread_q, EV_WAKEUP);
     queue_post(&thread_q, EV_WAKEUP, 0);
 }
@@ -1793,11 +1906,30 @@ static inline bool load_and_prepare_surface(const int slide_index,
     int hid = -1;
     bool got_shared = false;
 
+    if (model->read_art)
+    {
+        struct bitmap bitmap;
+        if (model->read_art(slide_index, &bitmap))
+        {
+            size_t bytes = bitmap.width * bitmap.height * sizeof(pix_t);
+            hid = buflib_alloc(&buf_ctx, sizeof(int) + sizeof(struct dim) + bytes);
+            if (hid < 0) return false;
+            char *block = buflib_get_data(&buf_ctx, hid);
+            *(int *)block = sizeof(int);
+            struct dim *dim = (struct dim *)(block + sizeof(int));
+            dim->width = bitmap.width; dim->height = bitmap.height;
+            memcpy(dim + 1, bitmap.data, bytes);
+            img_filter_apply_banded((pix_t *)(dim + 1), bitmap.height,
+                                    bitmap.width, carousel_filter());
+            got_shared = true;
+        }
+    }
+
     /* Prefer the shared, database-driven thumbnail cache. It is keyed by a hash
      * of the folder the tracks live in, which the album tables resolved when
      * the database loaded -- so this costs a file open, not a database search. */
     unsigned int art_hash = model->art_key(slide_index);
-    if (pf_cover_size_idx >= 0 && art_hash != 0)
+    if (!model->read_art && pf_cover_size_idx >= 0 && art_hash != 0)
     {
         static char aat_file[MAX_PATH];  /* off the loader thread's stack */
         int fh;
@@ -1829,6 +1961,8 @@ static inline bool load_and_prepare_surface(const int slide_index,
         hid = empty_slide_hid;
 
     pf_sldcache.cache[cache_index].hid = hid;
+    pf_sldcache.cache[cache_index].version = model->art_version ?
+                                           model->art_version(slide_index) : 0;
     if (cache_index < SLIDE_CACHE_SIZE)
         pf_sldcache.cache[cache_index].index = slide_index;
 
@@ -4246,12 +4380,23 @@ static int album_covers_loop(void)
         if (!(button_status() & BUTTON_PLAY))
             button_set_sw_poweroff_state(false);
 
+        if (model->tick) model->tick();
+        if (model->external)
+        {
+            int count = model->count();
+            if (count == 0) return GO_TO_PREVIOUS;
+            if (count > 0 && count != number_of_slides)
+            {
+                number_of_slides = MIN(count,0x7fff);
+                set_current_slide(MIN(center_index,number_of_slides-1));
+            }
+        }
         /* The index's seeks, and the captions read through them, hold only
          * for the commit they were read in. Checked here, between the wait and
          * anything that uses a seek: after a commit or a rebuild the index is
          * built again and the button dropped; while the tables are down the
          * screen closes, as it would refuse to open. */
-        if (!db_summary_current(&carousel_idx))
+        if (!model->external && !db_summary_current(&carousel_idx))
         {
             if (!check_database())
             {
@@ -4686,7 +4831,7 @@ static int carousel_body(const struct carousel_model *m, const char *selected_fi
      * correctly regardless of which entry path was used. */
     push_current_activity(ACTIVITY_ALBUMCOVERS);
 
-    if (!check_database())
+    if (!model->external && !check_database())
     {
         /* Said out loud: the working indicator check_database() raises while
          * it waits stops with it, so without this the screen simply hands
