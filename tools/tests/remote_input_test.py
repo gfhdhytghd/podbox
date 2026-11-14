@@ -302,7 +302,7 @@ static void lcd_puts(int x,int y,const char *s) {
 }
 static void button_clear_queue(void) {}
 static long default_event_handler(long n) {return n;}
-static int get_action_statuscode(int *b) {*b=raw_button;return 0;}
+static __attribute__((unused)) int get_action_statuscode(int *b) {*b=raw_button;return 0;}
 static long get_action_tick(void) {return calls;}
 static void inject(bool bad) {
     const unsigned char b[]={2,0,0,0,0x40,0};
@@ -384,8 +384,8 @@ static int raw_page,volume_changes;
 #define IPOD_ACCESSORY_PROTOCOL
 #define BUTTON_MULTIMEDIA_VOLUME_UP 101
 #define BUTTON_MULTIMEDIA_VOLUME_DOWN 102
-static void get_action_statuscode(int *b){*b=raw_page;}
-static void default_event_handler(int b){assert(b==101||b==102);volume_changes++;}
+static __attribute__((unused)) void get_action_statuscode(int *b){*b=raw_page;}
+static __attribute__((unused)) void default_event_handler(int b){assert(b==101||b==102);volume_changes++;}
 static void draw_usage(struct gl*l){(void)l;draws++;}
 static void draw_detail(struct gl*l){(void)l;draws++;}
 static void page_move(int action){struct vp vp={.height=100};struct gl list={.parent={&vp}};
@@ -397,7 +397,7 @@ int main(void){
  page_move(ACTION_LISTTREE_PGDOWN);assert(usage_scroll==124);
  page_move(ACTION_LISTTREE_PGUP);assert(usage_scroll==24);
  page_move(ACTION_LISTTREE_PGUP);assert(usage_scroll==0);
- raw_page=BUTTON_RC_VOL_UP;int scroll=usage_scroll;page_move(ACTION_LISTTREE_PGUP);assert(volume_changes==1&&usage_scroll==scroll);raw_page=0;
+ raw_page=BUTTON_RC_VOL_UP;int scroll=usage_scroll;page_move(ACTION_LISTTREE_PGUP);assert(!volume_changes&&usage_scroll==scroll);raw_page=0;
  view=VIEW_DETAIL;detail_scroll_max=23;detail_page_lines=7;
  page_move(ACTION_LISTTREE_PGDOWN);assert(detail_scroll==7);
  page_move(ACTION_LISTTREE_PGDOWN);assert(detail_scroll==14);
@@ -508,6 +508,14 @@ hookpre='''
 #define ACTIVITY_ALBUMCOVERS 3
 #define TIMEOUT_NOBLOCK 0
 static int raw_ui_cancel(void) {return BUTTON_MENU;}
+#define CONTEXT_STD 0
+#define CONTEXT_PLUGIN 3
+#define ACTION_STD_PREV 1001
+#define ACTION_STD_NEXT 1002
+#define ACTIVITY_DATABASEBROWSER 5
+static void iap_volume_context(bool wps){(void)wps;}
+static int iap_volume_filter(int b){return b;}
+static int raw_volume_button(int b){return b;}
 bool ui_polling;
 void podlink_time_sync(void) {}
 struct agents_shortcut_state shortcut;
@@ -525,8 +533,8 @@ static int queued_button, held_button, polls,waited;
 static int button_get_w_tmo(int t) {waited=t;polls++;return queued_button;}
 static int button_status(void) {return held_button;}
 static bool has_flag(int a,int b) {return (a&b)==b;}
-typedef struct {int button,action,context;bool wait_for_release;} action_last_t;
-typedef struct {int button,timeout,context;} action_cur_t;
+typedef struct {int button,action,context;bool wait_for_release,repeated;intptr_t data;unsigned long tick;} action_last_t;
+typedef struct {int button,timeout,context,action;} action_cur_t;
 '''
 hooktest='''
 int main(void) {
@@ -611,9 +619,14 @@ int main(void) {
     }
     agents_nav_request(AGENTS_NAV_WPS,false);
     assert(agents_shortcut_get_button(0)==BUTTON_MENU);agents_nav_take(AGENTS_NAV_WPS);
+    last.data=77;cur.context=CONTEXT_STD;queued_button=BUTTON_RC_VOL_UP|BUTTON_REL|BUTTON_REPEAT;
+    assert(action_poll_button(&last,&cur)&&cur.action==ACTION_STD_PREV&&last.data==0);
+    assert(last.button==(BUTTON_RC_VOL_UP|BUTTON_REL|BUTTON_REPEAT));
+    last.data=77;queued_button=BUTTON_RC_VOL_DOWN|BUTTON_REL|BUTTON_REPEAT;
+    assert(action_poll_button(&last,&cur)&&cur.action==ACTION_STD_NEXT&&last.data==0);
     puts("input polling hook: native-only chord/remote PLAY isolation/native SELECT timing PASS");
 }
 '''
-(O/'hook.c').write_text(pre+'\n#include "apps-ipod/input/agents_remote.h"\n'+hookpre+body('apps-ipod/input/remote_menu.h')+body('apps-ipod/input/agents_shortcut.c')+body('apps-ipod/input/agents_remote.c')+function(action_source,'remote_poll')+function(action_source,'agents_shortcut_get_button')+function(action_source,'action_poll_button')+hooktest)
+(O/'hook.c').write_text(pre+'\n#include "apps-ipod/input/agents_remote.h"\n'+hookpre+body('apps-ipod/input/remote_menu.h')+body('apps-ipod/input/agents_shortcut.c')+body('apps-ipod/input/agents_remote.c')+function(action_source,'remote_context')+function(action_source,'remote_volume_action')+function(action_source,'remote_poll')+function(action_source,'agents_shortcut_get_button')+function(action_source,'action_poll_button')+hooktest)
 subprocess.run(['cc','-std=gnu11','-Wall','-Wextra','-Werror','-g','-fsanitize=address,undefined','-fno-pie','-no-pie','-I'+str(O),'-I'+str(R),'-I'+str(R/'apps-ipod'),str(O/'hook.c'),'-o',str(O/'hook')],check=True)
 subprocess.run([str(O/'hook')],check=True)

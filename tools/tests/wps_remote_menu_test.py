@@ -89,7 +89,7 @@ static void album_covers_cancel_resume(void){}
 static int db_summary_play_pending(void){return 1;}
 int album_covers_return(const char*,bool*);
 '''
-nav+='\nstatic bool cover_nav_active(void){return false;}\nstatic bool cover_nav_playing(void){return false;}\nstatic void cover_nav_begin(int i){(void)i;}\nstatic int cover_nav_finish(void){return GO_TO_PREVIOUS;}\nstatic void cover_nav_set_playing(bool b){(void)b;}\n'
+nav+='\n#define AGENTS_NAV_WPS 2\nstatic bool agents_nav_has(int screen){(void)screen;return false;}\nstatic bool cover_nav_active(void){return false;}\nstatic bool cover_nav_playing(void){return false;}\nstatic void cover_nav_begin(int i){(void)i;}\nstatic int cover_nav_finish(void){return GO_TO_PREVIOUS;}\nstatic void cover_nav_set_playing(bool b){(void)b;}\n'
 nav+=function(albums,'album_covers')+function(albums,'album_covers_return')
 nav+=function((R/'apps-ipod/screens/playback/wps.c').read_text(),'show_album_covers')
 nav+=function(root,'agents_scrn')

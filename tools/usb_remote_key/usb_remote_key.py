@@ -26,8 +26,6 @@ USAGE_TEN_CHARS_SECONDS = 1.0
 USAGE_VERTICAL_SECONDS = 4.0
 USAGE_THREE_LINES_SECONDS = 7.0
 USAGE_VIEW_LEASE_SECONDS = 0.75
-MENU_HOLD_SECONDS = 0.300
-MENU_HOLD_REPEATS = 3
 RECEIVER_SERIAL = '2543030725032a2a'
 IPOD_SERIAL = re.compile(r'.AA0000000000360\Z', re.DOTALL)
 RELEASE_SECONDS = 0.150
@@ -98,16 +96,11 @@ class NECDecoder:
 
 
 class MenuForwarder:
+    """Forward down/refresh/up; firmware supplies normal Menu repeats."""
     def __init__(self, usb):
         self.usb = usb
         self.down = False
-        self.first = self.last = 0.0
-        self.repeats = 0
-        self.sent = False
-
-    def pulse(self, key, now):
-        self.usb.send(True, now, key)
-        self.usb.send(False, now, key)
+        self.last = 0.0
 
     def frame(self, frame, now, span_seconds=0.0):
         self.poll(now)
@@ -116,27 +109,15 @@ class MenuForwarder:
         menu = (len(frame) == 4 and frame[:2] == b'\xee\x87'
                 and frame[2] in (0x02, 0x03))
         if menu or (frame == b'' and self.down):
-            if not self.down:
-                self.down, self.sent = True, False
-                # Hold age starts at the first edge, not 68 ms later when
-                # the complete frame can be decoded. Silence uses last below.
-                self.first, self.repeats = now - span_seconds, 0
-            else:
-                self.repeats += 1
+            self.down = True
             self.last = now
-            # A timer alone cannot establish a hold: a continuing IR stream
-            # at/after the named threshold is required.
-            if (not self.sent and self.repeats >= MENU_HOLD_REPEATS and
-                    now - self.first + 1e-9 >= MENU_HOLD_SECONDS):
-                self.pulse(SELECT, now)
-                self.sent = True
+            self.usb.send(True, now, MENU)
         elif frame:
             self.release(now)
 
     def release(self, now):
         if self.down:
-            if not self.sent:
-                self.pulse(MENU, now)
+            self.usb.send(False, now, MENU)
             self.down = False
 
     def poll(self, now):

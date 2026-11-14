@@ -48,6 +48,7 @@ pre=r'''
 #define ACTION_AGENTS_REMOTE_COVERS 6
 #define ACTION_REMOTE_WPS 7
 #define ACTION_WPS_MENU 8
+#define PF_QUIT ACTION_WPS_MENU
 #define ACTION_WPS_STOP 9
 #define ACTION_WPS_BROWSE 100
 #define ACTION_WPS_QUICKSCREEN 101
@@ -124,7 +125,7 @@ gui=current_wps[current_wps.index('static long wps_run(bool return_agents, bool 
 a=gui.index('            case ACTION_WPS_MENU:');b=gui.index('            case ACTION_WPS_QUICKSCREEN:',a);wps_menu=gui[a:b]
 a=gui.index('            case ACTION_WPS_STOP:');b=gui.index('            /* Bound only',a);wps_cover=gui[a:b]
 a=gui.index('        enum agents_nav_screen nav =');b=gui.index('        bool audio_paused',a);wps_pending=gui[a:b]
-a=current_covers.index('        enum agents_nav_screen nav =',current_covers.index('static int album_covers_loop(void)'));b=current_covers.index('        case PF_QUIT:',a)
+a=current_covers.index('        enum agents_nav_screen nav =',current_covers.index('static int album_covers_loop(void)'));b=current_covers.index('        case PF_WPS:',a)
 cover_cases=current_covers[a:b]+'        default: break;\n        }\n return STAY;\n'
 helpers=fn(current_wps,'show_album_covers')
 bodies=r'''
@@ -245,6 +246,20 @@ else:
  root_funcs=''.join(fn(root,n) for n in ['album_covers_scrn','cover_tracks_scrn','agents_scrn','run_screen_shortcut','root_menu_agents_shortcut','root_menu_wps_shortcut','root_menu_cover_shortcut'])
 main=r'''
 int main(void){
+ /* FU20: remote double -> WPS -> triple -> Cover MENU must end at home. */
+ fixed[0]=ACTION_AGENTS_REMOTE_SWITCH;fixed[1]=ACTION_AGENTS_REMOTE_COVERS;
+ fixed[2]=ACTION_WPS_MENU;fixed[3]=EXIT_TEST;nfixed=4;atfixed=0;
+ root_menu_agents_shortcut();
+ assert(!owner&&!depth&&!agents_nav_active()&&!cover_nav_active());
+ assert(exits[AGENTS_NAV_WPS]==1&&exits[AGENTS_NAV_COVERS]==1);
+ /* WPS can be playing a journey whose original Cover origin was Agents.
+    A fresh triple/hotkey modal from that WPS still takes MENU to home. */
+ cover_nav_begin(GO_TO_AGENTS);
+ fixed[0]=TRACKS_TEST;fixed[1]=PLAY_TEST;fixed[2]=ACTION_AGENTS_REMOTE_COVERS;
+ fixed[3]=ACTION_WPS_MENU;fixed[4]=EXIT_TEST;nfixed=5;atfixed=0;
+ int agents_before=exits[AGENTS_NAV_AGENTS];root_menu_cover_shortcut();
+ assert(!owner&&!depth&&!agents_nav_active()&&!cover_nav_active());
+ assert(exits[AGENTS_NAV_AGENTS]==agents_before);
  /* Exact reported panic path: Cover -> double -> Agents -> triple -> Cover. */
  fixed[0]=ACTION_AGENTS_REMOTE_SWITCH;fixed[1]=ACTION_AGENTS_REMOTE_COVERS;
  fixed[2]=EXIT_TEST;nfixed=3;atfixed=0;root_menu_cover_shortcut();

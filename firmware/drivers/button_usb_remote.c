@@ -68,7 +68,7 @@ bool button_usb_remote_request(const struct usb_ctrlrequest *req)
         else if (remote_button == key)
         {
             /* Back-to-back EP0 press/release must survive button debounce.
-             * Never synthesize a repeat; the bridge already chose the key. */
+             * Held down refreshes retain the first edge so native repeats can fire. */
             unsigned long minimum = pressed_at + (HZ + 19) / 20;
             if (TIME_BEFORE(current_tick, minimum))
                 menu_until = minimum;

@@ -969,3 +969,83 @@ and WPS are dispatched after the previous screen unwinds; no album buffer is
 held as history. Logical history has at most four levels (origin, carousel,
 list, WPS). Live registered screen depth remains at most two (WPS with one
 modal carousel); the album list has its own single-instance lifetime.
+
+## Global remote controls (Follow-up 20)
+
+Vol+/Vol- now change audio volume only in the actual Now Playing input
+context. This overrides older sections that allowed list/Usage volume.
+The resident PodLink-or-fresh-bridge connection predicate applies everywhere:
+connected uses only PC EP0 reports; Dock L3/0E absolute/mute changes are
+acknowledged without changing audio. Non-WPS readback is virtual; WPS
+readback continues to report the real audio volume. Disconnected WPS
+uses its original Dock absolute-volume path. Other disconnected screens use
+the FU13 300 ms press grouping, first repeat after 600 ms, then every 250 ms.
+PC reports still count individually, except the first IR repeat skipped by
+`VOL_IGNORE_FIRST_REPEATS = 1`. No 80 ms fallback window returns.
+
+| Screen | Vol+ / Vol- |
+| --- | --- |
+| Now Playing | Native WPS volume step per PC report while connected; original Dock audio volume while disconnected |
+| Main menu, browsers, album/playlist/settings lists | Previous / next item, one per accepted report |
+| Cover Flow | Previous / next album |
+| Agents list | Previous / next item |
+| Agents detail / Usage, connected | Existing computer Left/Up and Right/Down batches, with the unchanged 0.5/1/4/7 s hold tiers and view/focus lease |
+| Agents detail / Usage, disconnected | Page up / down; Usage no longer changes audio volume |
+| Agents confirmation | No list movement |
+| QuickScreen | Ignores list movement; no volume shortcut |
+| Other action-based non-list dialogs/editors | List previous/next only where handled; otherwise ignored |
+| Raw viewers | One native wheel event where supported; no audio shortcut |
+| Gameplay, capture-only/debug screens without list movement | No list navigation; capture mode records input without generating steps |
+
+The PC FIFO is bounded at 64 entries. Screen/mode changes and loss of the
+computer connection discard stale entries. Dock navigation also wakes a
+blocked UI input wait. Remote steps carry no wheel acceleration data; a
+previous wheel spin cannot turn one report into several rows. Native wheel
+behavior and the physical volume settings remain unchanged.
+
+An album track list, including a Cover Flow album list, gives remote Play
+tap the native SELECT down/up after the 200 ms inter-tap window. Double
+still switches to Agents and triple toggles Cover Flow; hold still opens
+Now Playing. Other lists keep their previous Play meaning: standard lists
+already select, while ordinary tree/file browsers can enter Now Playing.
+Agents, WPS and carousel tap/hold meanings are unchanged.
+
+### MENU return table
+
+| Current screen / entry | MENU tap | MENU hold |
+| --- | --- | --- |
+| WPS entered by remote double from Agents, no Cover album playback journey | Cover Flow | Native QuickScreen, or Shortcuts when configured |
+| Ordinary WPS, no Cover album playback journey | Previous configured WPS MENU behavior | Native QuickScreen/Shortcuts |
+| WPS playing music opened from Cover Flow | That album's track list, ahead of the remote-entry override | Native QuickScreen/Shortcuts |
+| Cover album track list | Cover Flow with the same album centered | Existing browser/menu hold behavior |
+| Cover Flow entered directly over WPS by triple/V1 MENU/hotkey, or with saved WPS origin | Home (main menu) | Carousel settings |
+| Cover Flow with another saved origin | That origin | Carousel settings |
+| Cover Flow after the WPS -> album list -> Cover Flow return | Home if the saved origin is WPS; otherwise the saved origin | Carousel settings |
+| Agents | Existing confirmed MENU exit and S1 Disk Mode popup | Same handling as its native MENU hold; no Select/Enter |
+
+Cover Flow triple/native SELECT+MENU and Left/back retain their origin-return
+meanings. Only its MENU tap changes a direct WPS child or saved WPS-origin route to Home.
+A new triple/hotkey from a Cover-playback WPS also goes Home, even if the
+older logical journey began in Agents; X2 list-back returns keep that older origin. Screen
+instances still unwind before replacement; album-list history is logical,
+with no saved app-buffer owner or recursive screen instance. Logical journey
+depth remains four and maximum live registered-screen depth remains two.
+
+### Real Menu button over EP0
+
+The bridge removes Menu-to-Select classification. First decoded Menu frame
+sends key ID 1 down immediately; continuing Menu frames/NEC repeats refresh
+the same down state. After 150 ms release silence, another complete key or
+orderly shutdown, it sends up. It emits no key ID 2 for a Menu stream.
+Firmware's native sampler generates Menu repeats/long presses. The existing
+one-second safety timeout releases a lost down state when the link/bridge
+stops refreshing it. IDs and request framing are unchanged; legacy Select
+ID 2 remains accepted for compatibility with older tools.
+
+Native-button-only readers receive MENU with the original repeat/release
+flags. A tap remains MENU. USB consent still uses MENU for charge-only and
+remote Play/native SELECT to accept Disk Mode. Agents retains tap exit and
+its existing native hold behavior; it no longer receives a fake Select.
+The host bridge reads the IR serial stream only. Deploy its matching
+`usb_remote_key.py`; HerdRemote/PodLink runtime files and service units do
+not change in FU20. No service or device operation is part of this build.

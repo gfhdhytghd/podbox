@@ -7,7 +7,7 @@
 #define REMOTE_COVERS_BUTTON (BUTTON_REDRAW | 0x200)
 #define REMOTE_TAP_WINDOW_TICKS ((HZ + 4) / 5)
 enum agents_remote_context {
-    REMOTE_OTHER, REMOTE_AGENTS, REMOTE_WPS, REMOTE_COVERS
+    REMOTE_OTHER, REMOTE_AGENTS, REMOTE_WPS, REMOTE_COVERS, REMOTE_ALBUM_LIST
 };
 struct agents_remote_hold {
     bool down, fired;

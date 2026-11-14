@@ -69,7 +69,7 @@ subprocess.run([str(O/'clock')],check=True)
 a=(R/'apps-ipod/input/action.c').read_text();service=(R/'firmware/usbstack/podlink_service.c').read_text()
 assert 'set_time(' not in service and 'get_time(' not in service
 assert 'button_queue_post(BUTTON_REDRAW, 0)' in service
-assert a.count('podlink_time_sync();')==5
+assert a.count('podlink_time_sync();')==6
 assert 'rtc_tm = *tm;' in (R/'firmware/common/timefuncs.c').read_text()
 assert 'current_tick + seconds * HZ' in (R/'firmware/powermgmt.c').read_text()
 print('Transport mailbox/wakeup; UI hooks; RTC cache; monotonic sleep timer wiring PASS')

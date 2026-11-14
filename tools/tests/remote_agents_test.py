@@ -76,7 +76,7 @@ int main(void) {
     assert(agents_remote_button(&st,REMOTE_AGENTS,BUTTON_RC_MENU,BUTTON_RC_MENU,400)==BUTTON_RC_MENU);
     assert(!agents_remote_button(&st,REMOTE_AGENTS,0,BUTTON_RC_MENU,460));
     assert(agents_remote_button(&st,REMOTE_AGENTS,BUTTON_RC_MENU|BUTTON_REL,0,470)==(BUTTON_RC_MENU|BUTTON_REL));
-    assert(lookup(CONTEXT_AGENTS,BUTTON_RC_MENU|BUTTON_REL,0)==ACTION_STD_MENU);
+    assert(lookup(CONTEXT_AGENTS,BUTTON_RC_MENU|BUTTON_REL,BUTTON_RC_MENU)==ACTION_STD_MENU);
     assert(lookup(CONTEXT_AGENTS,BUTTON_RC_SELECT|BUTTON_REL,0)==ACTION_STD_OK);
     st=(struct agents_remote_state){0};
     for(int f=0;f<3;f++) {

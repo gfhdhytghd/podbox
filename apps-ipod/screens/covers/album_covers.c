@@ -1030,7 +1030,8 @@ int album_covers_return(const char *selected_file, bool *remote_return)
 {
     int ret;
     if (remote_return) *remote_return = false;
-    if (!cover_nav_active()) cover_nav_begin(GO_TO_PREVIOUS);
+    if (!cover_nav_active())
+        cover_nav_begin(agents_nav_has(AGENTS_NAV_WPS) ? GO_TO_WPS : GO_TO_PREVIOUS);
 
     while (1)
     {

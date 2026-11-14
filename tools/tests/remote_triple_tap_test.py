@@ -40,10 +40,10 @@ static void tap(int c,unsigned long at,int length){feed(c,BUTTON_RC_PLAY,BUTTON_
 '''
 post=r'''
 int main(void){
- for(int mode=REMOTE_OTHER;mode<=REMOTE_COVERS;mode++){
+ for(int mode=REMOTE_OTHER;mode<=REMOTE_ALBUM_LIST;mode++){
   reset();tap(mode,100,13);feed(mode,0,0,133);assert(!count(BUTTON_SELECT)&&!count(REMOTE_SWITCH_BUTTON));
   feed(mode,0,0,134);
-  assert(count(mode==REMOTE_AGENTS||mode==REMOTE_COVERS?BUTTON_SELECT:BUTTON_RC_PLAY)==1);
+  assert(count(mode==REMOTE_AGENTS||mode==REMOTE_COVERS||mode==REMOTE_ALBUM_LIST?BUTTON_SELECT:BUTTON_RC_PLAY)==1);
   assert(!count(REMOTE_SWITCH_BUTTON)&&!count(REMOTE_COVERS_BUTTON));
   /* First two tap durations and 150 ms gap are from remote-log-2.txt.
    * The third is a modeled 130 ms tap with the same observed gap. */
@@ -65,7 +65,7 @@ int main(void){
   feed(mode,0,BUTTON_RC_PLAY,300+threshold);
   feed(mode,BUTTON_RC_PLAY|BUTTON_REL,0,400);
   assert(!count(REMOTE_COVERS_BUTTON)&&!count(REMOTE_SWITCH_BUTTON));
-  if(mode==REMOTE_OTHER||mode==REMOTE_COVERS)assert(count(REMOTE_WPS_BUTTON)==1);
+  if(mode==REMOTE_OTHER||mode==REMOTE_COVERS||mode==REMOTE_ALBUM_LIST)assert(count(REMOTE_WPS_BUTTON)==1);
   reset();tap(mode,ULONG_MAX-70,13);tap(mode,ULONG_MAX-47,13);tap(mode,ULONG_MAX-24,13);
   assert(count(REMOTE_COVERS_BUTTON)==1&&!count(REMOTE_SWITCH_BUTTON));
  }

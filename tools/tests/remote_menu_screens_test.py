@@ -45,6 +45,11 @@ pre = r'''
 #include "apps-ipod/input/agents_shortcut.h"
 #define TIME_BEFORE(a,b) ((long)((unsigned long)(a)-(unsigned long)(b)) < 0)
 static int raw_ui_cancel(void) {return BUTTON_MENU;}
+#define CONTEXT_AGENTS 1
+#define CONTEXT_STD 2
+static void iap_volume_context(bool wps){(void)wps;}
+static int remote_context(int c){return c==CONTEXT_AGENTS?REMOTE_AGENTS:REMOTE_OTHER;}
+static int raw_volume_button(int b){return b;}
 bool ui_polling;
 void podlink_time_sync(void) {}
 struct agents_shortcut_state shortcut;

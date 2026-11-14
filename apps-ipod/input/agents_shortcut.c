@@ -19,6 +19,7 @@ int cover_nav_finish(void)
     cover_journey = cover_music = false;
     return origin;
 }
+bool cover_nav_origin_is(int screen) { return cover_journey && cover_origin == screen; }
 bool cover_nav_active(void) { return cover_journey; }
 bool cover_nav_playing(void) { return cover_journey && cover_music; }
 void cover_nav_set_playing(bool playing) { cover_music = playing; }

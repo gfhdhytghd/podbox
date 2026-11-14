@@ -30,7 +30,8 @@ static void play_tap(struct agents_remote_state *s, unsigned long now)
 {
     remote_log_event(REMOTE_LOG_TAP, now, s->play_context, 0, NULL, 0);
     /* Agents already discarded the short recording on physical release. */
-    if (s->play_context == REMOTE_AGENTS || s->play_context == REMOTE_COVERS)
+    if (s->play_context == REMOTE_AGENTS || s->play_context == REMOTE_COVERS ||
+        s->play_context == REMOTE_ALBUM_LIST)
     {
         emit(s, BUTTON_SELECT);
         emit(s, BUTTON_SELECT | BUTTON_REL);
@@ -92,7 +93,8 @@ static bool play_button(struct agents_remote_state *s, int context, int button,
             remote_log_event(REMOTE_LOG_HOLD, now, context, 0, NULL, 0);
             s->second = false;
             h->fired = true;
-            if (context == REMOTE_OTHER || context == REMOTE_COVERS)
+            if (context == REMOTE_OTHER || context == REMOTE_COVERS ||
+                context == REMOTE_ALBUM_LIST)
                 emit(s, REMOTE_WPS_BUTTON);
             else if (context == REMOTE_WPS)
             {
@@ -143,7 +145,7 @@ int agents_remote_button(struct agents_remote_state *s, int context,
 {
     if (s->queued) return take(s);
     if (play_button(s, context, button, held, now)) return take(s);
-    /* Menu/Select are already classified by the host IR bridge. Direction
+    /* Menu/Select retain their native press/repeat/release meanings. Direction
      * keys retain their normal press/repeat/release meanings everywhere. */
     if (context == REMOTE_AGENTS &&
         ((button & BUTTON_REMOTE) == BUTTON_RC_LEFT ||

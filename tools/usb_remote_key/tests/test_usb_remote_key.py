@@ -99,7 +99,7 @@ class DecoderTests(unittest.TestCase):
                 forward.frame(decode(frame), 1)
                 forward.poll(1.151)
                 expected = frame[:2] == b'\xee\x87' and frame[2] in (2, 3)
-                self.assertEqual(recorder.events, [(1, True, 1.151), (1, False, 1.151)] if expected else [])
+                self.assertEqual(recorder.events, [(1, True, 1), (1, False, 1.151)] if expected else [])
                 count += 1
                 menu += expected
         self.assertEqual(count, 31)
@@ -121,43 +121,23 @@ class ForwardTests(unittest.TestCase):
         class Port:
             def send(_, down, now, key=1):self.events.append((key,down,now));return True
         self.f=k.MenuForwarder(Port())
-    def test_single_and_one_repeat_stay_menu(self):
-        for repeat in (False,True):
-            self.setUp();self.f.frame(bytes.fromhex('ee870259'),0)
-            if repeat:self.f.frame(b'',.108)
-            self.assertEqual(self.events,[])
-            self.f.poll(.259)
-            self.assertEqual([(a,b) for a,b,t in self.events],[(1,True),(1,False)])
-    def test_hold_requires_three_repeats_and_300ms(self):
+    def test_tap_is_immediate_menu_down_then_silence_up(self):
         self.f.frame(bytes.fromhex('ee870259'),0)
-        for t in (.108,.216):self.f.frame(b'',t)
-        self.assertEqual(self.events,[])
-        self.f.poll(.230);self.assertEqual(self.events,[]) # elapsed alone is not evidence
-        self.f.frame(b'',.324)
-        self.assertEqual([(a,b) for a,b,t in self.events],[(2,True),(2,False)])
-        self.f.frame(b'',.432);self.f.poll(.6)
-        self.assertEqual(len(self.events),2)
-    def test_threshold_and_foreign_repeat(self):
-        self.f.frame(bytes.fromhex('ee870259'),0)
-        self.f.frame(b'',.100);self.f.frame(b'',.200);self.f.frame(b'',.300)
-        self.assertEqual(self.events,[(2,True,.300),(2,False,.300)])
-        self.setUp();self.f.frame(bytes.fromhex('ee870259'),0)
-        self.f.frame(bytes.fromhex('ee870459'),.05);self.f.frame(b'',.1)
-        self.assertEqual([(a,b) for a,b,t in self.events],[(1,True),(1,False)])
-    def test_two_jittered_repeats_cannot_promote_a_double(self):
-        self.f.frame(bytes.fromhex('ee870259'),0)
-        self.f.frame(b'',.120);self.f.frame(b'',.240)
-        self.assertEqual(self.events,[])
-        self.f.poll(.391)
-        self.assertEqual([(key,down) for key,down,t in self.events],[(1,True),(1,False)])
+        self.assertEqual(self.events,[(1,True,0)])
+        self.f.poll(.151)
+        self.assertEqual(self.events,[(1,True,0),(1,False,.151)])
 
-    def test_three_repeats_before_time_threshold_stay_menu(self):
+    def test_hold_refreshes_menu_without_select(self):
         self.f.frame(bytes.fromhex('ee870259'),0)
-        for t in (.099,.199,.299):self.f.frame(b'',t)
-        self.assertEqual(self.events,[])
-        self.f.poll(.301);self.assertEqual(self.events,[])
-        self.f.poll(.450)
-        self.assertEqual([(key,down) for key,down,t in self.events],[(1,True),(1,False)])
+        for t in (.108,.216,.324,.432):self.f.frame(b'',t)
+        self.assertEqual(self.events,[(1,True,t) for t in (0,.108,.216,.324,.432)])
+        self.f.poll(.583)
+        self.assertEqual(self.events[-1],(1,False,.583))
+
+    def test_foreign_key_releases_menu_and_orphan_repeat_does_nothing(self):
+        self.f.frame(bytes.fromhex('ee870259'),0)
+        self.f.frame(bytes.fromhex('ee870459'),.05);self.f.frame(b'',.1)
+        self.assertEqual(self.events,[(1,True,0),(1,False,.05)])
 
     def test_orphan_noise_and_shutdown(self):
         self.f.frame(b'',0);self.f.frame(None,.01);self.assertEqual(self.events,[])
@@ -173,7 +153,8 @@ class ForwardTests(unittest.TestCase):
             if m:self.f.frame(bytes.fromhex(m[3]) if m[3] else b'',float(m[1]))
         self.f.poll(10000)
         keys=[key for key,down,t in self.events if down]
-        self.assertEqual(keys,[1,1,1,1,1,1])
+        self.assertTrue(keys and all(key==k.MENU for key in keys))
+        self.assertEqual(sum(not down for key,down,t in self.events),6)
         self.setUp();count=0
         for line in (fixture/'ir-menu.log').read_text().splitlines():
             m=re.search(r'NEC (ee 87 0[23] [0-9a-f]{2}) ',line)

@@ -32,6 +32,7 @@ void agents_shortcut_talking(bool talking);
 /* One logical Cover Flow -> album list -> WPS journey, with an origin. */
 void cover_nav_begin(int origin);
 int cover_nav_finish(void);
+bool cover_nav_origin_is(int screen);
 bool cover_nav_active(void);
 bool cover_nav_playing(void);
 void cover_nav_set_playing(bool playing);

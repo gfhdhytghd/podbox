@@ -49,6 +49,10 @@
 #include "input/remote_menu.h"
 #include "root_menu.h"
 #include "kernel.h"
+#ifdef IPOD_ACCESSORY_PROTOCOL
+#include "iap/agents_volume.h"
+#include "iap/remote_capture.h"
+#endif
 static struct agents_shortcut_state shortcut;
 static struct agents_cover_chord_state cover_chord;
 static bool ui_polling;
@@ -59,11 +63,29 @@ static long raw_ui_cancel(void)
     release = !release;
     return BUTTON_MENU | (release ? 0 : BUTTON_REL);
 }
+static int raw_volume_button(int button)
+{
+    if (button & (SYS_EVENT | BUTTON_MULTIMEDIA | BUTTON_REDRAW)) return button;
+#ifdef IPOD_ACCESSORY_PROTOCOL
+    button = iap_volume_filter(button);
+    if ((button & BUTTON_REMOTE) == BUTTON_RC_VOL_UP)
+        return BUTTON_SCROLL_BACK;
+    if ((button & BUTTON_REMOTE) == BUTTON_RC_VOL_DOWN)
+        return BUTTON_SCROLL_FWD;
+#endif
+    return button;
+}
 static long raw_ui_filter(long button)
 {
     /* Audio/decoder threads also read buttons; they must never write RTC. */
     if (thread_self() != ui_thread || ui_polling) return button;
     podlink_time_sync();
+    if (button & SYS_EVENT) return button;
+#ifdef IPOD_ACCESSORY_PROTOCOL
+    iap_volume_context(false);
+    if (button == BUTTON_NONE) button = iap_agents_volume_take();
+    button = raw_volume_button(button);
+#endif
     if (button & SYS_EVENT) return button;
     bool fire;
     button = agents_cover_chord_button(&cover_chord, button, button_status(), true, &fire);
@@ -79,6 +101,10 @@ static long raw_ui_filter(long button)
 void agents_shortcut_init(void)
 {
     ui_thread = thread_self();
+#ifdef IPOD_ACCESSORY_PROTOCOL
+    iap_agents_volume_enable(false);
+    iap_volume_context(false);
+#endif
     button_set_ui_filter(raw_ui_filter);
 }
 static bool shortcut_talking;
@@ -333,8 +359,18 @@ static void action_handle_backlight(bool backlight, bool ignore_next)
 * button is released/repeated.
 */
 #if defined(IPOD_ACCESSORY_PROTOCOL) && defined(HAVE_USB_PODLINK)
+static int remote_context(int context)
+{
+    if (context == CONTEXT_AGENTS) return REMOTE_AGENTS;
+    if (context == CONTEXT_WPS) return REMOTE_WPS;
+    if (get_current_activity() == ACTIVITY_ALBUMCOVERS) return REMOTE_COVERS;
+    if (agents_nav_has(AGENTS_NAV_TRACKS) &&
+        get_current_activity() == ACTIVITY_DATABASEBROWSER) return REMOTE_ALBUM_LIST;
+    return REMOTE_OTHER;
+}
 static int remote_poll(int timeout, int context)
 {
+    (void)context;
     if (remote_input_active)
     {
         remote = (struct agents_remote_state){0};
@@ -351,11 +387,11 @@ static int remote_poll(int timeout, int context)
         if (timeout < 0 || timeout > left) timeout = left;
     }
     int button = button_get_w_tmo(TIMEOUT_NOBLOCK);
-    if (button == BUTTON_NONE && context == REMOTE_AGENTS)
+    if (button == BUTTON_NONE)
         button = iap_agents_volume_take();
     if (button == BUTTON_NONE && timeout != TIMEOUT_NOBLOCK)
         button = button_get_w_tmo(timeout);
-    if (button == BUTTON_NONE && context == REMOTE_AGENTS)
+    if (button == BUTTON_NONE)
         button = iap_agents_volume_take();
     return button;
 }
@@ -368,9 +404,8 @@ int agents_shortcut_get_button(int timeout)
     int activity = get_current_activity();
     ui_polling = true;
 #ifdef IPOD_ACCESSORY_PROTOCOL
-    int context = activity == ACTIVITY_AGENTS ? REMOTE_AGENTS :
-                  activity == ACTIVITY_WPS ? REMOTE_WPS :
-                  activity == ACTIVITY_ALBUMCOVERS ? REMOTE_COVERS : REMOTE_OTHER;
+    iap_volume_context(false);
+    int context = remote_context(activity == ACTIVITY_AGENTS ? CONTEXT_AGENTS : CONTEXT_STD);
     int button = remote_poll(timeout, context);
 #else
     int button = button_get_w_tmo(timeout);
@@ -398,7 +433,28 @@ int agents_shortcut_get_button(int timeout)
                                        current_tick);
     if (remote_input_active) return button;
 #endif
-    return remote_menu_button(button);
+    return remote_menu_button(raw_volume_button(button));
+}
+#endif
+
+#if defined(IPOD_ACCESSORY_PROTOCOL) && defined(HAVE_USB_PODLINK)
+static bool remote_volume_action(action_cur_t *cur)
+{
+    int button = cur->button;
+    if (button & (SYS_EVENT | BUTTON_MULTIMEDIA | BUTTON_REDRAW)) return false;
+    int key = button & BUTTON_REMOTE;
+    if ((key != BUTTON_RC_VOL_UP && key != BUTTON_RC_VOL_DOWN) ||
+        cur->context == CONTEXT_AGENTS || cur->context == CONTEXT_WPS) return false;
+    bool up = key == BUTTON_RC_VOL_UP;
+    if (cur->context == CONTEXT_PLUGIN &&
+        get_current_activity() == ACTIVITY_ALBUMCOVERS)
+    {
+        cur->button = up ? BUTTON_SCROLL_BACK : BUTTON_SCROLL_FWD;
+        return false;
+    }
+    /* Non-list contexts ignore list movement; no volume shortcut. */
+    cur->action = up ? ACTION_STD_PREV : ACTION_STD_NEXT;
+    return true;
 }
 #endif
 
@@ -411,11 +467,24 @@ static inline bool action_poll_button(action_last_t *last, action_cur_t *cur)
 #endif
 
 #if defined(IPOD_ACCESSORY_PROTOCOL) && defined(HAVE_USB_PODLINK)
-    int context = cur->context == CONTEXT_AGENTS ? REMOTE_AGENTS :
-                  cur->context == CONTEXT_WPS ? REMOTE_WPS :
-                  get_current_activity() == ACTIVITY_ALBUMCOVERS ?
-                  REMOTE_COVERS : REMOTE_OTHER;
+    iap_volume_context(cur->context == CONTEXT_WPS);
+    int context = remote_context(cur->context);
     *button = remote_poll(cur->timeout, context);
+    *button = iap_volume_filter(*button);
+    int volume_button = *button;
+    if (remote_volume_action(cur))
+    {
+        /* A queued remote step cannot reuse the wheel's acceleration data. */
+        last->button = volume_button;
+        last->data = 0;
+        last->action = cur->action;
+        last->tick = current_tick;
+        last->repeated = false;
+        last->wait_for_release = false;
+        ui_polling = false;
+        podlink_time_sync();
+        return true;
+    }
 #else
     *button = button_get_w_tmo(cur->timeout);
 #endif
@@ -845,7 +914,11 @@ static inline int update_action_last(action_last_t *last, action_cur_t *cur)
 
     last->action = action;
     last->button = cur->button;
+#ifdef BUTTON_REMOTE
+    last->data   = cur->button & BUTTON_REMOTE ? 0 : button_get_data();
+#else
     last->data   = button_get_data();
+#endif
     last->tick   = current_tick;
 
     /* Produce keyclick */
@@ -963,7 +1036,7 @@ static int get_action_worker(action_last_t *last, action_cur_t *cur)
     /*if button = none/special; returns immediately*/
     if (action_poll_button(last, cur))
     {
-        return cur->button;
+        return cur->action != ACTION_UNKNOWN ? cur->action : cur->button;
     }
 
     update_screen_has_lock(last, cur);

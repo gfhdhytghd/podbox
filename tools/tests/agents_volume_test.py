@@ -68,6 +68,11 @@ static unsigned long current_tick;
 #define PAGE_UP (BUTTON_RC_VOL_UP|BUTTON_REL|BUTTON_REPEAT)
 #define PAGE_DOWN (BUTTON_RC_VOL_DOWN|BUTTON_REL|BUTTON_REPEAT)
 #define ACTIVITY_AGENTS 7
+#define ACTIVITY_WPS 8
+#define BUTTON_REMOTE 3
+#define SYS_EVENT 0x80000000u
+#define BUTTON_MULTIMEDIA 0x10000000
+#define BUTTON_REDRAW 0x20000000
 static int activity=ACTIVITY_AGENTS;
 static struct {int volume;}global_status;
 static struct {int volume_limit;}global_settings={255};
@@ -126,12 +131,12 @@ int main(int argc,char **argv) {
  global_status.volume=12;iap_agents_volume_enable(true);volume_paging=true;
  if(getenv("VOLUME_POLICY")) {
   view=VIEW_USAGE;update_volume_mode();unsigned char v;bool m;
-  assert(!iap_agents_volume_get(&v,&m));step(15);
-  assert(global_status.volume==15&&!iap_agents_volume_take());
+  assert(iap_agents_volume_get(&v,&m));step(15);
+  assert(global_status.volume==12&&iap_agents_volume_take()==PAGE_UP);
   view=2;update_volume_mode();step(18);
-  assert(iap_agents_volume_take()==PAGE_UP&&global_status.volume==15);
+  assert(iap_agents_volume_take()==PAGE_UP&&global_status.volume==12);
   view=VIEW_CONFIRM;confirm_from=VIEW_USAGE;update_volume_mode();
-  assert(!iap_agents_volume_get(&v,&m));puts("Usage real volume / return paging PASS");return 0;
+  assert(iap_agents_volume_get(&v,&m));puts("Usage disconnected paging / return paging PASS");return 0;
  }
  int ups=0,downs=0;
  for(unsigned int i=0;i<sizeof(trace)/sizeof(trace[0]);i++) {
@@ -154,11 +159,11 @@ int main(int argc,char **argv) {
  current_tick=2020;step(42);assert(iap_agents_volume_take()==PAGE_DOWN);
  current_tick=2030;step(39);assert(!iap_agents_volume_take());
  current_tick=2060;step(36);assert(iap_agents_volume_take()==PAGE_DOWN);
- iap_agents_volume_enable(false);step(33);assert(global_status.volume==33&&changes==1);
+ iap_agents_volume_enable(false);step(33);assert(global_status.volume==39&&!changes&&iap_agents_volume_take()==PAGE_DOWN);
  /* Diagnostic screen logs the same decisions without virtualizing real audio. */
  activity=0;remote_input_active=true;global_status.volume=12;iap_agents_volume_enable(true);
  unsigned long before=remote_volume_count();current_tick=3000;step(15);
- assert(global_status.volume==15&&!iap_agents_volume_take());
+ assert(global_status.volume==12&&!iap_agents_volume_take());
  struct remote_volume_trace trace_row;assert(remote_volume_count()>before&&remote_volume_get(remote_volume_count(),&trace_row));assert(trace_row.decision=='P'&&trace_row.direction==1);
  remote_input_active=false;iap_agents_volume_enable(false);
  /* Authentication, lengths and both absolute-volume encodings stay gated. */
@@ -173,7 +178,7 @@ int main(int argc,char **argv) {
  unsigned char muted[]={3,14,4,1,42,1};frame(6,muted,true);
  unsigned char v;bool m;iap_get_volume(&v,&m);assert(v==0&&m&&!device.mute&&!iap_agents_volume_take());
  current_tick=4010;step(3);assert(iap_agents_volume_take()==PAGE_UP&&!changes);reported_is(3);
- iap_agents_volume_enable(false);frame(7,absolute,true);assert(global_status.volume==42&&changes==1);
+ iap_agents_volume_enable(false);frame(7,absolute,true);assert(global_status.volume==39&&!changes);
  global_settings.volume_limit=100;global_status.volume=100;iap_agents_volume_enable(true);
  current_tick=ULONG_MAX-10;step(100);assert(iap_agents_volume_take()==PAGE_UP);
  current_tick=9;step(100);assert(!iap_agents_volume_take());
@@ -183,13 +188,13 @@ int main(int argc,char **argv) {
  activity=0;remote_input_active=false;global_status.volume=12;
  iap_agents_volume_enable(false);streaming=true;changes=0;
  before=remote_volume_count();current_tick=5000;step(15);
- assert(global_status.volume==15&&changes==1&&!iap_agents_volume_take());
- assert(remote_volume_count()==before+1);
+ assert(global_status.volume==12&&!changes&&iap_agents_volume_take()==PAGE_UP);
+ assert(remote_volume_count()==before+2);
  assert(remote_volume_get(remote_volume_count(),&trace_row));
- assert(trace_row.direction==1&&trace_row.decision=='P');
+ assert(trace_row.direction==1&&trace_row.decision=='E');
  streaming=false;before=remote_volume_count();step(18);
- assert(global_status.volume==18&&changes==2);
- assert(remote_volume_count()==before);
+ assert(global_status.volume==12&&!changes);
+ assert(remote_volume_count()==before+1);
  puts("single-message decode/readback/6 up + 8 down/gap/hold/clamps/reversal/Usage/Debug/resident stream outside Agents PASS");
 }
 '''

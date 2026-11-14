@@ -14,6 +14,9 @@ a=ast.parse((R/'tools/tests/native_cover_chord_test.py').read_text())
 pre=next(ast.literal_eval(n.value) for n in a.body if isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='pre' for t in n.targets))
 pre=pre.replace('#include "firmware/export/button_chord.h"',re.sub(r'^#include .*$', '',(R/'firmware/export/button_chord.h').read_text(),flags=re.M))
 pre+='''
+static void iap_volume_context(bool wps){(void)wps;}
+static int iap_agents_volume_take(void){return 0;}
+static int raw_volume_button(int b){return b;}
 static bool ui_polling;
 static unsigned int ui_thread=7,caller=7;
 static int held,clock_pumps;

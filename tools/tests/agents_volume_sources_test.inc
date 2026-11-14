@@ -84,12 +84,12 @@ int main(void)
     pc(102,1,true);iap_agents_volume_enable(false);
     assert(!take_at(103));iap_agents_volume_enable(true);assert(!take_at(103));
     /* S2: connected Usage has no iPod page/audio effect from either source. */
-    reset_sources(false);test_link=true;
+    reset_sources(false);iap_agents_volume_host_keys(true);test_link=true;
     assert(dock(100,15));assert(global_status.volume==12&&!take_at(100));
     pc(101,1,true);pc(102,-1,false);assert(!take_at(102));
     assert(global_status.volume==12);
-    test_link=false;assert(!dock(103,18));assert(global_status.volume==18);
-    assert(!take_at(103));
+    test_link=false;assert(dock(103,18));assert(global_status.volume==12);
+    assert(take_at(103)==UP);
     /* FU16 detail delegates connected PC reports, keeps disconnected pages. */
     reset_sources(true);test_link=true;pc(100,1,true);
     iap_agents_volume_host_keys(true);assert(!take_at(100));
@@ -99,9 +99,9 @@ int main(void)
     assert(global_status.volume==12);
     iap_agents_volume_host_keys(false);test_link=true;pc(105,-1,true);
     assert(take_at(105)==DOWN);
-    /* Outside Agents no new PC volume behavior and original real Dock volume. */
-    reset_sources(false);activity=0;test_link=true;heartbeat(100);pc(101,1,true);
-    assert(!dock(102,15));assert(global_status.volume==15&&!take_at(102));
+    /* FU20: every non-WPS screen uses the same navigation/source policy. */
+    reset_sources(false);activity=0;iap_volume_context(false);test_link=true;heartbeat(100);pc(101,1,true);
+    assert(dock(102,15));assert(global_status.volume==12&&take_at(102)==UP);
     assert(!button_usb_remote_read());
     /* Old Menu/Select EP0 sampling is untouched. */
     request_at(110,1,1);assert(button_usb_remote_read()==BUTTON_RC_MENU);
@@ -144,5 +144,5 @@ int main(void)
     /* Fresh bridge and FIFO behavior survive tick wrap. */
     reset_sources(true);heartbeat(ULONG_MAX-5);pc(1,-1,true);
     dock(2,9);assert(take_at(2)==DOWN);assert(!take_at(2));
-    puts("FU15: resident-only/fresh-bridge connection, Dock ignored/PC FIFO, stale heartbeat with live PodLink, disconnect FU13, Usage PC ignored/disconnected Dock real volume, outside/native/Menu/Select, endpoint validation, live decision strings, wakeup, queue/wrap PASS");
+    puts("FU15: resident-only/fresh-bridge connection, Dock ignored/PC FIFO, stale heartbeat with live PodLink, disconnect FU13, Usage PC delegated/disconnected Dock paging, outside/native/Menu/Select, endpoint validation, live decision strings, wakeup, queue/wrap PASS");
 }

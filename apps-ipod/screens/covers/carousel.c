@@ -4556,7 +4556,8 @@ static int album_covers_loop(void)
             return GO_TO_PREVIOUS;
 #endif
         case PF_QUIT:
-            return GO_TO_PREVIOUS;
+            return agents_nav_has(AGENTS_NAV_WPS) || cover_nav_origin_is(GO_TO_WPS) ?
+                   GO_TO_ROOT : GO_TO_PREVIOUS;
         case PF_WPS:
             return GO_TO_WPS;
         case PF_BACK:

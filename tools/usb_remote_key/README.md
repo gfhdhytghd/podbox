@@ -36,28 +36,19 @@ configuration, claims an interface, detaches a driver, or sends a key saved
 while disconnected.
 Disk mode and firmware without this request receive no working Menu input.
 
-Menu is classified on the computer. A stream continuing at least 300 ms
-(`MENU_HOLD_SECONDS`) after its first frame, with at least three repeats,
-sends one Select press/release. Elapsed time without another frame cannot
-classify a hold. Otherwise 150 ms without another Menu frame/repeat sends
-one Menu press/release. Another complete key ends the current Menu stream;
-its repeats cannot extend Menu. Further repeats after Select send nothing.
-
-The third repeat normally starts about 324 ms after the first frame. The
-300 ms time gate leaves margin for jitter; both the repeat count and time
-gate must pass. Hold age starts at the first edge of the initial frame,
-using its decoded microsecond span. The 150 ms silence timer still starts
-at the end of the latest event. This keeps the third repeat eligible even
-though a full frame takes about 68 ms to decode and a repeat only 12 ms.
-Fast taps and collapsed doubles with only one or two repeats remain Menu.
-A stopped stream cannot become Select just because time passes.
+Menu is forwarded as a real held button. The first decoded frame sends
+EP0 Menu down immediately. Each continuing frame/repeat refreshes the same
+down state. After 150 ms of silence, another key, or orderly shutdown, the
+bridge sends Menu up. It never turns a Menu hold into Select. Firmware's
+ordinary button sampler supplies Menu repeats and long-press actions.
+A missing release is bounded by the existing one-second device timeout.
 
 `tests/fixtures/ir-gestures-raw.log` contains host-timed EDGE lines. Tests
 feed these through the production decoder, separating the initial full
 frame and repeat even when `ir-gestures.log` reports them together as 72
 edges. The fixtures cover Menu taps, collapsed doubles and five one-second
 Menu holds. The bridge continues to ignore Play and Left/Right commands.
-Deploy this bridge with matching Follow-up 14 firmware accepting IDs
+Deploy this bridge with matching Follow-up 20 firmware accepting IDs
 1 through 5; older firmware stalls the new volume/heartbeat IDs. The firmware keeps a short EP0 pulse down for at least 50 ms so the
 button sampler cannot lose its back-to-back down/up requests. Its one-second
 safety release still covers a missing up request.
@@ -81,7 +72,7 @@ key IDs, request directions, recipients, states and payload lengths STALL.
 Bootloader and simulator omit the feature. No descriptor changes are needed.
 The native button sampler merges the state with the dock button state;
 its existing queue emits `BUTTON_RC_MENU` or `BUTTON_RC_SELECT` and their
-release. Firmware does not classify a Menu hold into Select.
+press/repeat/release transitions. Firmware does not classify a Menu hold into Select.
 
 Run offline tests without opening either device:
 
@@ -105,28 +96,28 @@ Valid receiver STATE/EDGE records allow one EP0 heartbeat per second. An
 open serial fd alone is insufficient. After three seconds without a
 heartbeat, the resident PodLink host signal still keeps Dock input disabled.
 With both signals absent, the player uses the original Dock behavior.
-With a connected computer as defined below, PC volume reports work only
-in Agents, including Usage and the talk band. S2 handles Usage as host arrow keys; the other views page. No PC
-volume is merged into the ordinary sampled button state outside Agents.
+With Follow-up 20, PC volume reports work in every UI screen. Only the
+actual Now Playing input context changes audio volume. Other action-based
+lists receive one up/down item step, Cover Flow receives one previous/next
+album step, and raw viewers receive wheel steps where supported. QuickScreen,
+non-list dialogs and editors can ignore list movement; it never invokes their
+volume shortcut. Usage/detail continue using the existing host arrow-key
+lease and acceleration while connected. Disconnected Usage now pages, rather
+than changing audio volume.
 
-With Follow-up 15, Agents ignores Dock L3/0E volume completely while a
-computer is connected. This includes Usage, where S2 now sends host arrow keys. The only connection predicate is
-`computer_connected(now)`: the resident PodLink host session is up on the
-current configured 2AA byte stream, OR the bridge heartbeat is fresh.
-The resident signal does not depend on which foreground client is attached.
-A stale heartbeat cannot re-enable Dock input while PodLink remains up.
-
-There is no 80 ms wait, per-press arbitration, Dock fallback or Dock hold
-repeat in connected Agents. The PC's 64-report FIFO remains. When both
-signals are absent, normal Dock behavior is restored: the original 300 ms
-press grouping and 600/250 ms repeat schedule for paging, and the original
-absolute audio-volume setter in disconnected Usage. Outside Agents behavior is unchanged.
-The heartbeat retains its existing three-second freshness interval; that
-signal can keep the logical connection true briefly after USB disconnect.
-A charger/USB profile request alone is not a resident host session.
+The connection predicate remains `computer_connected(now)`: resident PodLink
+on the current configured 2AA stream OR the bridge's three-second heartbeat.
+While connected, Dock L3/0E volume is ignored in all screens, including WPS.
+Only PC reports count. No 80 ms window or per-press Dock fallback is used.
+The 64-report FIFO is retained, with screen/mode tags to drop stale batches.
+When both connection signals are absent, non-WPS screens use Dock's original
+300 ms grouping and 600/250 ms navigation-repeat schedule. Disconnected WPS
+keeps the absolute Dock volume setter. A heartbeat can keep the logical
+connection true briefly after USB unplug; a charger/profile alone is not a
+resident host session.
 
 Live volume KEY and VOL records use `decision=ignored-pc-connected`
-for ignored Dock input in connected Agents. PC steps retain `source=PC` and
+for ignored Dock input in every connected screen. PC steps retain `source=PC` and
 `decision=used`; page emits identify the selected source. The existing
 `pc_tick`/`dock_tick` fields record independent source events; Follow-up 15
 performs no pairing. There is no measured/matched 80 ms window to calibrate.

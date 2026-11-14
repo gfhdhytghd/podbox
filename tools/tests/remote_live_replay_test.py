@@ -59,7 +59,7 @@ static void feed(int context,int button,int held,unsigned long now){
 source=re.sub(r'^#include .*$', '',(R/'apps-ipod/input/agents_remote.c').read_text(),flags=re.M)
 post=r'''
 int main(void){
- for(int c=REMOTE_OTHER;c<=REMOTE_COVERS;c++)for(unsigned int i=0;i<sizeof(cases)/sizeof(cases[0]);i++){
+ for(int c=REMOTE_OTHER;c<=REMOTE_ALBUM_LIST;c++)for(unsigned int i=0;i<sizeof(cases)/sizeof(cases[0]);i++){
   struct scenario sc=cases[i];s=(struct agents_remote_state){0};singles=doubles=triples=0;
   unsigned int next=0;bool down=false;
   for(unsigned long tick=sc.events[0].tick;tick<=sc.events[sc.n-1].tick+21;tick++){

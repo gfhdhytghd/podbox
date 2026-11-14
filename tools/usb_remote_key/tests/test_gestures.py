@@ -73,54 +73,33 @@ class CapturedGestures(unittest.TestCase):
         self.assertEqual(cursor, len(actual))
         self.assertGreater(merged, 0)
 
-    def test_all_menu_taps_and_five_one_second_holds(self):
-        # The instructed tap/double/one-second-hold blocks precede t=55s.
-        menu = [g for g in groups() if g[0][0] < 55 and g[0][2] == MENU_FRAME]
-        taps = [g for g in groups() if g[0][2] == MENU_FRAME and len(g) <= 3]
-        holds = [g for g in menu if len(g) > 3]
-        self.assertEqual(len(taps), 16)
-        self.assertEqual(len(holds), 5)
-        self.assertEqual([len(g)-1 for g in holds], [7, 9, 10, 8, 8])
-        for group in taps:
-            with self.subTest(first_us=group[0][1]):
-                self.assertEqual([(key, down) for key, down, t in replay(group)],
-                                 [(k.MENU, True), (k.MENU, False)])
-        for group in holds:
-            with self.subTest(first_us=group[0][1]):
-                result = replay(group)
-                self.assertEqual([(key, down) for key, down, t in result],
-                                 [(k.SELECT, True), (k.SELECT, False)])
-                self.assertEqual(result[0][2], group[3][0],
-                                 "Select must arrive on the third decoded repeat")
-        # Continuous replay also covers adjacent full-frame doubles and timeout.
-        events = [e for e in decoded_raw() if e[0] < 55]
-        keys = [key for key, down, t in replay(events) if down]
-        self.assertEqual(keys, [k.MENU]*14 + [k.SELECT]*5)
+    def assert_menu_stream(self, group, as_menu=False):
+        events=replay(group,as_menu)
+        self.assertEqual(events[0],(k.MENU,True,group[0][0]))
+        self.assertEqual(events[-1],(k.MENU,False,group[-1][0]+.151))
+        self.assertTrue(all(key==k.MENU for key,down,t in events))
+        self.assertEqual(sum(down for key,down,t in events),len(group))
+        self.assertEqual(sum(not down for key,down,t in events),1)
 
-    def test_supplemental_capture_tail(self):
-        # The late capture includes another three-repeat Menu stream, two
-        # Play streams, and two separate full Menu frames. Apply the same
-        # rule without treating the extra stream as a sixth one-second hold.
-        events = [e for e in decoded_raw() if e[0] > 180]
-        result = replay(events)
-        self.assertEqual([(key, down) for key, down, t in result],
-                         [(k.SELECT, True), (k.SELECT, False),
-                          (k.MENU, True), (k.MENU, False),
-                          (k.MENU, True), (k.MENU, False)])
+    def test_all_recorded_menu_taps_and_holds_forward_real_button(self):
+        menu=[g for g in groups() if g[0][0]<55 and g[0][2]==MENU_FRAME]
+        self.assertEqual(sum(len(g)>3 for g in menu),5)
+        for group in menu:
+            with self.subTest(first_us=group[0][1]):self.assert_menu_stream(group)
+        result=replay([e for e in decoded_raw() if e[0]<55])
+        self.assertTrue(all(key==k.MENU for key,down,t in result))
+        self.assertEqual(sum(not down for key,down,t in result),19)
 
-    def test_both_collapsed_doubles_cannot_become_select(self):
-        by_start = {g[0][1]: g for g in groups()}
-        # Menu t=23.881 and Play t=40.914, including their merged repeat.
-        for first_us, repeat_count in ((695086291, 1), (712118050, 2)):
-            group = by_start[first_us]
-            self.assertEqual(len(group)-1, repeat_count)
-            # Apply the Play timing pattern to Menu classification too. The
-            # actual bridge must continue to ignore the original Play command.
-            self.assertEqual([(key, down) for key, down, t in replay(group, as_menu=True)],
-                             [(k.MENU, True), (k.MENU, False)])
-        self.assertEqual(replay(by_start[712118050]), [])
-        play = [e for g in groups() if g[0][2] != MENU_FRAME for e in g]
-        self.assertEqual(replay(play), [])
+    def test_supplemental_capture_tail_is_menu_not_select(self):
+        for group in groups():
+            if group[0][0]>180 and group[0][2]==MENU_FRAME:self.assert_menu_stream(group)
+
+    def test_collapsed_doubles_and_foreign_play(self):
+        by_start={g[0][1]:g for g in groups()}
+        for first_us in (695086291,712118050):self.assert_menu_stream(by_start[first_us],True)
+        self.assertEqual(replay(by_start[712118050]),[])
+        play=[e for g in groups() if g[0][2]!=MENU_FRAME for e in g]
+        self.assertEqual(replay(play),[])
 
 
 if __name__ == '__main__':

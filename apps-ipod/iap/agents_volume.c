@@ -1,4 +1,4 @@
-/* Agents volume sources. GPL version 2+. */
+/* PC/Dock volume sources and UI navigation. GPL version 2+. */
 #include "config.h"
 #include "button.h"
 #include "system.h"
@@ -24,6 +24,8 @@ static bool computer_connected(unsigned long now)
 static struct {
     signed char steps[AGENTS_VOLUME_STEPS];
     unsigned int first, used;
+    int activity;
+    bool wps;
 } source;
 
 static struct {
@@ -32,8 +34,48 @@ static struct {
     signed char pending;
     unsigned long next_page, step_at;
     signed char direction;
-    bool pressing;
+    bool pressing, wps;
+    int activity;
 } volume_keys;
+
+static void pc_volume(int direction, bool frame, unsigned long now);
+
+static bool real_volume(void)
+{
+    return volume_keys.wps && volume_keys.activity == ACTIVITY_WPS &&
+           get_current_activity() == ACTIVITY_WPS;
+}
+
+/* Called with IRQs masked. A new screen never inherits an old input batch. */
+static void volume_scope(void)
+{
+    int activity = get_current_activity();
+    if (volume_keys.activity == activity) return;
+    volume_keys.activity = activity;
+    volume_keys.wps = false;
+    volume_keys.pending = 0;
+    volume_keys.pressing = false;
+    source.first = source.used = 0;
+    volume_keys.volume = device.mute ? 0 : iap_volume_to_byte(global_status.volume);
+    volume_keys.mute = device.mute;
+}
+
+void iap_volume_context(bool wps)
+{
+    button_usb_remote_volume_handler(pc_volume);
+    int level = disable_irq_save();
+    volume_scope();
+    if (volume_keys.wps != wps)
+    {
+        volume_keys.wps = wps;
+        volume_keys.pending = 0;
+        volume_keys.pressing = false;
+        source.first = source.used = 0;
+        volume_keys.volume = device.mute ? 0 : iap_volume_to_byte(global_status.volume);
+        volume_keys.mute = device.mute;
+    }
+    restore_irq(level);
+}
 
 /* a: direction in bit 0, PC in bit 1; b: used/fallback/ignored. */
 static void source_log(int direction, bool pc, unsigned int decision,
@@ -60,17 +102,23 @@ static int volume_page(int direction, bool pc, unsigned long now)
 static void pc_volume(int direction, bool frame, unsigned long now)
 {
     (void)frame;
-    if (get_current_activity() != ACTIVITY_AGENTS || !computer_connected(now))
+    volume_scope();
+    if (remote_input_active || !computer_connected(now))
     {
         source_log(direction, true, 3, now);
         return;
     }
-    if (!volume_keys.enabled || volume_keys.host_keys)
+    if (get_current_activity() == ACTIVITY_AGENTS && volume_keys.host_keys)
     {
         /* Usage/detail are handled on the computer, never by iPod page keys. */
         source_log(direction, true, 5, now);
         return;
     }
+    bool wps = real_volume();
+    if (source.used && (source.activity != get_current_activity() || source.wps != wps))
+        source.first = source.used = 0;
+    source.activity = get_current_activity();
+    source.wps = wps;
     if (source.used == AGENTS_VOLUME_STEPS)
     {
         remote_log_event(REMOTE_LOG_LOST, now, 1, 0, NULL, 0);
@@ -111,10 +159,9 @@ bool iap_agents_volume(unsigned char requested, bool mute)
 {
     int level = disable_irq_save();
     unsigned long now = current_tick;
-    bool agents = get_current_activity() == ACTIVITY_AGENTS;
-    bool active = agents && volume_keys.enabled;
-    bool connected = agents && computer_connected(now);
-    /* Outside Agents, preserve the diagnostic shadow and real audio setter. */
+    volume_scope();
+    bool active = !real_volume();
+    bool connected = computer_connected(now);
     if (!active && !connected && !remote_input_active && !remote_log_enabled())
     {
         restore_irq(level);
@@ -138,7 +185,7 @@ bool iap_agents_volume(unsigned char requested, bool mute)
         return true;
     }
 
-    /* FU13 Dock behavior when neither computer signal is present. */
+    /* FU13 Dock navigation when neither computer signal is present. */
     char decision = 'S';
     if (mute)
     {
@@ -166,17 +213,18 @@ bool iap_agents_volume(unsigned char requested, bool mute)
         volume_keys.direction = direction;
         volume_keys.step_at = now;
     }
-    if (!active) volume_keys.pending = 0;
+    if (!active || remote_input_active) volume_keys.pending = 0;
+    else if (volume_keys.pending) button_queue_try_post(BUTTON_NONE, 0);
     remote_volume_log(now, previous, requested, direction, decision);
     restore_irq(level);
-    return active;
+    return active || remote_input_active;
 }
 
 bool iap_agents_volume_get(unsigned char *volume, bool *mute)
 {
     int level = disable_irq_save();
-    bool active = volume_keys.enabled &&
-                  get_current_activity() == ACTIVITY_AGENTS;
+    volume_scope();
+    bool active = !real_volume();
     if (active)
     {
         *volume = volume_keys.volume;
@@ -190,15 +238,18 @@ int iap_agents_volume_take(void)
 {
     int button = BUTTON_NONE;
     int level = disable_irq_save();
-    bool agents = get_current_activity() == ACTIVITY_AGENTS;
-    bool connected = agents && computer_connected(current_tick);
+    volume_scope();
+    bool connected = computer_connected(current_tick);
+    if (remote_input_active) { source.used = 0; volume_keys.pending = 0; }
+    if (source.used && (!connected || source.activity != get_current_activity() ||
+                        source.wps != real_volume())) source.first = source.used = 0;
     if (connected)
     {
         /* Drop pre-connection Dock input even if a PC report is ready. */
         volume_keys.pending = 0;
         volume_keys.pressing = false;
     }
-    if (agents && source.used)
+    if (source.used)
     {
         int direction = source.steps[source.first];
         source.first = (source.first + 1) % AGENTS_VOLUME_STEPS;
@@ -207,7 +258,7 @@ int iap_agents_volume_take(void)
         restore_irq(level);
         return button;
     }
-    if (agents && !connected && volume_keys.enabled && volume_keys.pending)
+    if (!connected && !real_volume() && volume_keys.pending)
     {
         button = volume_page(volume_keys.pending, false, current_tick);
         remote_volume_log(current_tick, volume_keys.volume, volume_keys.volume,
@@ -217,4 +268,20 @@ int iap_agents_volume_take(void)
     }
     restore_irq(level);
     return button;
+}
+
+/* Synthetic reports carry REL|REPEAT. Real Dock button releases do not step. */
+int iap_volume_filter(int button)
+{
+    int key = button & BUTTON_REMOTE;
+    if (button & (SYS_EVENT | BUTTON_MULTIMEDIA | BUTTON_REDRAW) ||
+        (key != BUTTON_RC_VOL_UP && key != BUTTON_RC_VOL_DOWN)) return button;
+    int level = disable_irq_save();
+    bool report = (button & (BUTTON_REL | BUTTON_REPEAT)) == (BUTTON_REL | BUTTON_REPEAT);
+    bool ignore = remote_input_active ||
+                  (!report && (computer_connected(current_tick) || (button & BUTTON_REL)));
+    bool wps = real_volume();
+    restore_irq(level);
+    if (ignore) return BUTTON_NONE;
+    return wps ? key : key | BUTTON_REL | BUTTON_REPEAT;
 }

@@ -2623,17 +2623,6 @@ static int agents_run(void)
             if (action == ACTION_LISTTREE_PGUP ||
                 action == ACTION_LISTTREE_PGDOWN)
             {
-#ifdef IPOD_ACCESSORY_PROTOCOL
-                int raw_button;
-                get_action_statuscode(&raw_button);
-                if (view == VIEW_USAGE &&
-                    (raw_button & (BUTTON_RC_VOL_UP | BUTTON_RC_VOL_DOWN)))
-                {
-                    default_event_handler(action == ACTION_LISTTREE_PGUP ?
-                        BUTTON_MULTIMEDIA_VOLUME_UP : BUTTON_MULTIMEDIA_VOLUME_DOWN);
-                }
-                else
-#endif
                 {
                     int direction = action == ACTION_LISTTREE_PGUP ? -1 : 1;
                     if (view == VIEW_USAGE)
