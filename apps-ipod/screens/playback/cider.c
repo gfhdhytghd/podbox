@@ -63,13 +63,22 @@ static unsigned int ncommands, art_revision;
 static unsigned char disk_data[CS_REC_MAX] CACHEALIGN_ATTR;
 static long disk_stack[DEFAULT_STACK_SIZE * 6 / sizeof(long)];
 static struct event_queue disk_queue;
+static volatile uint32_t status_word;
 _Static_assert(sizeof cache + sizeof transfer + sizeof disk_data +
                sizeof disk_stack + sizeof state + sizeof commands +
                sizeof store + sizeof list_page + sizeof fills +
                sizeof offers + sizeof acks + sizeof missed +
-               sizeof list_items + sizeof modes +
+               sizeof list_items + sizeof modes + sizeof status_word +
                (120 + 112 + 56 + 36) * 1024 < 1152 * 1024,
                "Cider resident, WPS, pages, browser and carousel below 1152 KiB");
+
+static void publish_status(void)
+{
+    status_word = (state.available ? 1u : 0) | (state.muted ? 2u : 0) |
+        (state.loading ? 4u : 0) | (state.rate ? 8u : 0) |
+        ((unsigned)state.volume << 4) | ((unsigned)state.shuffle << 11) |
+        ((unsigned)state.repeat << 12);
+}
 
 static void pin_apply(void);
 static void store_text(const unsigned char *d, unsigned int n);
@@ -107,6 +116,8 @@ static void reset(void)
     mutex_lock(&cider_mutex);
     state.position = cider_position(&state,current_tick,HZ);
     state.available = false;
+    state.loading = false;
+    publish_status();
     if (play_request) play_reply = -1;
     cider_library_reset();
     state.generation = 0;
@@ -263,6 +274,7 @@ static bool receive(const struct podlink_message *m)
             cider_log("CIDER reply tick=%ld %.*s", current_tick,
                        (int)m->length, (const char *)m->data);
     }
+    publish_status();
     mutex_unlock(&cider_mutex);
     return true;
 }
@@ -275,7 +287,7 @@ static unsigned int next(char *record, unsigned int size)
     {
         if (TIME_AFTER(current_tick, hello_at + 2 * HZ))
         {
-            n = snprintf(record, size, "ci\t1\t%d\tcn18,neighbors,warm,play-ack,localstore,modes5", CIDER_CREDIT);
+            n = snprintf(record, size, "ci\t1\t%d\tcn18,neighbors,warm,play-ack,localstore,modes5,loading", CIDER_CREDIT);
             hello_at = current_tick;
         }
     }
@@ -804,15 +816,15 @@ void cider_snapshot(struct cider_state *out)
 }
 void cider_status(struct cider_status *out)
 {
-    mutex_lock(&cider_mutex);
-    out->available = state.available && podlink_host_connected() &&
+    uint32_t bits = status_word;
+    out->available = (bits & 1) && podlink_host_connected() &&
         (unsigned long)current_tick - state.received < 30 * HZ;
-    out->muted = state.muted;
-    out->rate = state.rate;
-    out->volume = state.volume;
-    out->shuffle = state.shuffle;
-    out->repeat = state.repeat;
-    mutex_unlock(&cider_mutex);
+    out->muted = (bits & 2) != 0;
+    out->loading = out->available && (bits & 4);
+    out->rate = (bits & 8) ? 1000 : 0;
+    out->volume = (bits >> 4) & 127;
+    out->shuffle = (bits >> 11) & 1;
+    out->repeat = (bits >> 12) & 7;
 }
 /* Queue one control; the request id, or 0 when nothing was queued. */
 static uint32_t queue_control(const char *command, int value)
@@ -829,6 +841,7 @@ void cider_control(const char *command, int value)
     if (!strcmp(command, "volume-step"))
         state.volume = MAX(0, MIN(100, state.volume + value));
     queue_control(command, value);
+    publish_status();
     mutex_unlock(&cider_mutex);
 }
 /* Cider's own shuffle (0/1) or repeat (0 none, 1 one, 2 all), or the value

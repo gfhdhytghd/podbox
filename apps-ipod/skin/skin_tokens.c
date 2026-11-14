@@ -2042,6 +2042,9 @@ const char *get_token_value(struct gui_wps *gwps,
             goto gtv_ret_numeric_tag_info;
         }
 
+        case SKIN_TOKEN_CIDER_LOADING:
+            return skin_cider_loading() ? "loading" : NULL;
+
         case SKIN_TOKEN_PLAYBACK_STATUS:
         {
             int status = current_playmode();

@@ -208,6 +208,7 @@ struct skin_viewport {
     bool is_infovp;
     bool output_to_backdrop_buffer;
     bool fgbg_changed;
+    bool has_loading_indicator; /* isolated %pZ transport slot */
     bool has_busy_tag;   /* holds %lh, %lb or %lw; skin_request_busy_redraw() */
     bool has_scroll_textbox; /* holds a scrolling %wt */
     /* Something outside a pass can draw over its %xd images -- a later
@@ -499,6 +500,8 @@ struct wps_data
 
 
     bool peak_meter_enabled;
+    bool loading_indicator, loading_drawn;
+    unsigned char loading_frame;
     bool spectrum_enabled;
     /* A scrolling %wt is part way through its text, and the WPS owes it a
      * SKIN_REFRESH_SCROLL at textbox_due. */

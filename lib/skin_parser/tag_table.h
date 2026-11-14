@@ -42,6 +42,7 @@ extern "C"
 #define SKIN_REFRESH_STATUSBAR       (1u<<(SKIN_REFRESH_SHIFT+5))  /* refresh statusbar */
 #define SKIN_RTC_REFRESH             (1u<<(SKIN_REFRESH_SHIFT+6))  /* refresh rtc, convert at parse time */
 #define SKIN_REFRESH_SPECTRUM        (1u<<(SKIN_REFRESH_SHIFT+7))  /* line contains spectrum bars */
+#define SKIN_REFRESH_LOADING         (1u<<(SKIN_REFRESH_SHIFT+8))
 #define SKIN_REFRESH_ALL             (0xffffu<<SKIN_REFRESH_SHIFT)   /* to refresh all line types */
 
 /* to refresh only those lines that change over time */
@@ -190,6 +191,7 @@ enum skin_token_type {
     /* Mode */
     SKIN_TOKEN_REPEAT_MODE,
     SKIN_TOKEN_PLAYBACK_STATUS,
+    SKIN_TOKEN_CIDER_LOADING,
     /* Progressbar */
     SKIN_TOKEN_PROGRESSBAR,
     SKIN_TOKEN_PLAYER_PROGRESSBAR,

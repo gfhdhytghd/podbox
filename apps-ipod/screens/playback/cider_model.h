@@ -11,7 +11,7 @@ struct cider_state
 {
     uint32_t generation, seq, host_ms, duration, position, received;
     uint32_t library_generation;
-    bool available, have, muted;
+    bool available, have, muted, loading;
     int rate, volume, shuffle, repeat; /* repeat in Rockbox numbering */
     uint32_t bg;
     char previous_art[65], next_art[65];

@@ -400,6 +400,47 @@ class Window:
     def tier(self,velocity):return 'XS' if abs(velocity)>=3 else 'M'
 
 
+class Loading:
+    """Inferred transport state; all access is under Bridge.lock."""
+    COMMANDS={'play-item','native-play','native-context','next','previous',
+              'play-collection','queue-jump','seek'}
+    def __init__(self):
+        self.value=False;self.pending=None;self.last=None;self.advanced=0;self.epoch=0
+    def begin(self,command,value,state,now):
+        if command not in self.COMMANDS:return False
+        target=max(0,float(value)) if command=='seek' else None
+        if target is not None and not math.isfinite(target):raise ValueError('Invalid seek target')
+        self.epoch+=1
+        self.pending=dict(id=(state or {}).get('id',''),until=now+8,
+                          target=target,point=None)
+        self.value=True
+        return True
+    def cancel(self):
+        self.pending=None;self.value=False;self.last=None;self.epoch+=1
+    def sample(self,state,now):
+        track,pos,rate=state['id'],state['position'],state['rate']
+        old=self.last
+        moved=old is not None and old[0]==track and pos>old[1]
+        if old is None or old[0]!=track or not old[2] or not rate or pos!=old[1]:
+            self.advanced=now
+        stall=bool(rate and now-self.advanced>=1)
+        p=self.pending
+        if p:
+            point=p['point']
+            eligible=(track!=p['id'] if p['target'] is None else abs(pos-p['target'])<=2000)
+            if point is not None and point[0]==track and pos>point[1] and moved:
+                self.pending=None
+            elif now>=p['until']:
+                self.pending=None
+                # Timeout clears this frame; fresh samples can detect a later stall.
+                stall=False;self.advanced=now
+            elif eligible:
+                if point is None or point[0]!=track or pos<point[1]:p['point']=(track,pos)
+        self.last=(track,pos,rate)
+        self.value=bool(self.pending or stall)
+        return self.value
+
+
 class Bridge:
     def __init__(self,client=None,cache=None,fetch=None,volume=None):
         self.client=client or Client(os.environ.get('CIDER_API_URL','http://127.0.0.1:10767'),os.environ.get('CIDER_API_TOKEN'))
@@ -415,7 +456,7 @@ class Bridge:
         self.art_locks=[threading.RLock() for _ in range(32)]
         self.prefetch=queue.Queue(10)
         self.warm_window=set();self.warm_queue=set();self.warm_jobs={};self.neighbors=None
-        self.capabilities=frozenset()
+        self.capabilities=frozenset();self.loading=Loading()
         self.ledger=Ledger(self.cache);self.planner=Planner(self.cache,self.ledger);self.offer_pairs=set()
     def start(self):
         for target,name in [(self._prefetch_worker,'cider-prefetch-'+str(i)) for i in range(4)]+[(self._poll,'cider-state'),(self._work,'cider-art'),(self._control,'cider-control'),(self._index,'cider-index'),(self._pages,'cider-pages'),(self._neighbors,'cider-neighbors')]:
@@ -440,7 +481,7 @@ class Bridge:
                     if len(fields) not in (3,4) or fields[1]!='1':raise ValueError('Cider protocol')
                     advertised=fields[3].split(',') if len(fields)==4 else []
                     if len(advertised)>8 or any(not re.fullmatch('[a-z0-9-]{1,24}',c) for c in advertised):raise ValueError('Invalid Cider capabilities')
-                    self.capabilities=frozenset(advertised)&{'cn18','neighbors','warm','play-ack','localstore','modes5'}
+                    self.capabilities=frozenset(advertised)&{'cn18','neighbors','warm','play-ack','localstore','modes5','loading'}
                     window=int(fields[2]);self.volume_delta=0;self.generation=secrets.randbelow(0xfffffffe)+1;self.scheduler.reset(self.generation,window)
                     self.warm_window.clear();self.warm_queue.clear();self.warm_jobs.clear();self.neighbors=None
                     self.offer_pairs.clear();self.ledger.pending=None;self.ledger.synced=False;self.planner.reset()
@@ -544,10 +585,19 @@ class Bridge:
         if self.available and self.state:
             s=self.state;self.state_seq+=1
             fields=['CN',self.generation,self.state_seq,int(now*1000)&0xffffffff,s['duration'],s['position'],s['rate'],s['volume'],s['shuffle'],s['repeat'],s['id'],s['art'],s['bg'],s['title'],s['artist'],s['album']]
-            if 'cn18' in self.capabilities:fields.extend([int(s.get('muted',False)),s.get('composer','')])
-            if 'cn18' in self.capabilities and 'modes5' in self.capabilities:fields.append(s.get('repeat5',0))
+            if 'cn18' in self.capabilities or 'loading' in self.capabilities:fields.extend([int(s.get('muted',False)),s.get('composer','')])
+            if ('cn18' in self.capabilities and 'modes5' in self.capabilities) or 'loading' in self.capabilities:fields.append(s.get('repeat5',0))
+            if 'loading' in self.capabilities:fields.append(int(self.loading.value))
             self.scheduler.push(1,2,'\t'.join(clean(v) for v in fields).encode())
         self.last_state=now;self.state_dirty=False
+    def _loading_begin(self,command,value):
+        before=self.loading.value
+        pending=self.loading.begin(command,value,self.state,time.monotonic())
+        if before!=self.loading.value and 'loading' in self.capabilities:self._state(True)
+        return pending
+    def _loading_cancel(self):
+        before=self.loading.value;self.loading.cancel()
+        if before and 'loading' in self.capabilities:self._state(True)
     def _poll(self):
         next_poll=0;published=None;anchor=0
         while not self.stop.is_set():
@@ -555,10 +605,14 @@ class Bridge:
             if self.wake.is_set():self.wake.clear();next_poll=0
             if now<next_poll:self.stop.wait(min(.2,next_poll-now));continue
             try:
+                with self.lock:loading_epoch=self.loading.epoch
                 state=self.client.snapshot()
                 try:state['volume'],state['muted']=self.volume.read()
                 except OSError:state['volume'],state['muted']=0,False
                 with self.lock:
+                    loading_before=self.loading.value
+                    if loading_epoch==self.loading.epoch:self.loading.sample(state,time.monotonic())
+                    transition=loading_before!=self.loading.value
                     changed=not self.available or published is None or any(state[k]!=published[k] for k in state if k not in ('position','template'))
                     predicted=published['position']+(now-anchor)*published['rate'] if published else 0
                     changed |= abs(state['position']-predicted)>2000 or now-self.last_state>=15
@@ -566,15 +620,18 @@ class Bridge:
                     if state['template']:
                         self.templates[state['art']]=state['template']
                         if len(self.templates)>128:self.templates.pop(next(iter(self.templates)))
-                    if changed:published=dict(state);anchor=now;self._state()
+                    if changed or transition:published=dict(state);anchor=now;self._state(transition)
                 target=self.client.ab_tick(state)
                 if target is not None:
-                    try:self.client.control('seek',target);self.wake.set()
+                    try:
+                        with self.lock:self._loading_begin('seek',target)
+                        self.client.control('seek',target);self.wake.set()
                     except (OSError,ValueError,TimeoutError):pass
-                self.failures=0;next_poll=now+(.25 if self.client.ab_active else 1)
+                self.failures=0;next_poll=now+.25
             except (OSError,ValueError,TimeoutError) as error:
                 with self.lock:
-                    if self.available or self.reason=='Starting':self.available=False;self.reason=clean(str(error),80) or 'Cider unavailable';self._state()
+                    if self.available or self.reason=='Starting':
+                        self.available=False;self.loading.cancel();self.reason=clean(str(error),80) or 'Cider unavailable';self._state(True)
                 self.failures=min(8,self.failures+1);next_poll=now+min(30,2**(self.failures-1))
     def _index(self):
         while not self.stop.is_set():
@@ -606,9 +663,12 @@ class Bridge:
             except queue.Empty:continue
             with self.lock:
                 if generation!=self.generation or not self.opened:continue
+            loading_epoch=None
             try:
                 if not self.available:raise OSError('Cider unavailable')
                 log.info('control request gen=%d req=%d command=%s',generation,req,command)
+                with self.lock:
+                    if self._loading_begin(command,value):loading_epoch=self.loading.epoch
                 if command=='native-play':
                     self.fill_cancel.set();self.fill_cancel=cancel=threading.Event()
                     result=self.library.play(value)
@@ -632,6 +692,8 @@ class Bridge:
                 else:self.client.control(command,value)
                 ok=True;text='OK';self.wake.set()
             except (OSError,ValueError,TimeoutError) as error:
+                with self.lock:
+                    if loading_epoch==self.loading.epoch:self._loading_cancel()
                 ok=False;text='Control failed; not retried'
                 log.warning('control failed gen=%d req=%d command=%s reason=%s',generation,req,command,clean(error,120))
             log.info('control result gen=%d req=%d ok=%s',generation,req,ok)

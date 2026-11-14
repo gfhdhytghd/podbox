@@ -11,6 +11,7 @@
  ****************************************************************************/
 #include "config.h"
 #include "screens/playback/cider.h"
+#include "screens/playback/cider_spinner.h"
 #include "screens/playback/cider_wps.h"
 #include <stdio.h>
 #include "string-extra.h"
@@ -1107,6 +1108,11 @@ int skin_wait_for_action(enum skinnable_screens skin, int context, int timeout)
     bool pm=false;
     bool sb=false;
     bool tb=false;
+    /* Reuse this action loop's tick; no worker and no independent timer. */
+    struct wps_data *loading_data = skin_get_gwps(skin, SCREEN_MAIN)->data;
+    bool loading_tick = skin == WPS &&
+        loading_data->loading_indicator &&
+        (cider_active() || loading_data->loading_drawn);
     FOR_NB_SCREENS(i)
     {
        struct wps_data *data = skin_get_gwps(skin, i)->data;
@@ -1126,16 +1132,20 @@ int skin_wait_for_action(enum skinnable_screens skin, int context, int timeout)
     /* None of the fast refreshes below is visible with the LCD asleep, and
      * the spectrum's filters alone cost a fifth of an unboosted 5G. */
     if (!lcd_active())
-        pm = sb = tb = recolouring = pending = false;
+        pm = sb = tb = recolouring = pending = loading_tick = false;
 
-    if (pm || sb || tb || recolouring || pending) {
+    if (pm || sb || tb || recolouring || pending || loading_tick) {
         long next_pm_refresh = current_tick;
         long next_sb_refresh = current_tick;
         long next_recolour_refresh = current_tick;
         long next_big_refresh = current_tick + timeout;
         button = BUTTON_NONE;
         while (TIME_BEFORE(current_tick, next_big_refresh)) {
-            button = get_action(context,TIMEOUT_NOBLOCK);
+            int wait = TIMEOUT_NOBLOCK;
+            if (loading_tick && !(pm || sb || tb || recolouring || pending))
+                wait = MIN((long)cider_spinner_wait(current_tick, HZ),
+                           next_big_refresh - current_tick);
+            button = get_action(context, wait);
             if (button != ACTION_NONE) {
                 break;
             }
@@ -1143,8 +1153,20 @@ int skin_wait_for_action(enum skinnable_screens skin, int context, int timeout)
                 peak_meter_peek();
             if (sb)
                 spectrum_meter_peek();
-            sleep(0);   /* Sleep until end of current tick. */
+            if (wait == TIMEOUT_NOBLOCK)
+                sleep(0);   /* Existing meter path: sleep to the next tick. */
 
+            if (loading_tick && !skin_flush_inhibited())
+            {
+                bool visible = skin_cider_loading();
+                unsigned frame = cider_spinner_frame(current_tick, HZ);
+                if (visible != loading_data->loading_drawn ||
+                    (visible && frame != loading_data->loading_frame))
+                {
+                    skin_update(skin, SCREEN_MAIN, SKIN_REFRESH_LOADING);
+                    skin_flush_dirty();
+                }
+            }
             if (pm && TIME_AFTER(current_tick, next_pm_refresh)) {
                 FOR_NB_SCREENS(i)
                 {

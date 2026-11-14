@@ -608,3 +608,45 @@ Player output order is queued controls (including the adjacent
 credit, visible/pinned artwork requests, warm hints, then store records
 (`ls`, `lv`, `la`, `lw`). Idle fills use artwork priority 4; visible/pinned
 requests use priority 3. A queued control prevents an idle fill from starting.
+
+## FU28: inferred loading and the transport slot
+
+`loading` in `ci` opts into a **20-field CN**. Fields 1..19 keep the FU27
+meaning (including muted/composer/native repeat); field 20 is `loading`, `0|1`.
+Advertising `loading` alone implies that complete prefix, so field counts remain
+unambiguous. Without it, the old 16/18/19-field negotiation is unchanged.
+Firmware accepts all four counts and clears loading on an older CN, unavailable
+CA, or session reset. New firmware advertises
+`cn18,neighbors,warm,play-ack,localstore,modes5,loading`.
+
+The host polls at 250 ms. It infers loading; Cider provides no buffering flag.
+Before a track-changing command's RPC it publishes loading immediately. It
+waits for an ID different from the pre-command ID, then forward progress within
+that new ID. Seek waits for a sample within 2 s of the requested point, then
+forward progress. Pending operations expire after 8 s. Independently, playing
+with no position change for 1 s is a stall. Progress, pause or stop clears a
+stall. A failed pending command cancels its inference. Each loading transition
+forces a state publication past the usual 250 ms throttle. A sample started
+before a command cannot complete that command's inference. This does not alter
+play-ack's separate selected-song check.
+
+The native Scrim WPS disables the built-in status bar (`%wd`). Its `%mp`
+conditionals select 24x24 font glyphs, rather than an image strip. FU28 splits
+the original `(2,2,76,24)` icon viewport into a transport viewport `(2,2,24,24)`
+and the unchanged adjacent icons at `(26,2,52,24)`. In the transport viewport,
+`%?pZ<%pZ|normal-glyph-conditionals>` replaces only the transport glyph while
+Cider is active, available and loading. FF/RW keep priority. The false branch
+preserves both play-pause preference choices and local playback.
+
+`%pZ` marks an isolated slot. Its loading-only refresh traverses only marked,
+visible viewports, clears the line to the existing backdrop, draws the spinner
+after the clear, and flushes only that viewport. The existing WPS action loop
+uses timed waits to the next 125 ms frame boundary (12/13 ticks at HZ=100).
+It draws eight clockwise positions with four visible dots at 100/75/50/25%
+opacity, quantized to the LCD's 4-bit alpha (15/11/8/4). Boxes under 7 px use
+four corners. No worker, pixel cache, or allocation is added. A theme using an
+image strip can use the same isolated viewport and `%?pZ<%pZ|%xd(...)>`;
+loading is overlaid procedurally and consumes no image-strip frame. Themes
+without `%pZ` continue their original display. Hidden/auto-hidden slots and the
+volume overlay retain their existing visibility. The compact transport status
+is published as one aligned word; UI readers take no mutex.

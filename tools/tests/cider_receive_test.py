@@ -63,5 +63,5 @@ const char*offer="CO\t7\tM\taaaa";message.data=(const unsigned char*)offer;messa
 const char*feat="CF\t7\tlocalstore";message.data=(const unsigned char*)feat;message.length=strlen(feat);assert(receive(&message)&&store_texts==2);feat="CQ\t7\t0";message.data=(const unsigned char*)feat;message.length=strlen(feat);assert(receive(&message)&&store_texts==3);
 puts("Production resident receiver: legacy raw passthrough, state negotiation, whole-cover CRC/cache, exact credit refund, stale-generation drop PASS");}
 '''
-(O/'receive.c').write_text(pre+fn('u32')+fn('receive')+post)
+(O/'receive.c').write_text(pre+'\nstatic volatile uint32_t status_word;\n'+fn('publish_status')+fn('u32')+fn('receive')+post)
 subprocess.run(['cc','-std=gnu11','-Wall','-Wextra','-Werror','-fsanitize=address,undefined','-fno-pie','-no-pie','-I'+str(R/'apps-ipod'),'-I'+str(R/'firmware/export'),str(O/'receive.c'),str(R/'apps-ipod/screens/playback/cider_model.c'),str(R/'firmware/usbstack/podlink_wire.c'),'-o',str(O/'receive')],check=True);subprocess.run([str(O/'receive')],check=True)

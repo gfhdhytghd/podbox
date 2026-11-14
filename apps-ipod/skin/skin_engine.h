@@ -78,6 +78,8 @@ unsigned int skin_flush_usec(void);
 void skin_note_render(unsigned int usec);
 void skin_note_flush(unsigned int usec);
 
+bool skin_cider_loading(void);
+
 bool skin_has_sbs(struct gui_wps *gwps);
 
 

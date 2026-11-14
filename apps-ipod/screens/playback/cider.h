@@ -9,7 +9,7 @@ bool cider_available(void);
 bool cider_active(void);
 void cider_snapshot(struct cider_state *state);
 /* Small transport state for callers on tight stacks (UI, skin, status). */
-struct cider_status { bool available, muted; int rate, volume, shuffle, repeat; };
+struct cider_status { bool available, muted, loading; int rate, volume, shuffle, repeat; };
 void cider_status(struct cider_status *status);
 void cider_control(const char *command, int value);
 int cider_mode_get(int mode);
@@ -42,7 +42,7 @@ static inline bool cider_active(void) { return false; }
 static inline bool cider_available(void) { return false; }
 static inline void cider_snapshot(struct cider_state *s)
 { *s = (struct cider_state){0}; }
-struct cider_status { bool available, muted; int rate, volume, shuffle, repeat; };
+struct cider_status { bool available, muted, loading; int rate, volume, shuffle, repeat; };
 static inline void cider_status(struct cider_status *s)
 { *s = (struct cider_status){0}; }
 static inline void cider_local_play(void) { }

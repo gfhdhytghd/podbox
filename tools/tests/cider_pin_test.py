@@ -122,7 +122,7 @@ int main(void){
  transfer.active=false;noffers=0;want_ready=false;settle_tick(current_tick+5*HZ);background_start();assert(want_ready);
  /* FU27: both capability sets, then controls ahead of store traffic. */
  state.generation=0;hello_at=current_tick-3*HZ;
- assert(next(out,sizeof out)&&!strcmp(out,"ci\t1\t131072\tcn18,neighbors,warm,play-ack,localstore,modes5"));
+ assert(next(out,sizeof out)&&!strcmp(out,"ci\t1\t131072\tcn18,neighbors,warm,play-ack,localstore,modes5,loading"));
  state.generation=7;pin_on=false;art_used_at=current_tick;noffers=0;
  ncommands=3;
  strcpy(commands[0],"cc\t7\t41\tnative-context\t2|album/a");

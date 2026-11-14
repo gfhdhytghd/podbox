@@ -40,14 +40,14 @@ static bool number(const char *text, uint32_t *out)
 int cider_state_apply(struct cider_state *s, const void *data,
                       unsigned int length, uint32_t tick)
 {
-    char buf[1024], *f[19];
+    char buf[1024], *f[20];
     if (length >= sizeof buf || memchr(data, 0, length)) return 0;
     memcpy(buf, data, length); buf[length] = 0;
     int n = 1; f[0] = buf;
     for (unsigned int i = 0; i < length; i++)
         if (buf[i] == '\t')
         {
-            if (n == 19) return 0;
+            if (n == 20) return 0;
             buf[i] = 0; f[n++] = &buf[i + 1];
         }
     uint32_t gen;
@@ -61,6 +61,7 @@ int cider_state_apply(struct cider_state *s, const void *data,
             s->generation = gen;
         }
         s->available = f[2][0] == '1';
+        if (!s->available || !s->have) s->loading = false;
         copy(s->reason, f[3], sizeof s->reason);
         s->received = tick;
         return 1;
@@ -88,7 +89,7 @@ int cider_state_apply(struct cider_state *s, const void *data,
         copy(s->next_art, strcmp(f[4], "-") ? f[4] : "", sizeof s->next_art);
         return 1;
     }
-    if ((n != 16 && n != 18 && n != 19) || strcmp(f[0], "CN") ||
+    if ((n != 16 && n != 18 && n != 19 && n != 20) || strcmp(f[0], "CN") ||
         gen != s->generation)
         return 0;
     uint32_t values[8];
@@ -102,7 +103,9 @@ int cider_state_apply(struct cider_state *s, const void *data,
     /* A host that knows Rockbox's repeat modes adds them as field 19; an older
      * one sends Cider's own 0 none, 1 one, 2 all. */
     uint32_t repeat = values[7] == 1 ? 2 : values[7] == 2 ? 1 : 0;
-    if (n == 19 && (!number(f[18], &repeat) || repeat > 4)) return 0;
+    if (n >= 19 && (!number(f[18], &repeat) || repeat > 4)) return 0;
+    if (n == 20 && strcmp(f[19], "0") && strcmp(f[19], "1")) return 0;
+    s->loading = n == 20 && f[19][0] == '1';
     s->seq = values[0]; s->host_ms = values[1];
     s->duration = values[2]; s->position = values[3];
     s->rate = values[4]; s->volume = values[5];

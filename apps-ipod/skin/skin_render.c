@@ -39,6 +39,8 @@
 
 #include "config.h"
 #include "screens/playback/cider.h"
+#include "screens/playback/cider_spinner.h"
+#include "audio/play_status.h"
 #include "screens/playback/cider_wps.h"
 #include "core_alloc.h"
 #include "kernel.h"
@@ -106,6 +108,7 @@ struct skin_draw_info {
     /* A %Ls on the line: the list's owner draws after write_line(), for the
      * same reason as pending_aa */
     bool pending_status;
+    bool pending_loading;
     /* Anything in this viewport actually reached the framebuffer, so the
      * viewport's rectangle has to be flushed. See do_non_text_tags(). */
     bool drew;
@@ -147,6 +150,38 @@ static char* skin_buffer;
  * refresh, or a backdrop viewport was hidden or shown. What was drawn there
  * cannot be taken back out -- the foreground has already copied it -- so
  * skin_render() repaints everything. */
+bool skin_cider_loading(void)
+{
+    struct cider_status status;
+    cider_status(&status);
+    return cider_spinner_show(cider_active(), status.available && status.loading,
+                              current_playmode());
+}
+
+/* The dedicated viewport is exactly the replaced glyph's box. Text has
+ * already cleared it to the backdrop; blend dots only after that clear. */
+static void draw_cider_spinner(struct screen *display, int w, int h)
+{
+#if LCD_DEPTH > 1
+    struct cider_dot dots[4];
+    int n = cider_spinner_dots(w, h, cider_spinner_frame(current_tick, HZ), dots);
+    for (int i = n - 1; i >= 0; i--)
+    {
+        int d = dots[i].diameter;
+        for (int y = 0; y < d; y++)
+            for (int x = 0; x < d; x++)
+            {
+                int dx = 2*x+1-d, dy = 2*y+1-d;
+                if (dx*dx + dy*dy <= d*d)
+                    display->blendrect(dots[i].x+x, dots[i].y+y, 1, 1,
+                                      (LCD_BLEND_OPAQUE*dots[i].quarter+2)/4);
+            }
+    }
+#else
+    (void)display; (void)w; (void)h;
+#endif
+}
+
 static bool backdrop_flipped;
 /* ...and outside the WPS, that repaint owes the ground between the viewports
  * a clear, which nothing else there gives it */
@@ -506,6 +541,9 @@ do_non_text_tags(struct gui_wps *gwps, struct skin_draw_info *info,
 
     switch (token->type)
     {
+        case SKIN_TOKEN_CIDER_LOADING:
+            info->pending_loading = do_refresh && skin_cider_loading();
+            return true;
         case SKIN_TOKEN_VIEWPORT_BGCOLOUR:
         case SKIN_TOKEN_VIEWPORT_FGCOLOUR:
         {
@@ -1542,6 +1580,7 @@ bool skin_render_viewport(struct skin_element* viewport, struct gui_wps *gwps,
         info.pending_aa = NULL;
         info.pending_aa_item = NULL;
         info.pending_status = false;
+        info.pending_loading = false;
         skin_viewport->fgbg_changed = false;
         if (info.line_desc.style&STYLE_GRADIENT)
         {
@@ -1571,7 +1610,7 @@ bool skin_render_viewport(struct skin_element* viewport, struct gui_wps *gwps,
                 update_all = true;
         }
         /* only update if the line needs to be, and there is something to write */
-        if (refresh_type && (needs_update || update_all))
+        if (refresh_type && (needs_update || update_all || info.pending_loading))
         {
             if (info.force_redraw)
             {
@@ -1582,6 +1621,11 @@ bool skin_render_viewport(struct skin_element* viewport, struct gui_wps *gwps,
             write_line(display, align, info.line_number,
                     info.line_scrolls, &info.line_desc);
             info.drew = true;
+            if (skin_viewport->has_loading_indicator)
+            {
+                gwps->data->loading_drawn = info.pending_loading;
+                gwps->data->loading_frame = cider_spinner_frame(current_tick, HZ);
+            }
         }
         /* Blit deferred list album art now, after write_line()'s background
          * clear, so the cover's top row isn't wiped (see pending_aa). */
@@ -1590,6 +1634,12 @@ bool skin_render_viewport(struct skin_element* viewport, struct gui_wps *gwps,
         if (info.pending_status)
         {
             skinlist_draw_status(display, &skin_viewport->vp);
+            info.drew = true;
+        }
+        if (info.pending_loading)
+        {
+            draw_cider_spinner(display, skin_viewport->vp.width,
+                               skin_viewport->vp.height);
             info.drew = true;
         }
         if (!info.no_line_break)
@@ -1652,10 +1702,35 @@ void skin_render(struct gui_wps *gwps, unsigned refresh_mode)
     if (!skin_buffer)
         return;
 
+    if (refresh_mode == SKIN_REFRESH_LOADING)
+    {
+        for (viewport = SKINOFFSETTOPTR(skin_buffer, data->tree); viewport;
+             viewport = SKINOFFSETTOPTR(skin_buffer, viewport->next))
+        {
+            skin_viewport = SKINOFFSETTOPTR(skin_buffer, viewport->data);
+            if (!skin_viewport || !skin_viewport->has_loading_indicator ||
+                (skin_viewport->hidden_flags & (VP_NEVER_VISIBLE | VP_DRAW_HIDDEN)))
+                continue;
+            skin_backdrop_set_buffer(-1, skin_viewport);
+            skin_backdrop_show(data->backdrop_id);
+            display->set_viewport_ex(&skin_viewport->vp, VP_FLAG_VP_SET_CLEAN);
+            if (viewport->children_count &&
+                skin_render_viewport(get_child(viewport->children, 0), gwps,
+                                     skin_viewport, refresh_mode))
+                skin_mark_dirty_rect(display->screen_type,
+                    skin_viewport->vp.x, skin_viewport->vp.y,
+                    skin_viewport->vp.width, skin_viewport->vp.height);
+        }
+        skin_backdrop_set_buffer(-1, NULL);
+        skin_backdrop_show(data->backdrop_id);
+        return;
+    }
+
     /* Framebuffer is likely dirty */
     bool screen_clear_owed = false;
     if ((refresh_mode&SKIN_REFRESH_ALL) == SKIN_REFRESH_ALL)
     {
+        data->loading_drawn = false;
         /* A full refresh repaints the ground between the viewports as well as
          * the viewports themselves, so there is nothing a bounding box could
          * save here. Partial refreshes are where it pays, and they take the

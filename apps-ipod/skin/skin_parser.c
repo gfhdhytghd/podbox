@@ -2220,6 +2220,8 @@ static void skin_data_reset(struct wps_data *wps_data)
     wps_data->albumart = INVALID_OFFSET;   /* slots already released above */
 
     wps_data->peak_meter_enabled = false;
+    wps_data->loading_indicator = wps_data->loading_drawn = false;
+    wps_data->loading_frame = 0;
     wps_data->spectrum_enabled = false;
     wps_data->textbox_moving = false;
     wps_data->draws_quickscreen = false;
@@ -2486,6 +2488,7 @@ static int convert_viewport(struct wps_data *data, struct skin_element* element)
     skin_vp->hidden_flags = 0;
     skin_vp->label = PTRTOSKINOFFSET(skin_buffer, NULL);
     skin_vp->is_infovp = false;
+    skin_vp->has_loading_indicator = false;
     skin_vp->has_busy_tag = false;
     skin_vp->has_scroll_textbox = false;
     skin_vp->no_hold = false;
@@ -2774,6 +2777,10 @@ static int skin_element_callback(struct skin_element* element, void* data)
                     }
                     else
                         token->value.i = 0;
+                    break;
+                case SKIN_TOKEN_CIDER_LOADING:
+                    curr_vp->has_loading_indicator = true;
+                    wps_data->loading_indicator = true;
                     break;
                 case SKIN_TOKEN_VLED_HDD:
                 case SKIN_TOKEN_VLED_BUILDING:
