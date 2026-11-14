@@ -115,6 +115,29 @@ def _plain_block(lines, footer):
     return rows[0], options, cursor
 
 
+CUSTOM_RE = re.compile(r"(?i)^(?:type something[.…]*|other[.…]*|no,? and tell .*(?:differently|instead).*)$")
+
+
+def question_traits(q):
+    """Conservative binary classification; approvals retain every policy choice."""
+    options = q.get('all_options', q['options'])
+    custom = [n for n, label in options if CUSTOM_RE.match(CHECKBOX_RE.sub('', label).split(' — ')[0].strip())]
+    q['custom'] = custom
+    bare = [(n, CHECKBOX_RE.sub('', label).split(' — ')[0].lower().strip()) for n, label in options]
+    yes = [n for n, label in bare if re.match(r'^(yes|allow|approve)(?:\b|,)', label)]
+    no = [n for n, label in bare if n not in custom and re.match(r'^(no|deny|reject)(?:\b|,)', label)]
+    approval = any(re.search(r'(?i)do you want to|would you like to run|trust this', line) for line in q['lines'])
+    approval = approval and all(n in yes + no + custom for n, _ in options)
+    if not q['multi'] and yes and ((len(options) == 2 and len(no) == 1) or approval):
+        q['yes'] = yes[0]
+        q['no'] = no[0] if no else (-1 if any('tell codex' in label for _, label in bare) else 0)
+    else:
+        q['yes'] = q['no'] = 0
+    if not q['no']:
+        q['yes'] = 0
+    return q
+
+
 def find_question(text):
     """The open choice dialog in a pane's visible text, or None.
 
@@ -142,6 +165,10 @@ def find_question(text):
     if block is None:
         return None
     top, options, cursor = block
+    # A custom row with an inline editor is input, not a replacement question.
+    if any(re.match(r"(?i)^(?:\[[ x✔✓]\]\s*)?(?:type something[.…]*|other[.…]*)\s*[:：]", label)
+           for _, label, _ in options):
+        return None
     question = _question_lines(lines, top)
     if any("Ready to submit your answers?" in line for line in question):
         # Claude's review page ignores number keys.
@@ -149,22 +176,24 @@ def find_question(text):
     multi = any(CHECKBOX_RE.match(label) for _, label, _ in options)
     submit = next((n for n, _, detail in options
                    if detail and detail[-1] == "Submit"), None)
-    shown = []
+    shown, all_options = [], []
     for n, label, detail in options:
         label = CHECKBOX_RE.sub(lambda m: "[x] " if m.group(1) != " " else
                                 "[ ] ", label)
         bare = CHECKBOX_RE.sub("", label).strip()
-        if UNANSWERABLE_RE.match(bare):
+        if bare.lower() == "chat about this":
             continue
         detail = " ".join(detail)
         if detail and detail != bare:
             label = label + " — " + detail
-        shown.append((n, label))
-    if not shown:
+        all_options.append((n, label))
+        if not UNANSWERABLE_RE.match(bare):
+            shown.append((n, label))
+    if not all_options:
         return None
-    return dict(lines=question, options=shown, cursor=cursor,
+    return question_traits(dict(lines=question, options=shown, all_options=all_options, cursor=cursor,
                 multi=bool(multi and submit), submit=submit, method=method,
-                rows=[n for n, _, _ in options])
+                rows=[n for n, _, _ in options]))
 
 
 def _codex_queued(lines, nonblank):
@@ -187,14 +216,15 @@ def _codex_queued(lines, nonblank):
         options.append((len(options) + 1, m.group(1)))
     if len(options) < 2:
         return None
-    return dict(lines=[lines[start][2:].strip()], options=options, cursor=1,
+    return question_traits(dict(lines=[lines[start][2:].strip()], options=options, cursor=1,
                 multi=False, submit=None, method="codex-queued",
-                rows=[n for n, _ in options])
+                rows=[n for n, _ in options]))
 
 
 def question_id(pane, q):
     key = "\x1f".join([pane] + q["lines"] +
-                      ["%d:%s" % o for o in q["options"]])
+                      ["%d:%s" % (n, CHECKBOX_RE.sub("", label))
+                       for n, label in q.get("all_options", q["options"])])
     return "%08x" % zlib.crc32(key.encode("utf-8"))
 
 
@@ -204,6 +234,8 @@ def answer_keys(q, number):
     number 0 is the multi-select dialog's Submit row, which Claude draws
     under the option whose number q["submit"] holds.
     """
+    if number == -1 and q.get("no") == -1:
+        return ["esc"]
     if q["method"] == "codex-queued":
         return None  # two steps; see Daemon.answer
     if number == 0:

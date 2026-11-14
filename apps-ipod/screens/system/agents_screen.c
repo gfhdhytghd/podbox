@@ -103,7 +103,7 @@
 #include "agents_screen.h"
 
 enum view { VIEW_SPACES, VIEW_AGENTS, VIEW_DETAIL, VIEW_QUESTION, VIEW_USAGE,
-            VIEW_CONFIRM };
+            VIEW_CONFIRM, VIEW_ALERT, VIEW_INPUT };
 
 enum row_kind {
     ROW_STATUS,     /* connection trouble; not selectable */
@@ -157,6 +157,10 @@ static int task_x;              /* its scroll, pixels from the left */
 static int task_y;              /* its line's top in the view */
 static long task_next;          /* when it moves next */
 static bool task_at_end;        /* it rests at its end, to go back */
+static char question_id[12], question_saved_detail[16];
+static char question_agent[44], question_tab[44], question_line[124];
+static int question_choice;
+static bool question_custom, question_closing;
 static char question_pane[16];  /* the pane the question view answers */
 static enum view question_from; /* the view to go back to, on which row */
 static struct row question_from_row;
@@ -386,7 +390,8 @@ static void signal_usage_view(int active, bool force)
 
 static const struct hr_question *current_question(void)
 {
-    return hr_model_question_for(&model, question_pane);
+    const struct hr_question *q = hr_model_question_for(&model, question_pane);
+    return q && (!question_id[0] || !strcmp(q->id, question_id)) ? q : NULL;
 }
 
 static const struct hr_workspace *find_space(const char *id)
@@ -832,7 +837,8 @@ static void build_rows(struct gui_synclist *list)
 {
     char buf[48];
     nrows = 0;
-    if (view == VIEW_USAGE || view == VIEW_DETAIL || view == VIEW_CONFIRM)
+    if (view == VIEW_USAGE || view == VIEW_DETAIL || view == VIEW_CONFIRM ||
+        view == VIEW_ALERT || view == VIEW_INPUT)
         return;
     if (view != VIEW_QUESTION)
     {
@@ -1657,6 +1663,58 @@ static void draw_confirm(struct gui_synclist *list)
     d->set_viewport(NULL);
 }
 
+/* The question overlay is a view of Agents, never a nested screen. */
+static void draw_question_overlay(void)
+{
+    struct screen *d = &screens[SCREEN_MAIN];
+    struct viewport full;
+    viewport_set_fullscreen(&full, SCREEN_MAIN);
+    full.font = FONT_UI;
+    d->set_viewport(&full);
+    d->clear_viewport();
+    int y = 8;
+    text_at(d, 6, y, USE_TEXT, question_agent); y += USE_LINE + 4;
+    text_at(d, 6, y, USE_DIM, question_tab); y += USE_LINE + 8;
+    if (view == VIEW_INPUT)
+    {
+        text_at(d, 6, y, USE_TEXT, detail_ready ? "Custom answer" : "Focusing input...");
+        y += USE_LINE + 4;
+        if (model.detail_valid && !strcmp(model.detail_pane, question_pane))
+            draw_input(d, &full, y, false);
+        y = full.height - 3 * USE_LINE;
+        text_at(d, 6, y, USE_DIM, "Hold PLAY: dictate · LEFT: delete");
+        text_at(d, 6, y + USE_LINE, USE_TEXT, "SELECT: send · MENU: cancel");
+    }
+    else
+    {
+        struct dialog_text_line wrapped[8];
+        char line[200];
+        int n = dialog_wrap_text(question_line, full.width - 12, FONT_UI,
+                                 wrapped, 8);
+        for (int i = 0; i < n && y < full.height - 4 * USE_LINE; i++, y += USE_LINE)
+        {
+            int len = MIN(wrapped[i].len, (int)sizeof line - 1);
+            memcpy(line, wrapped[i].str, len);
+            line[len] = '\0';
+            text_at(d, 6, y, USE_TEXT, line);
+        }
+        const struct hr_question *q = current_question();
+        y = full.height - 4 * USE_LINE;
+        if (q && q->yes && q->no)
+        {
+            d->set_foreground(USE_DIM);
+            d->drawrect(4, y, full.width / 2 - 6, 2 * USE_LINE);
+            d->drawrect(full.width / 2 + 2, y, full.width / 2 - 6, 2 * USE_LINE);
+            text_at(d, 10, y + USE_LINE / 2, USE_TEXT, "LEFT: Yes");
+            text_at(d, full.width / 2 + 8, y + USE_LINE / 2, USE_TEXT, "RIGHT: No");
+        }
+        text_at(d, 6, full.height - USE_LINE - 4, USE_DIM,
+                view == VIEW_ALERT ? "SELECT: options · MENU: ignore" : "LEFT: Yes · RIGHT: No · MENU: back");
+    }
+    d->update_viewport();
+    d->set_viewport(NULL);
+}
+
 /* A microphone 11 pixels wide and 17 tall, its top left at x, y */
 static void draw_mic(struct screen *d, int x, int y, unsigned colour)
 {
@@ -1749,7 +1807,7 @@ static void talk_target(struct gui_synclist *list, char *buf, size_t size)
 {
     int sel = gui_synclist_get_sel_pos(list);
     const struct row *r = sel >= 0 && sel < nrows ? &rows[sel] : NULL;
-    if (view == VIEW_QUESTION)
+    if (view == VIEW_QUESTION || view == VIEW_INPUT)
         snprintf(buf, size, "%s", question_pane);
     else if (view == VIEW_DETAIL)
         snprintf(buf, size, "%s", detail_pane);
@@ -1863,7 +1921,7 @@ static void pump_keys(void)
         key_req[0] = '\0';
     if (key_req[0] || !key_runs.nruns)
         return;
-    if (view == VIEW_DETAIL && !detail_ready)
+    if ((view == VIEW_DETAIL || view == VIEW_INPUT) && !detail_ready)
         return;
     char *slot = outbox_slot();
     struct hr_key_run run;
@@ -1927,6 +1985,14 @@ static bool take_focus_result(void)
             key_runs.nruns = 0;
     }
     return true;
+}
+
+/* A pure two-choice page keeps the large buttons and never scrolls a list. */
+static bool question_binary_page(void)
+{
+    const struct hr_question *q = current_question();
+    return view == VIEW_QUESTION && q && q->yes && q->no &&
+           q->noptions == 2 && !q->options[0].custom && !q->options[1].custom;
 }
 
 /* The wheel moved in the spaces or agents view: the selected workspace or
@@ -2035,6 +2101,8 @@ static void show_at(struct gui_synclist *list, int select, int top)
         draw_detail(list);
     else if (view == VIEW_CONFIRM)
         draw_confirm(list);
+    else if (view == VIEW_ALERT || view == VIEW_INPUT || question_binary_page())
+        draw_question_overlay();
 }
 
 static void show(struct gui_synclist *list, int select)
@@ -2088,18 +2156,40 @@ static void open_question(struct gui_synclist *list, const char *pane)
     int sel = gui_synclist_get_sel_pos(list);
     question_from = view;
     question_from_row = sel >= 0 && sel < nrows ? rows[sel] : (struct row){0};
+    snprintf(question_saved_detail, sizeof question_saved_detail, "%s", detail_pane);
+    question_id[0] = '\0';
+    question_choice = 0;
+    question_custom = question_closing = false;
     snprintf(question_pane, sizeof question_pane, "%s", pane);
     const struct hr_question *q = current_question();
     if (q)
+    {
         hr_popped_add(&popped, q->id);
-    view = VIEW_QUESTION;
+        snprintf(question_id, sizeof question_id, "%s", q->id);
+        snprintf(question_agent, sizeof question_agent, "%s", q->agent);
+        snprintf(question_tab, sizeof question_tab, "%s", q->tab[0] ? q->tab : q->workspace);
+        snprintf(question_line, sizeof question_line, "%s", q->nlines ? q->lines[0] : "Question");
+    }
+    view = VIEW_ALERT;
     focus_want[0] = '\0';
     show(list, 0);
 }
 
 static void leave_question(struct gui_synclist *list)
 {
+    forget_keys();
+    question_choice = 0;
+    question_custom = question_closing = false;
+    if (strcmp(detail_pane, question_saved_detail))
+    {
+        snprintf(detail_pane, sizeof detail_pane, "%s", question_saved_detail);
+        subscribe_detail(detail_pane);
+        detail_ready = false;
+        if (question_from == VIEW_DETAIL)
+            queue_focus("fp", detail_pane, true);
+    }
     view = question_from;
+    question_id[0] = '\0';
     question_pane[0] = '\0';
     pending_req[0] = '\0';
     pending_answer = false;
@@ -2111,7 +2201,8 @@ static void leave_question(struct gui_synclist *list)
  * the confirm view is open */
 static void pop_question(struct gui_synclist *list)
 {
-    if (view == VIEW_QUESTION || view == VIEW_CONFIRM || talk_held ||
+    if (view == VIEW_QUESTION || view == VIEW_ALERT || view == VIEW_INPUT ||
+        view == VIEW_CONFIRM || talk_held ||
         talk_req[0])
         return;
     const struct hr_question *q = hr_model_next_popup(&model, &popped);
@@ -2242,6 +2333,100 @@ static void close_confirm(struct gui_synclist *list)
 
 /* Act on SELECT: enter the workspace, open the agent's detail or the
  * waiting question, or answer */
+static void enter_answer(struct gui_synclist *list)
+{
+    if (!current_question() || focus_req[0] || pending_req[0]) return;
+    forget_keys();
+    snprintf(detail_pane, sizeof detail_pane, "%s", question_pane);
+    detail_ready = false;
+    subscribe_detail(detail_pane);
+    queue_focus("fp", question_pane, true);
+    view = VIEW_QUESTION;
+    show(list, 0);
+}
+
+static void answer_number(int number)
+{
+    const struct hr_question *q = current_question();
+    if (!q || !detail_ready || focus_req[0] || pending_req[0]) return;
+    char args[32];
+    question_custom = false;
+    for (int i = 0; i < q->noptions; i++)
+        if (q->options[i].number == number) question_custom = q->options[i].custom;
+    snprintf(args, sizeof args, "%s\t%d", q->id, number);
+    queue_request("a", args);
+    pending_answer = !q->multi || number == 0;
+}
+
+static void close_input(bool submit)
+{
+    if (!detail_ready || pending_req[0] || focus_req[0]) return;
+    /* Review must include every queued edit before Enter can be sent. */
+    if (submit && (key_req[0] || key_runs.nruns)) return;
+    finish_talk(true);
+    forget_keys();
+    char args[32];
+    snprintf(args, sizeof args, "%s\t%s", question_id, submit ? "enter" : "esc");
+    queue_request("qi", args);
+    question_closing = pending_req[0] != '\0';
+}
+
+static bool question_action(struct gui_synclist *list, int action)
+{
+        if (view == VIEW_ALERT || view == VIEW_INPUT || view == VIEW_QUESTION)
+        {
+            int raw;
+            int status = get_action_statuscode(&raw);
+            int left_mask = BUTTON_LEFT, right_mask = BUTTON_RIGHT;
+#ifdef IPOD_ACCESSORY_PROTOCOL
+            left_mask |= BUTTON_RC_LEFT;
+            right_mask |= BUTTON_RC_RIGHT;
+#endif
+            bool left = action == ACTION_STD_CANCEL && (raw & left_mask);
+            bool right = action == ACTION_STD_OK && (raw & right_mask);
+            bool select = action == ACTION_STD_OK && !right;
+            bool menu = (action == ACTION_STD_CANCEL || action == ACTION_STD_MENU) && !left;
+            const struct hr_question *q = current_question();
+            if (view == VIEW_ALERT)
+            {
+                if (menu && !pending_req[0]) leave_question(list);
+                else if (select) enter_answer(list);
+                else if ((left || right) && !(status & ACTION_REPEAT) && q && q->yes && q->no)
+                {
+                    if (!focus_req[0] && !pending_req[0])
+                    {
+                        question_choice = left ? q->yes : q->no;
+                        enter_answer(list);
+                    }
+                }
+                return true;
+            }
+            if (view == VIEW_INPUT)
+            {
+                if (menu) close_input(false);
+                else if (select && !talk_held && !talk_req[0]) close_input(true);
+                else if (left && detail_ready && !question_closing) send_key("bs");
+                else if (action == ACTION_AGENTS_TALK || action == ACTION_AGENTS_REMOTE_TALK)
+                {
+                    if (detail_ready && !focus_req[0] && !question_closing)
+                        start_talk(list, action == ACTION_AGENTS_REMOTE_TALK);
+                }
+                else if (action == ACTION_AGENTS_DISCARD) finish_talk(true);
+                return true;
+            }
+            if (left || right)
+            {
+                if (q && q->yes && q->no && !(status & ACTION_REPEAT))
+                    answer_number(left ? q->yes : q->no);
+                return true;
+            }
+            if (menu && pending_req[0]) return true;
+            if (action == ACTION_AGENTS_TALK || action == ACTION_AGENTS_REMOTE_TALK)
+                return true;
+        }
+    return false;
+}
+
 static void activate(struct gui_synclist *list)
 {
     int sel = gui_synclist_get_sel_pos(list);
@@ -2263,14 +2448,13 @@ static void activate(struct gui_synclist *list)
         case ROW_OPTION:
         case ROW_SUBMIT:
         {
-            char args[24];
             q = current_question();
-            if (!q)
-                return;
-            snprintf(args, sizeof args, "%s\t%d", q->id,
-                     r->kind == ROW_SUBMIT ? 0 : q->options[r->index].number);
-            queue_request("a", args);
-            pending_answer = !q->multi || r->kind == ROW_SUBMIT;
+            if (!q) return;
+            bool pure_binary = q->yes && q->no && q->noptions == 2;
+            for (int i = 0; i < q->noptions; i++)
+                if (q->options[i].custom) pure_binary = false;
+            if (pure_binary) return;
+            answer_number(r->kind == ROW_SUBMIT ? 0 : q->options[r->index].number);
             show_same(list);
             return;
         }
@@ -2310,6 +2494,8 @@ static bool poll_link(void)
             char *slot = outbox_slot();
             if (slot)
                 strcpy(slot, "hr\t1");
+            slot = outbox_slot();
+            if (slot) strcpy(slot, "qx\t1");
             if (space_id[0])
                 subscribe(space_id, space_tab);
             if (detail_pane[0])
@@ -2387,8 +2573,23 @@ static void take_result(struct gui_synclist *list)
     pending_req[0] = '\0';
     if (!model.result_ok)
         splashf(HZ * 2, "%s", model.result_text);
+    else if (question_closing)
+    {
+        leave_question(list);
+        return;
+    }
+    else if (question_custom)
+    {
+        view = VIEW_INPUT;
+        model.detail_valid = false;
+        input_top = 0;
+        question_custom = false;
+        show(list, 0);
+        return;
+    }
     else if (pending_answer)
         splashf(HZ, "%s", model.result_text);
+    question_custom = question_closing = false;
     pending_answer = false;
     show_same(list);
 }
@@ -2438,6 +2639,9 @@ static int agents_run(void)
     hr_model_reset(&model);
     view = VIEW_SPACES;
     space_id[0] = space_tab[0] = detail_pane[0] = '\0';
+    question_id[0] = '\0';
+    question_choice = 0;
+    question_custom = question_closing = false;
     question_pane[0] = pending_req[0] = focus_req[0] = '\0';
     pending_answer = was_connected = detail_ready = false;
     detail_shown_age = -1;
@@ -2479,7 +2683,8 @@ static int agents_run(void)
         gui_synclist_set_top_item(&list, cache_top);
         if (view == VIEW_USAGE) draw_usage(&list);
         else if (view == VIEW_DETAIL) draw_detail(&list);
-        else gui_synclist_draw(&list);
+        else if (view == VIEW_ALERT || view == VIEW_INPUT) draw_question_overlay();
+        else show_same(&list);
     }
     else
         show(&list, 0);
@@ -2501,15 +2706,30 @@ static int agents_run(void)
         bool changed = poll_link();
         pump_keys();
         take_result(&list);
-        if (view == VIEW_QUESTION)
+        if (view == VIEW_QUESTION || view == VIEW_ALERT)
         {
             const struct hr_question *q = current_question();
             /* Answered, or answered on the computer */
-            if (!q)
+            if (!q && !pending_req[0])
                 leave_question(&list);
             /* A box ticked gives the question a new id, already in view */
-            else
+            else if (q)
                 hr_popped_add(&popped, q->id);
+        }
+        if (view == VIEW_QUESTION && question_choice && detail_ready && !focus_req[0])
+        {
+            answer_number(question_choice);
+            question_choice = 0;
+        }
+        if (view == VIEW_INPUT)
+        {
+            const struct hr_question *replacement = hr_model_question_for(&model, question_pane);
+            if ((replacement && strcmp(replacement->id, question_id)) ||
+                podlink_state() != PODLINK_CONNECTED)
+            {
+                finish_talk(true);
+                leave_question(&list);
+            }
         }
         pop_question(&list);
         signal_usage_view(view == VIEW_USAGE ? 1 : view == VIEW_DETAIL ? 2 : 0, false);
@@ -2595,7 +2815,8 @@ static int agents_run(void)
 
         int before = gui_synclist_get_sel_pos(&list);
         int before_top = list.start_item[SCREEN_MAIN];
-        if (view == VIEW_USAGE || view == VIEW_DETAIL || view == VIEW_CONFIRM)
+        if (view == VIEW_USAGE || view == VIEW_DETAIL || view == VIEW_CONFIRM ||
+            view == VIEW_ALERT || view == VIEW_INPUT || question_binary_page())
         {
             /* No list to scroll: the wheel is the arrow keys, or in the
              * confirm view nothing */
@@ -2612,7 +2833,8 @@ static int agents_run(void)
             }
 #endif
             int dir = 0;
-            if (view == VIEW_CONFIRM)
+            if (view == VIEW_CONFIRM || view == VIEW_ALERT || view == VIEW_INPUT ||
+                question_binary_page())
                 ;
             else if (action == ACTION_STD_PREV ||
                      action == ACTION_STD_PREVREPEAT)
@@ -2695,6 +2917,7 @@ static int agents_run(void)
             }
             continue;
         }
+        if (question_action(&list, action)) continue;
         switch (action)
         {
             case ACTION_STD_OK:

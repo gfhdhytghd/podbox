@@ -1049,3 +1049,47 @@ its existing native hold behavior; it no longer receives a fake Select.
 The host bridge reads the IR serial stream only. Deploy its matching
 `usb_remote_key.py`; HerdRemote/PodLink runtime files and service units do
 not change in FU20. No service or device operation is part of this build.
+
+### Extended questions and reviewed custom input (FU21)
+
+Protocol version stays 1. New players send `qx\t1` immediately after `hr\t1`.
+Until that capability arrives, the daemon emits the original six-field Q and
+three-field option records, hiding unsupported Claude custom rows as before.
+Older daemons ignore `qx`; new players also accept the legacy Q format.
+After negotiation, Q has nine header fields:
+
+```
+Q <id> <pane> <workspace> <m|-> <agent> <yes> <no> <tab label>
+? <question line>
+o <number> <label> <c|->
+```
+
+Fields use actual tabs. `c` marks a custom input choice. `yes=no=0` means
+multi-option. Otherwise they identify the direct binary answers; `no=-1`
+means plain denial using Esc (currently Codex approvals with only the custom
+No-and-tell row). LEFT on the alert chooses the first allow option; RIGHT
+chooses a plain deny option, or that Esc. SELECT focuses the pane (`det`, then
+matching `fp` acknowledgment) and opens **all** choices, including custom ones.
+Exactly two ordinary Yes/No choices also use LEFT/RIGHT on the answer page;
+SELECT on that page does not answer. Approvals retain their policy/custom
+option list after SELECT. MENU dismisses; the waiting-question row reopens
+it. Volume and wheel do nothing on the alert. Checkbox ticks preserve the
+question id; the daemon resends a Q only when its visible payload changes.
+
+Custom selection uses existing `a <req> <qid> <number>`. A successful result
+`Input ready` means the option was selected and a visible input editor was
+observed. It does **not** submit input. The player stays subscribed to that
+pane's D and reuses hold-to-talk (`vd`/`vu`, short press `vc`). The structured
+session remains the latest-message source, while the current input/cursor is
+overlaid from `pane.read` with `source=visible`, no line count or scrollback.
+Inline `Type something:`/`Other:` editors use the visible terminal cursor;
+choice labels themselves are never echoed as input.
+
+Only after review: `qi <req> <qid> enter` submits, and `qi <req> <qid> esc`
+cancels. The daemon binds this to the selected custom session and focused
+pane, resets pending key/voice activity, and sends exactly that targeted key.
+LEFT uses existing Backspace. A replaced question, wrong focus, reset or lost
+link invalidates the session. MENU never sends Enter. Esc behavior belongs
+to the agent: Claude cancels/backtracks its editor; Codex cancels its current
+composer/editor (approval RIGHT's Esc denies without choosing custom input).
+Draft retention and exact screen after Esc require agent-version acceptance.

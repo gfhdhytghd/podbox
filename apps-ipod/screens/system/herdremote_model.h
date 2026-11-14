@@ -77,6 +77,7 @@ struct hr_agent {
 struct hr_option {
     int number;             /* what an answer sends back */
     char label[96];
+    bool custom;
 };
 
 struct hr_question {
@@ -85,6 +86,8 @@ struct hr_question {
     char workspace[16];
     char agent[44];
     bool multi;
+    int yes, no; /* 0 not binary; -1 = plain deny via Esc */
+    char tab[44];
     int nlines, noptions;
     char lines[HR_MAX_LINES][124];
     struct hr_option options[HR_MAX_OPTIONS];

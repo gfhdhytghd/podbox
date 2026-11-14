@@ -282,3 +282,30 @@ def parse(text, kind='unknown', title='', status='unknown', state_age_s=-1, term
         # Empty/chrome-only input clears the complete detail, including TASK.
         fields.update(task='', state_age_s=-1, state='unknown')
     return fields
+
+
+def extract_custom_input(text, kind='unknown', terminal_cursor=None):
+    """Current custom editor only: prompt input or a cursor in an inline Other row.
+
+    A numbered choice is never echoed as user input. Cursor coordinates are
+    still relative to the visible viewport; no scrollback is requested.
+    """
+    value = extract_input(text, kind, terminal_cursor)
+    lines = strip_ansi(text).split('\n')
+    cursor = terminal_cursor if isinstance(terminal_cursor, dict) else {}
+    row = cursor.get('row')
+    if cursor.get('visible') is True and type(row) is int and 0 <= row < len(lines):
+        match = re.match(r'^\s*[❯›>]?\s*\d+\.\s*(?:\[[ x✔✓]\]\s*)?'
+                         r'(?:Type something[.…]*|Other[.…]*)(?:\s*[:：]\s?| {2,})(.*)$',
+                         lines[row], re.I)
+        if match:
+            col = cursor.get('col_chars')
+            if type(col) is not int:
+                col = _cell_column_to_chars(lines[row], cursor.get('col', 0))
+            return dict(input=match[1], cursor=max(0, min(len(match[1]), col-match.start(1))),
+                        cursor_source='herdr', active=True)
+    if re.match(r'^\d+\.\s', value['input']):
+        return dict(input='', cursor=0, cursor_source='end', active=False)
+    # An empty normal prompt is active too; do not require typed text.
+    active = any(re.match(r'^\s{0,2}[❯›>] (?!\d+\.\s)', line) for line in lines[-12:])
+    return dict(value, active=active)

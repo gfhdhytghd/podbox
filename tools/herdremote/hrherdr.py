@@ -221,7 +221,9 @@ def build_model(snapshot, read, subscribed=None, tab_id=None):
                     agent_label = "%s · %s" % (ws.get("label") or wid,
                                                pane.get("agent"))
                     questions[qid] = dict(q, id=qid, pane=pane["pane_id"],
-                                          workspace=wid, agent=agent_label)
+                                          workspace=wid, agent=agent_label,
+                                          display_agent=names.get(pane["pane_id"]) or pane.get("agent") or "Agent",
+                                          tab="%s / %s" % (ws.get("label") or wid, t.get("label") or tid))
                     last = " ".join(q["lines"][-1:]) or last
                 key = "waiting" if q or status == "blocked" else status
                 if key in counts:

@@ -251,7 +251,7 @@ static int apply_question(struct hr_model *m, char **head, int nhead,
 {
     char *f[HR_MAX_FIELDS], *record;
     struct hr_question *q = &new_question;
-    if (nhead != 6)
+    if (nhead != 6 && nhead != 9)
         return 0;
     memset(q, 0, sizeof *q);
     hr_copy(q->id, head[1], sizeof q->id);
@@ -259,6 +259,12 @@ static int apply_question(struct hr_model *m, char **head, int nhead,
     hr_copy(q->workspace, head[3], sizeof q->workspace);
     q->multi = head[4][0] == 'm';
     hr_copy(q->agent, head[5], sizeof q->agent);
+    if (nhead == 9)
+    {
+        q->yes = number(head[6]);
+        q->no = !strcmp(head[7], "-1") ? -1 : number(head[7]);
+        hr_copy(q->tab, head[8], sizeof q->tab);
+    }
     while ((record = next_record(cursor)))
     {
         int n = split(record, f);
@@ -267,12 +273,13 @@ static int apply_question(struct hr_model *m, char **head, int nhead,
             if (q->nlines < HR_MAX_LINES)
                 hr_copy(q->lines[q->nlines++], f[1], sizeof q->lines[0]);
         }
-        else if (n == 3 && !strcmp(f[0], "o"))
+        else if ((n == 3 || (nhead == 9 && n == 4)) && !strcmp(f[0], "o"))
         {
             if (q->noptions < HR_MAX_OPTIONS)
             {
                 struct hr_option *o = &q->options[q->noptions++];
                 o->number = number(f[1]);
+                o->custom = n == 4 && !strcmp(f[3], "c");
                 hr_copy(o->label, f[2], sizeof o->label);
             }
         }
@@ -281,6 +288,16 @@ static int apply_question(struct hr_model *m, char **head, int nhead,
     }
     if (q->noptions == 0)
         return 0;
+    if (q->yes || q->no)
+    {
+        bool yes = false, no = q->no == -1;
+        for (int j = 0; j < q->noptions; j++)
+        {
+            yes |= q->options[j].number == q->yes && !q->options[j].custom;
+            no |= q->options[j].number == q->no && !q->options[j].custom;
+        }
+        if (!yes || !no || q->yes == q->no || q->multi) return 0;
+    }
     int i = find_question(m, q->id);
     if (i < 0)
     {

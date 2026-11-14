@@ -119,11 +119,11 @@ class Detection(unittest.TestCase):
         self.assertEqual(hrdetect.last_activity(sample("codex-idle-narrow.txt")),
                          "Service tier set to default")
 
-    def test_question_id_changes_with_checkbox_state(self):
+    def test_question_id_stays_with_checkbox_state(self):
         a = self.q("claude-ask-multi-q2.txt")
         b = dict(a, options=[(1, "[x] Cheese — Cheese topping")] +
                  a["options"][1:])
-        self.assertNotEqual(hrdetect.question_id("p", a),
+        self.assertEqual(hrdetect.question_id("p", a),
                             hrdetect.question_id("p", b))
 
 

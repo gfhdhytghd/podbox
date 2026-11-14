@@ -22,8 +22,10 @@ struct podlink_message {int type;unsigned int length;const unsigned char *data;}
 #define SCREEN_MAIN 0
 #define HZ 100
 #define TIME_BEFORE(a,b) ((a)<(b))
-enum view {VIEW_SPACES,VIEW_DETAIL,VIEW_USAGE,VIEW_CONFIRM};
+enum view {VIEW_SPACES,VIEW_DETAIL,VIEW_USAGE,VIEW_CONFIRM,VIEW_ALERT,VIEW_INPUT};
 static enum view view;
+static char question_id[12];static int question_choice;
+static bool question_custom,question_closing;
 static struct hr_model model;
 static struct detail_layout detail_layout;static int detail_body_avail;
 struct row {int kind;char id[16];};
@@ -45,7 +47,8 @@ static void forget_keys(void){}
 static void agents_shortcut_talking(bool b){(void)b;}
 static void show_row(struct gui_synclist*l,const struct row*r){(void)l;assert(!strcmp(r->id,"p1"));frames++;assert(!round_trips);}
 static void gui_synclist_set_top_item(struct gui_synclist*l,int top){l->start_item[0]=top;}
-static void gui_synclist_draw(struct gui_synclist*l){(void)l;frames++;}
+static void show_same(struct gui_synclist*l){(void)l;frames++;}
+static void draw_question_overlay(void){frames++;}
 static void draw_usage(struct gui_synclist*l){(void)l;frames++;}
 static void draw_detail(struct gui_synclist*l){(void)l;assert(model.detail_valid);assert(!strcmp(model.detail.say,"cached message"));assert(detail_scroll==3);frames++;}
 static void show(struct gui_synclist*l,int row){(void)l;assert(row==0);frames++;}

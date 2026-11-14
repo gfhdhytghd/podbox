@@ -170,7 +170,7 @@ def detail(pane, fields, max_message=MAX_MESSAGE):
                   max_message=max_message)
 
 
-def question(q):
+def question(q, extended=False):
     """q: dict with id, pane, workspace, multi, agent, lines, options.
 
     options are (number, label) pairs; number is what the answer message
@@ -179,9 +179,15 @@ def question(q):
     rows = [["?", clean(line, QUESTION_BYTES)]
             for line in q["lines"][-QUESTION_LINES:] if clean(line, 8)]
     rows += [["o", str(n), clean(label, OPTION_BYTES)]
-             for n, label in q["options"][:MAX_OPTIONS]]
+             for n, label in (q.get("all_options", q["options"]) if extended else q["options"])[:MAX_OPTIONS]]
+    if extended:
+        for row in rows:
+            if row[0] == "o":
+                row.append("c" if int(row[1]) in q.get("custom", []) else "-")
     head = ["Q", q["id"], clean(q["pane"], 15), clean(q["workspace"], 15),
-            "m" if q["multi"] else "-", clean(q["agent"], LABEL_BYTES)]
+            "m" if q["multi"] else "-", clean(q.get("display_agent", q["agent"]) if extended else q["agent"], LABEL_BYTES)]
+    if extended:
+        head += [str(q.get("yes", 0)), str(q.get("no", 0)), clean(q.get("tab", ""), LABEL_BYTES)]
     return encode([head] + rows)
 
 
@@ -254,8 +260,12 @@ def parse_command(payload):
                 not any(ord(c) < 32 or ord(c) == 127 for c in args[1])):
             return name, args
         return None
-    shapes = {"hr": 1, "sub": 1, "fw": 2, "fp": 2, "a": 3, "us": 0,
+    shapes = {"qx": 1, "qi": 3, "hr": 1, "sub": 1, "fw": 2, "fp": 2, "a": 3, "us": 0,
               "vd": 2, "vu": 1, "vc": 1, "k": 2, "ft": 3, "det": 1}
+    if name == "qx":
+        return (name, args) if len(records) == 1 and args == ["1"] else None
+    if name == "qi":
+        return (name, args) if len(records) == 1 and len(args) == 3 and args[2] in ("enter", "esc") and all(args) and len(args[0]) <= 7 and len(args[1]) <= 11 else None
     if name in ("sub", "ft", "det"):
         valid_lengths = (1, 2) if name == "sub" else (shapes[name],)
         if len(records) != 1 or len(args) not in valid_lengths:

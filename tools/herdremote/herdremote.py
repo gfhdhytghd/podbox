@@ -114,14 +114,24 @@ class Answerer(threading.Thread):
         keys = hrdetect.answer_keys(q, number)
         before = hrdetect.question_id(pane, q)
         self.herdr.send_keys(pane, keys)
+        custom = number in q.get("custom", [])
         deadline = time.monotonic() + CONFIRM_SECONDS
         while time.monotonic() < deadline:
             time.sleep(0.25)
             after, after_id = self.current(pane)
+            if custom and (after is None or after_id == before):
+                # Selecting an option must expose an editor, not just change a pane.
+                record = self.herdr.read_record(pane, source="visible")
+                if hrdetail.extract_custom_input(record["text"], terminal_cursor=record.get("cursor"))["active"]:
+                    return True, "Input ready"
             if after is None:
-                return True, "Answered"
+                if not custom:
+                    return True, "Answered"
+                continue
+            if not custom and q["multi"] and after.get("options") != q.get("options"):
+                return True, "Updated"
             if after_id != before:
-                return True, "Updated" if q["multi"] else "Answered"
+                return (False, "The question has changed") if custom else (True, "Updated" if q["multi"] else "Answered")
         return False, "The pane did not change"
 
 
@@ -199,6 +209,9 @@ class Daemon:
         self.sent_agents = None
         self.sent_tabs = None
         self.sent_questions = {}
+        self.question_ext = False
+        self.custom_pending = {}
+        self.custom_input = None
         self.subscribed = None
         self.subscribed_tab = None
         self.detail_pane = None
@@ -247,6 +260,14 @@ class Daemon:
         model, sampled, error = update
         if error is None:
             self.model, self.model_time = model, sampled
+            session = getattr(self, 'custom_input', None)
+            if session and (session[1] not in model['panes'] or any(
+                    q['pane'] == session[1] and q['id'] != session[0]
+                    for q in model['questions'].values())):
+                self.voice.stop()
+                self.keys.reset()
+                self.custom_input = None
+                self.detail_keys_pane = None
             seen = {}
             for pane, meta in model.get("pane_meta", {}).items():
                 status = meta["status"]
@@ -279,15 +300,25 @@ class Daemon:
         session = meta.get("agent_session") or {}
         return (meta["kind"], meta["status"], meta["title"],
                 session.get("kind"), session.get("value"), self.herdr_ok,
-                pane in self.model["panes"], self.detail_edit_revision)
+                pane in self.model["panes"], self.detail_edit_revision, getattr(self, "custom_input", None))
 
     def detail_limit(self):
         return getattr(self.link, "max_message", hrproto.MAX_MESSAGE)
 
     def read_detail(self, pane, readable, meta=None, client=None, max_message=None):
+        meta = dict(meta or {})
+        meta["custom_input"] = bool(getattr(self, "custom_input", None) and self.custom_input[1] == pane)
         fields = (self.appserver.read(meta or {}) if (meta or {}).get("kind") == "codex"
                   else self.sessions.read(meta or {})) if readable else None
         if fields is not None:
+            fields = dict(fields)
+            if (meta or {}).get('custom_input'):
+                client = client or hrherdr.Herdr(self.herdr.path, self.herdr.timeout)
+                try:
+                    record = client.read_record(pane, source="visible")
+                    fields.update(hrdetail.extract_custom_input(record['text'], (meta or {}).get('kind', 'unknown'), record.get('cursor')))
+                except hrherdr.HerdrError:
+                    fields.update(input='', cursor=0)
             if not (meta or {}).get("resident"):
                 fields.pop("revision", None)
             return hrproto.detail(pane, fields, max_message=self.detail_limit() if max_message is None else max_message)
@@ -300,6 +331,8 @@ class Daemon:
                 fields = hrdetail.parse(record["text"], terminal_cursor=record.get("cursor"),
                                         **{k: v for k, v in (meta or {}).items()
                                            if k in ("kind", "status", "title", "state_age_s")})
+                if meta.get('custom_input'):
+                    fields.update(hrdetail.extract_custom_input(record['text'], meta.get('kind', 'unknown'), record.get('cursor')))
                 fields["say"] = "\n".join(fields.get("say", "").splitlines()[-DETAIL_VISIBLE_LINES:])
             except hrherdr.HerdrError:
                 pass
@@ -452,7 +485,20 @@ class Daemon:
         if self.sent_ws is None:
             return
         while not self.results.empty():
-            self.send(hrproto.result(*self.results.get()))
+            result = self.results.get()
+            pending = self.custom_pending.pop(result[0], None)
+            if pending and result[1]:
+                valid = pending[2] == self.session_generation and not any(
+                    q['pane'] == pending[1] and q['id'] != pending[0]
+                    for q in self.model['questions'].values())
+                if valid:
+                    self.custom_input = pending[:2]
+                    self.sent_detail_key = None
+                    self.detail_edit_revision += 1
+                    self.next_detail = 0
+                else:
+                    result = (result[0], False, "The question has changed")
+            self.send(hrproto.result(*result))
         for result in self.keys.replies():
             self.send(hrproto.result(*result))
             target = self.key_details.pop(result[0], None)
@@ -497,9 +543,9 @@ class Daemon:
                 self.send(hrproto.question_gone(qid))
                 del self.sent_questions[qid]
         for qid, q in list(current.items())[:hrproto.MAX_QUESTIONS]:
-            if qid not in self.sent_questions:
-                self.send(hrproto.question(q))
-                self.sent_questions[qid] = True
+            if self.sent_questions.get(qid) != hrproto.question(q, self.question_ext):
+                self.send(hrproto.question(q, self.question_ext))
+                self.sent_questions[qid] = hrproto.question(q, self.question_ext)
         now = time.monotonic()
         due = self.detail_fast_due if self.detail_fast_due is not None else self.next_detail
         if self.foreground in (None, 1) and self.reader is None and self.detail_pane and now >= due:
@@ -528,6 +574,11 @@ class Daemon:
         if name == "hr":
             self.reset_session()
             self.sent_ws = b""
+        elif name == "qx":
+            self.question_ext = True
+            self.sent_questions.clear()
+        elif name == "qi":
+            self.custom_command(*args)
         elif name == "sub":
             self.subscribed = None if args[0] == "-" else args[0]
             self.subscribed_tab = args[1] if len(args) == 2 else None
@@ -564,10 +615,34 @@ class Daemon:
         elif name == "a":
             req, qid, number = args
             q = self.model["questions"].get(qid)
-            if not q or not number.isdigit():
+            if not q or not (number.isdigit() or (number == "-1" and q.get("no") == -1)):
                 self.send(hrproto.result(req, False, "The question has gone"))
             else:
+                if int(number) in q.get("custom", []):
+                    self.custom_pending[req] = (qid, q["pane"], self.session_generation)
                 self.answerer.jobs.put((req, q, int(number)))
+
+    def custom_command(self, req, qid, key):
+        session = self.custom_input
+        if not session or session[0] != qid or session[1] != self.detail_keys_pane or session[1] != self.detail_pane:
+            self.send(hrproto.result(req, False, "Input is not focused"))
+            return
+        pane = session[1]
+        # Never send into a replacement question, even if refresh is pending.
+        try:
+            current, current_id = self.answerer.current(pane)
+            if current and current_id != qid:
+                self.custom_input = None
+                self.send(hrproto.result(req, False, "The question has changed"))
+                return
+            self.voice.stop()
+            self.keys.reset()
+            self.herdr.send_keys(pane, [key])
+            self.custom_input = None
+            self.detail_edit_revision += 1
+            self.send(hrproto.result(req, True, "Submitted" if key == "enter" else "Cancelled"))
+        except hrherdr.HerdrError as error:
+            self.send(hrproto.result(req, False, str(error)))
 
     def key_command(self, req, key, count=1):
         result = ((False, "Session not ready") if self.sent_ws is None else

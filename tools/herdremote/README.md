@@ -694,3 +694,15 @@ hrkeys.py backend and other runtime siblings remain compatible and bundled.
 No serial-write, service-operation or installation step is part of this
 build-only package. All hardware/desktop gesture delivery requires separately
 authorized acceptance; local tests use mocked keys and private IPC endpoints.
+
+FU21 question UI requires the matching firmware and daemon. Deploy
+`herdremote.py`, `hrdetect.py`, `hrproto.py`, `hrherdr.py`, and `hrdetail.py`
+together; the ZIP retains the complete existing tools tree. No additional
+service is required. Binary detection accepts exactly two leading Yes/No,
+Allow/Deny, or Approve/Reject options, or a recognized approval question
+("Do you want to…", "Would you like to run…", "trust this") with leading
+allow choices. It uses the first allow and a non-custom deny; only Codex's
+No-and-tell-only denial maps to Esc. Other dialogs stay multi-option.
+Custom options match Type something, Other/Other…, and No-and-tell … differently
+or instead. These choices remain in the full answer page. No transcription
+submits until the user presses SELECT on the input page.
