@@ -67,6 +67,7 @@ static bool cider_copy_art(const char*k,const char*t,void*p,unsigned int n){(voi
 static void cider_prefetch_art(const char*k,const char*t){(void)k;(void)t;}
 static void img_filter_apply(void*p,int w,int h,const void*f){(void)p;(void)w;(void)h;(void)f;}
 static bool cider_play(const char*p){assert(available&&live==1&&strstr(p,"play/"));if(fail_play)return false;plays++;return true;}
+static char last_ctx[400];static int last_idx=-1;static bool cider_play_in(const char*p,const char*c,int i){snprintf(last_ctx,sizeof last_ctx,"%s",c);last_idx=i;return cider_play(p);}
 int cider_covers(void);
 static int default_event_handler(int a){(void)a;return 0;}
 static int search_dialog_run(const struct search_provider*p,void*c,char*q,size_t n){(void)n;p->scan(q,c);p->refresh(c);p->row_text(0,c);return -1;}

@@ -40,14 +40,14 @@ static bool number(const char *text, uint32_t *out)
 int cider_state_apply(struct cider_state *s, const void *data,
                       unsigned int length, uint32_t tick)
 {
-    char buf[1024], *f[18];
+    char buf[1024], *f[19];
     if (length >= sizeof buf || memchr(data, 0, length)) return 0;
     memcpy(buf, data, length); buf[length] = 0;
     int n = 1; f[0] = buf;
     for (unsigned int i = 0; i < length; i++)
         if (buf[i] == '\t')
         {
-            if (n == 18) return 0;
+            if (n == 19) return 0;
             buf[i] = 0; f[n++] = &buf[i + 1];
         }
     uint32_t gen;
@@ -88,7 +88,8 @@ int cider_state_apply(struct cider_state *s, const void *data,
         copy(s->next_art, strcmp(f[4], "-") ? f[4] : "", sizeof s->next_art);
         return 1;
     }
-    if ((n != 16 && n != 18) || strcmp(f[0], "CN") || gen != s->generation)
+    if ((n != 16 && n != 18 && n != 19) || strcmp(f[0], "CN") ||
+        gen != s->generation)
         return 0;
     uint32_t values[8];
     for (int i = 0; i < 8; i++)
@@ -98,10 +99,14 @@ int cider_state_apply(struct cider_state *s, const void *data,
         (values[4] != 0 && values[4] != 1000) || values[5] > 100 ||
         values[6] > 1 || values[7] > 2)
         return 0;
+    /* A host that knows Rockbox's repeat modes adds them as field 19; an older
+     * one sends Cider's own 0 none, 1 one, 2 all. */
+    uint32_t repeat = values[7] == 1 ? 2 : values[7] == 2 ? 1 : 0;
+    if (n == 19 && (!number(f[18], &repeat) || repeat > 4)) return 0;
     s->seq = values[0]; s->host_ms = values[1];
     s->duration = values[2]; s->position = values[3];
     s->rate = values[4]; s->volume = values[5];
-    s->shuffle = values[6]; s->repeat = values[7];
+    s->shuffle = values[6]; s->repeat = repeat;
     if (strcmp(s->id, f[10]))
         s->previous_art[0] = s->next_art[0] = 0;
     copy(s->id, f[10], sizeof s->id);
@@ -110,8 +115,8 @@ int cider_state_apply(struct cider_state *s, const void *data,
     copy(s->title, f[13], sizeof s->title);
     copy(s->artist, f[14], sizeof s->artist);
     copy(s->album, f[15], sizeof s->album);
-    s->muted = n == 18 && !strcmp(f[16], "1");
-    if (n == 18) copy(s->composer, f[17], sizeof s->composer);
+    s->muted = n >= 18 && !strcmp(f[16], "1");
+    if (n >= 18) copy(s->composer, f[17], sizeof s->composer);
     s->received = tick; s->have = true;
     return 1;
 }
@@ -140,6 +145,45 @@ int cider_reply_status(const void *data, unsigned int length,
     if (fields[0] != generation || fields[1] != request || fields[2] > 1)
         return 0;
     return fields[2] ? 1 : -1;
+}
+
+/* Next (or previous) value of a mode, wrapping: shuffle off/on, repeat
+ * none/one/all. Out-of-range input counts as the first value. */
+int cider_mode_step(int mode, int value, bool previous)
+{
+    int count = mode == CIDER_MODE_REPEAT ? 5 : 2;
+    if (value < 0 || value >= count) value = 0;
+    return (value + (previous ? count - 1 : 1)) % count;
+}
+
+/* The value to show: the requested one until Cider's own state reaches it,
+ * or CIDER_MODE_HOLD seconds pass, then Cider's. */
+int cider_mode_show(struct cider_modes *m, int mode, int live,
+                    uint32_t tick, int hz)
+{
+    if (mode < 0 || mode >= CIDER_MODE_COUNT || !m->pending[mode]) return live;
+    if (live == m->want[mode] ||
+        (int32_t)(tick - m->at[mode]) >= CIDER_MODE_HOLD * hz)
+        m->pending[mode] = false;
+    return m->pending[mode] ? m->want[mode] : live;
+}
+
+void cider_mode_ask(struct cider_modes *m, int mode, int value,
+                    uint32_t tick, uint32_t request)
+{
+    if (mode < 0 || mode >= CIDER_MODE_COUNT) return;
+    m->pending[mode] = true; m->want[mode] = value;
+    m->at[mode] = tick; m->request[mode] = request;
+}
+
+/* The host refused request: show Cider's own value again. */
+bool cider_mode_failed(struct cider_modes *m, uint32_t request)
+{
+    bool hit = false;
+    for (int i = 0; i < CIDER_MODE_COUNT; i++)
+        if (m->pending[i] && m->request[i] == request)
+            m->pending[i] = false, hit = true;
+    return hit;
 }
 
 uint32_t cider_position(const struct cider_state *s, uint32_t tick, int hz)

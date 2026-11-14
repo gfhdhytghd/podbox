@@ -32,6 +32,7 @@ static bool cancel_all;
 static long hello_at, request_at;
 static unsigned int request_tries;
 static uint32_t play_request;
+static struct cider_modes modes;
 static int play_reply;
 static long play_at, art_used_at;
 static char warm_keys[7 * 65], warm_tier[3];
@@ -85,6 +86,7 @@ static void reset(void)
     transfer.active = false;
     disk_lookup = request_ready = false;
     ncommands = grant = granted = cancel_request = 0;
+    memset(&modes, 0, sizeof modes);
     xs_count = 0; cancel_all = false;
     warm_keys[0] = 0; warm_ready = false;
     hello_at = current_tick - 2 * HZ;
@@ -204,6 +206,7 @@ static bool receive(const struct podlink_message *m)
         {
             if (play_request) play_reply = -1;
             transfer.active = false; ncommands = 0;
+            memset(&modes, 0, sizeof modes);
             disk_lookup = request_ready = false;
             grant = granted = cancel_request = 0;
         }
@@ -212,6 +215,11 @@ static bool receive(const struct podlink_message *m)
             int reply = cider_reply_status(m->data, m->length,
                                            state.generation, play_request);
             if (reply) play_reply = reply;
+            for (int i = 0; i < CIDER_MODE_COUNT; i++)
+                if (modes.pending[i] &&
+                    cider_reply_status(m->data, m->length, state.generation,
+                                       modes.request[i]) < 0)
+                    cider_mode_failed(&modes, modes.request[i]);
         }
         if (!memcmp(m->data, "CK\t", 3))
             cider_log("CIDER reply tick=%ld %.*s", current_tick,
@@ -229,7 +237,7 @@ static unsigned int next(char *record, unsigned int size)
     {
         if (TIME_AFTER(current_tick, hello_at + 2 * HZ))
         {
-            n = snprintf(record, size, "ci\t1\t%d\tcn18,neighbors,warm,play-ack", CIDER_CREDIT);
+            n = snprintf(record, size, "ci\t1\t%d\tcn18,neighbors,warm,play-ack,modes5", CIDER_CREDIT);
             hello_at = current_tick;
         }
     }
@@ -477,15 +485,41 @@ void cider_status(struct cider_status *out)
     out->repeat = state.repeat;
     mutex_unlock(&cider_mutex);
 }
+/* Queue one control; the request id, or 0 when nothing was queued. */
+static uint32_t queue_control(const char *command, int value)
+{
+    if (!state.available || ncommands >= ARRAYLEN(commands)) return 0;
+    snprintf(commands[ncommands++], sizeof commands[0],
+             "cc\t%lu\t%lu\t%s\t%d", (unsigned long)state.generation,
+             (unsigned long)++next_request, command, value);
+    return next_request;
+}
 void cider_control(const char *command, int value)
 {
     mutex_lock(&cider_mutex);
     if (!strcmp(command, "volume-step"))
         state.volume = MAX(0, MIN(100, state.volume + value));
-    if (state.available && ncommands < ARRAYLEN(commands))
-        snprintf(commands[ncommands++], sizeof commands[0],
-                 "cc\t%lu\t%lu\t%s\t%d", (unsigned long)state.generation,
-                 (unsigned long)++next_request, command, value);
+    queue_control(command, value);
+    mutex_unlock(&cider_mutex);
+}
+/* Cider's own shuffle (0/1) or repeat (0 none, 1 one, 2 all), or the value
+ * just asked for while Cider has not yet reported it. */
+int cider_mode_get(int mode)
+{
+    mutex_lock(&cider_mutex);
+    int live = mode == CIDER_MODE_REPEAT ? state.repeat : state.shuffle;
+    int value = cider_mode_show(&modes, mode, live, current_tick, HZ);
+    mutex_unlock(&cider_mutex);
+    return value;
+}
+/* Set an explicit value on Cider, shown at once; retries are harmless. */
+void cider_mode_set(int mode, int value)
+{
+    if (mode != CIDER_MODE_SHUFFLE && mode != CIDER_MODE_REPEAT) return;
+    mutex_lock(&cider_mutex);
+    uint32_t request = queue_control(mode == CIDER_MODE_REPEAT ? "repeat5"
+                                                               : "shuffle", value);
+    if (request) cider_mode_ask(&modes, mode, value, current_tick, request);
     mutex_unlock(&cider_mutex);
 }
 void cider_cancel_art(void)
@@ -572,12 +606,23 @@ void cider_request_xs(const char *const *keys, unsigned int count)
     mutex_unlock(&cider_mutex);
 }
 
-bool cider_play(const char *route)
+/* context: a list route, or "" for none; the host then queues the list
+ * around the song. A host that does not know native-context just refuses it. */
+static bool play_route(const char *route, const char *context, int index)
 {
     if (!cider_available()) return false;
+    bool with = context && *context && index >= 0 &&
+                strlen(context) + 64 < sizeof commands[0];
     mutex_lock(&cider_mutex);
-    bool queued = !play_request && ncommands < ARRAYLEN(commands) &&
+    bool queued = !play_request && ncommands + (with ? 1 : 0) < ARRAYLEN(commands) &&
                   strlen(route) + 48 < sizeof commands[0];
+    if (queued && with)
+    {
+        snprintf(commands[ncommands++], sizeof commands[0],
+                 "cc\t%lu\t%lu\tnative-context\t%d|%s",
+                 (unsigned long)state.generation,
+                 (unsigned long)++next_request, index, context);
+    }
     if (queued)
     {
         play_request = ++next_request;
@@ -590,6 +635,11 @@ bool cider_play(const char *route)
     }
     mutex_unlock(&cider_mutex);
     return queued;
+}
+bool cider_play(const char *route) { return play_route(route, "", -1); }
+bool cider_play_in(const char *route, const char *context, int index)
+{
+    return play_route(route, context, index);
 }
 
 /* Only the UI commits the playback source, after the host confirms selection. */

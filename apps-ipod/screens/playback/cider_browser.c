@@ -177,12 +177,15 @@ static const struct bitmap *header_art(struct dim *size)
 {
     return bitmap_for(history[depth].art, size, NULL);
 }
+static char search_route[380];
+static int search_index;
 static int search_scan(const char *text, void *ctx)
 {
     (void)ctx;
     char value[260], route[380];
     escape(value, sizeof value, text);
     snprintf(route, sizeof route, "search?q=%s", value);
+    snprintf(search_route, sizeof search_route, "%s", route);
     cider_page_open(route);
     int n = cider_page_total();
     return n < 0 ? 0 : MIN(n, 50);
@@ -213,6 +216,7 @@ static bool search(struct cider_row *out)
         .refresh = search_ready,
     };
     int result = search_dialog_run(&provider, NULL, query, sizeof query);
+    search_index = result;
     return result >= 0 && cider_page_row(result, out);
 }
 void cider_browse_album(const struct cider_row *row)
@@ -427,7 +431,8 @@ int cider_browse(void)
                 {
                     if (selected_row.kind == CIDER_ROW_SONG)
                     {
-                        if (cider_play(selected_row.route))
+                        if (cider_play_in(selected_row.route, search_route,
+                                          search_index))
                         {
                             play_pending = true;
                         }
@@ -443,7 +448,10 @@ int cider_browse(void)
             {
                 if (!strncmp(selected_row.route, "play/", 5))
                 {
-                    if (cider_play(selected_row.route))
+                    /* A song inside a list plays the list from that song on */
+                    if (cider_play_in(selected_row.route,
+                                      depth ? history[depth].route : "",
+                                      history[depth].selected))
                     {
                         play_pending = true;
                     }

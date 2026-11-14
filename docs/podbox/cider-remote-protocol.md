@@ -76,7 +76,7 @@ id title subtitle art-id duration-ms track-count
 ```
 
 `rate` is 0 or 1000; `volume` is 0..100; shuffle is 0/1 and repeat is 0/1/2
-(none/one/all). `CN` appends `muted` (0/1) and composer after album in FU23.
+(none/one/all; Rockbox numbering in the optional 19th field, see FU26). `CN` appends `muted` (0/1) and composer after album in FU23.
 `host-ms` is monotonic milliseconds modulo 2^32. The player
 anchors at reception and extrapolates position locally; no per-second position
 traffic is needed. Polling compares position against the last published
@@ -227,6 +227,87 @@ Center moves cancel obsolete transfers but do not restart the native engine.
 An identity/version change revalidates the affected slots; library count
 changes use the native center/slot path, not nested carousel instances.
 
+## Shuffle and repeat commands (FU26)
+
+The player offers the native Rockbox set. Shuffle is Off/On. Repeat is, in
+`repeat_mode` order, **0 Off, 1 All, 2 One, 3 Shuffle, 4 A-B**.
+
+Commands (`cc gen req command V`), all explicit values so a retried press is
+idempotent; invalid values are rejected without an RPC and answered `CK ... 0`:
+
+| Command | Meaning |
+| --- | --- |
+| `shuffle V` | Cider shuffle, 0 off / 1 on |
+| `repeat5 V` | Rockbox repeat mode 0..4 (see below) |
+| `ab-mark MS` | A-B marker at player position `MS` (ms): sets A, then B, then clears |
+| `repeat V` | legacy (first FU26 firmware): Cider numbering 0 none, 1 one, 2 all |
+
+Cider RPC (verified in Cider 4.0.0 `app.asar`; `repeatMode = {none:0, one:1,
+all:2}`, `shuffleMode = 0|1`): `PUT /api/v2/playback/shuffle {"enabled":bool}`
+and `PUT /api/v2/playback/repeat {"mode":"none"|"one"|"all"}`.
+
+`repeat5` mapping: 0 -> repeat none; 1 -> all; 2 -> one. **3 (Shuffle)**: repeat
+all and shuffle on; the host remembers the earlier shuffle and restores it on
+leaving. **4 (A-B)**: Cider is left unchanged; the host keeps markers A and B
+for the current track. SELECT on Now Playing in A-B mode sends `ab-mark` with
+the current position (first A, then B, then clear; Rockbox's single-key cycle).
+Once B is set the host seeks to A, and whenever playback reaches B on the same
+track it seeks back to A (polling every 250 ms while active). A track change
+clears the markers; the mode stays. Modes 3 and 4 are virtual: when
+Cider's own repeat or shuffle no longer equals what the host set (the user
+changed it in Cider), the virtual mode ends and the real value is reported.
+
+Reporting: if the player advertised `modes5` in `ci`, `CN` has a 19th field,
+the repeat mode in the numbering above. Without it (older firmware) `CN` is
+unchanged, with the 10th field in Cider's numbering. A player reading a
+16/18-field `CN` converts Cider numbering to Rockbox's (none 0, one 2, all 1).
+`repeat5` and `ab-mark` need a host that knows them; an older host answers
+`CK ... 0` and the player shows Cider's own value again.
+
+On the player, long MENU on Now Playing opens the system quick screen with
+Left = Shuffle and Right = Repeat (all five values, left/right press cycles
+backwards/forwards), top and bottom empty; long SELECT opens a native list with
+`Shuffle` and `Repeat` rows (SELECT cycles, MENU leaves). MENU, tapped after
+the opening press has been released, also leaves the quick screen; in the
+quick screen the remote's Vol+/Vol- act as the wheel (volume), Left/Right
+change the values, and Select or the centre key leave. Both pages act only
+while Cider is the source and available and never touch the local playlist or
+settings. A requested value is shown at once, and replaced by Cider's value
+when `CN` agrees, when `CK` reports failure, or after 2 seconds. Local playback
+keeps its own long-press menus.
+
+## Playing a song inside its list (FU26c)
+
+Choosing a song in an album, playlist, Songs list, artist/genre list or search
+result queues the list, like the native iPod: the queue is the list in row order,
+the current track is the chosen one, and Next/Previous walk the list.
+
+The player sends `cc gen req native-context INDEX|LIST-ROUTE` (`LIST-ROUTE` is the
+page route the row came from, `INDEX` its row number) immediately before the usual
+`native-play play/<kind>/<id>`. The host keeps the context for 15 seconds and uses
+it once. A host that does not know `native-context` answers `CK ... 0` for it and
+plays the song alone, as before. Any failure while queueing also leaves the song
+playing alone.
+
+- **Album and playlist routes** (`album/ID`, `album/catalog-REGION/ID`, `playlist/...`):
+  `POST /api/v2/playback/play-collection {"type":"library-albums|albums|library-playlists|playlists","id":ID}`
+  queues the whole collection (Cider loads the first 100 tracks and the rest in
+  the background). The host waits until the row exists, finds the song **by track
+  id** in the queue (Cider drops unplayable tracks, so row numbers can shift) and
+  calls `POST /api/v2/queue/jump {"index":N}`. The first track of the collection
+  is audible for a moment before the jump; Cider has no start-index option.
+- **Any other list** (Songs, filters, artist songs, history, search `search?q=`):
+  the song starts at once with `play-item-href`, then a background worker
+  appends the next 20 rows with `POST /api/v2/queue/add-later {"type","id"}`, one
+  at a time, waiting for each to appear (concurrent adds arrive out of order),
+  then appends the previous 5 and moves them in front with
+  `POST /api/v2/queue/move {"from","to"}` (Cider keeps the playing position). A new
+  play cancels the worker. Rows further than that window are not queued.
+
+Verified on Cider 4.0.0 (`queue` GET/`position`, `jump`, `add-later`, `move`,
+`play-collection`). Cider's `/previous` already restarts the track when more than
+3 seconds in and goes to the previous track otherwise, as the native iPod does.
+
 ## System source and native Music menu
 
 There is one system Now Playing route (`GO_TO_WPS`). `GO_TO_CIDER` now opens
@@ -282,6 +363,11 @@ hash and bounded excerpts are in the FU22 evidence (`cider-api-proof.json`).
 | POST `/api/v1/playback/playpause` | `{}` |
 | POST `/api/v1/playback/next`, `previous` | `{}` |
 | POST `/api/v1/playback/seek` | `{"position": seconds}` |
+| GET `/api/v2/queue?offset=&limit=`, `/api/v2/queue/position` | `data.items[].track`, `data.position`/`total` |
+| POST `/api/v2/queue/jump`, `/queue/add-later`, `/queue/move` | `{index}`, `{type,id}`, `{from,to}` |
+| POST `/api/v2/playback/play-collection` | `{type,id}` |
+| PUT `/api/v2/playback/shuffle` | `{"enabled": bool}`; replies `{"data":{"enabled":bool}}` |
+| PUT `/api/v2/playback/repeat` | `{"mode": "none"\|"one"\|"all"}`; replies `{"data":{"mode":...}}` |
 | POST `/api/v1/playback/play-item` | `{"type": kind, "id": stable-id}` |
 | POST `/api/v1/amapi/run-v3` | `{"path":"/v1/me/library/...?..."}` |
 

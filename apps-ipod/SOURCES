@@ -158,6 +158,7 @@ screens/playback/cider_model.c
 screens/playback/cider_library.c
 screens/playback/cider_browser.c
 screens/playback/cider_wps.c
+screens/playback/cider_controls.c
 screens/covers/cider_covers.c
 input/agents_shortcut.c
 screens/system/herdremote_model.c

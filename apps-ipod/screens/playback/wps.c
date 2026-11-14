@@ -81,6 +81,7 @@
 #include "wps.h"
 #include "cider.h"
 #include "cider_wps.h"
+#include "cider_controls.h"
 #include "cider_library.h"
 #include "skin/statusbar_skinned.h"
 #include "database/sound_mix.h"
@@ -927,6 +928,15 @@ static long wps_run(bool return_agents, bool menu_covers)
             {
                 long go_to;
 
+                if (cider_active())
+                {
+                    /* Cider's shuffle and repeat; nothing of the local playlist */
+                    if (!cider_available()) break;
+                    gwps_leave_wps(true);
+                    if (cider_context_show()) return GO_TO_ROOT;
+                    restore = true;
+                    break;
+                }
                 gwps_leave_wps(true);
                 if (context_go_to(context_menu_show(state->id3->path,
                                       FILE_ATTR_AUDIO, CONTEXT_WPS, false,
@@ -1108,6 +1118,15 @@ static long wps_run(bool return_agents, bool menu_covers)
 
             case ACTION_WPS_QUICKSCREEN:
             {
+                if (cider_active())
+                {
+                    if (!cider_available()) break;
+                    gwps_leave_wps(true);
+                    if (quick_screen_cider(button) == QUICKSCREEN_IN_USB)
+                        return GO_TO_ROOT;
+                    restore = true;
+                    break;
+                }
                 gwps_leave_wps(true);
                 bool enter_shortcuts_menu = global_settings.shortcuts_replaces_qs;
                 if (!enter_shortcuts_menu)
