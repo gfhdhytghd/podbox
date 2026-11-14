@@ -29,7 +29,7 @@
 #include "timefuncs.h"
 #include "debug.h"
 
-static struct tm tm;
+static struct tm rtc_tm;
 
 time_t dostime_mktime(uint16_t dosdate, uint16_t dostime)
 {
@@ -123,11 +123,11 @@ struct tm *get_time(void)
 {
     if (rtc_dirty())
     {
-        rtc_read_datetime(&tm);
-        tm.tm_isdst = -1; /* Not implemented for now */
+        rtc_read_datetime(&rtc_tm);
+        rtc_tm.tm_isdst = -1; /* Not implemented for now */
     }
 
-    return &tm;
+    return &rtc_tm;
 }
 
 int set_time(const struct tm *tm)
@@ -142,7 +142,10 @@ int set_time(const struct tm *tm)
         if (rc < 0)
             return -1;
         else
+        {
+            rtc_tm = *tm;
             return 0;
+        }
     }
     else
     {

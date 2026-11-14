@@ -1395,6 +1395,10 @@ Everything shows all of them.
 Reveals the debug screens under System. They read hardware and internal state;
 nothing there is needed in normal use.
 
+[sync time from computer]
+Sets the player's clock from a connected computer running HerdRemote. On by
+default. Switch off to set the date and time manually.
+
 [time format]
 Whether times are shown on a 12- or 24-hour clock.
 

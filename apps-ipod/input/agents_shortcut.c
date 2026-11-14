@@ -7,6 +7,22 @@
 
 volatile bool button_agents_chord_latched;
 
+static bool cover_journey, cover_music;
+static int cover_origin;
+void cover_nav_begin(int origin)
+{
+    if (!cover_journey) { cover_journey = true; cover_origin = origin; cover_music = false; }
+}
+int cover_nav_finish(void)
+{
+    int origin = cover_origin;
+    cover_journey = cover_music = false;
+    return origin;
+}
+bool cover_nav_active(void) { return cover_journey; }
+bool cover_nav_playing(void) { return cover_journey && cover_music; }
+void cover_nav_set_playing(bool playing) { cover_music = playing; }
+
 static unsigned int nav_live;
 static enum agents_nav_screen nav_pending;
 static bool nav_remote;

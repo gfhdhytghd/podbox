@@ -2588,7 +2588,8 @@ static int hotkey_album_covers(void)
 {
     int ret = album_covers(NULL);
 
-    if (ret == GO_TO_ALBUM_COVERS_TRACKS || ret == GO_TO_ROOT)
+    if (ret == GO_TO_ALBUM_COVERS_TRACKS || ret == GO_TO_ROOT ||
+        ret == GO_TO_WPS || ret == GO_TO_AGENTS)
         return leave(ret);
     if (!(audio_status() & AUDIO_STATUS_PLAY))
         return leave(GO_TO_WPS);

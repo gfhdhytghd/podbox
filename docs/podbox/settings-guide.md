@@ -656,6 +656,7 @@ restart, which costs battery life: restart the player afterwards.
 
 | Setting | What it does | Default | |
 |---|---|---|---|
+| Sync time from computer | Sets the player's clock from a connected computer running HerdRemote. On by default. Switch off to set the date and time manually. | On | |
 | Time Format | Whether times are shown on a 12- or 24-hour clock. | 12 Hour Clock |  |
 
 ### System — Startup/Shutdown

@@ -657,9 +657,22 @@ static bool show_album_covers(long *go_to, bool *menu_covers)
     int ret;
 
     gwps_leave_wps(false);
+    bool was_music = cover_nav_playing();
+    cover_nav_begin(GO_TO_WPS);
     bool remote_return;
     ret = album_covers_return(NULL, &remote_return);
     if (remote_return) *menu_covers = true;
+    if (ret == GO_TO_PREVIOUS && !was_music)
+    {
+        cover_nav_finish();
+        album_covers_cancel_resume();
+    }
+    else if (ret != GO_TO_PREVIOUS && ret != GO_TO_WPS &&
+             ret != GO_TO_ALBUM_COVERS_TRACKS)
+    {
+        cover_nav_finish();
+        album_covers_cancel_resume();
+    }
     if (ret == GO_TO_ALBUM_COVERS_TRACKS || ret == GO_TO_ROOT ||
         ret == GO_TO_AGENTS)
         *go_to = ret;
@@ -1029,6 +1042,11 @@ static long wps_run(bool return_agents, bool menu_covers)
                 break;
             /* menu key functions */
             case ACTION_WPS_MENU:
+                if (cover_nav_playing() && album_covers_reopen_tracks())
+                {
+                    gwps_leave_wps(true);
+                    return GO_TO_ALBUM_COVERS_TRACKS;
+                }
                 if (menu_covers)
                 {
                     long go_to;

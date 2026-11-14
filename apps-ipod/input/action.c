@@ -44,11 +44,43 @@
 #include "action.h"
 #ifdef HAVE_USB_PODLINK
 #include "input/agents_shortcut.h"
+#include "system/podlink_time.h"
+#include "thread.h"
 #include "input/remote_menu.h"
 #include "root_menu.h"
 #include "kernel.h"
 static struct agents_shortcut_state shortcut;
 static struct agents_cover_chord_state cover_chord;
+static bool ui_polling;
+static unsigned int ui_thread;
+static long raw_ui_cancel(void)
+{
+    static bool release;
+    release = !release;
+    return BUTTON_MENU | (release ? 0 : BUTTON_REL);
+}
+static long raw_ui_filter(long button)
+{
+    /* Audio/decoder threads also read buttons; they must never write RTC. */
+    if (thread_self() != ui_thread || ui_polling) return button;
+    podlink_time_sync();
+    if (button & SYS_EVENT) return button;
+    bool fire;
+    button = agents_cover_chord_button(&cover_chord, button, button_status(), true, &fire);
+    if (agents_nav_pending() != AGENTS_NAV_NONE) return raw_ui_cancel();
+    if (fire)
+    {
+        agents_nav_request(agents_nav_has(AGENTS_NAV_COVERS) ?
+                           AGENTS_NAV_BACK : AGENTS_NAV_COVERS, false);
+        return BUTTON_MENU;
+    }
+    return button;
+}
+void agents_shortcut_init(void)
+{
+    ui_thread = thread_self();
+    button_set_ui_filter(raw_ui_filter);
+}
 static bool shortcut_talking;
 static unsigned long shortcut_talking_at;
 void agents_shortcut_talking(bool talking)
@@ -332,8 +364,9 @@ static int remote_poll(int timeout, int context)
 #ifdef HAVE_USB_PODLINK
 int agents_shortcut_get_button(int timeout)
 {
-    if (agents_nav_pending() != AGENTS_NAV_NONE) return BUTTON_MENU;
+    if (agents_nav_pending() != AGENTS_NAV_NONE) return raw_ui_cancel();
     int activity = get_current_activity();
+    ui_polling = true;
 #ifdef IPOD_ACCESSORY_PROTOCOL
     int context = activity == ACTIVITY_AGENTS ? REMOTE_AGENTS :
                   activity == ACTIVITY_WPS ? REMOTE_WPS :
@@ -342,11 +375,17 @@ int agents_shortcut_get_button(int timeout)
 #else
     int button = button_get_w_tmo(timeout);
 #endif
+    ui_polling = false;
+    podlink_time_sync();
     bool fire;
     button = agents_cover_chord_button(&cover_chord, button, button_status(),
-        activity == ACTIVITY_AGENTS || activity == ACTIVITY_WPS ||
-        activity == ACTIVITY_ALBUMCOVERS, &fire);
-    if (fire) return REMOTE_COVERS_BUTTON;
+        true, &fire);
+    if (fire || button == REMOTE_COVERS_BUTTON)
+    {
+        agents_nav_request(agents_nav_has(AGENTS_NAV_COVERS) ?
+                           AGENTS_NAV_BACK : AGENTS_NAV_COVERS, !fire);
+        return BUTTON_MENU;
+    }
     button = agents_shortcut_button(&shortcut, button, button_status(),
                                     shortcut_talking &&
                                     (unsigned long)current_tick -
@@ -367,6 +406,9 @@ static inline bool action_poll_button(action_last_t *last, action_cur_t *cur)
 {
     bool ret = true;
     int *button = &cur->button;
+#ifdef HAVE_USB_PODLINK
+    ui_polling = true;
+#endif
 
 #if defined(IPOD_ACCESSORY_PROTOCOL) && defined(HAVE_USB_PODLINK)
     int context = cur->context == CONTEXT_AGENTS ? REMOTE_AGENTS :
@@ -378,11 +420,11 @@ static inline bool action_poll_button(action_last_t *last, action_cur_t *cur)
     *button = button_get_w_tmo(cur->timeout);
 #endif
 #ifdef HAVE_USB_PODLINK
+    ui_polling = false;
+    podlink_time_sync();
     bool fire;
-    int activity = get_current_activity();
     *button = agents_cover_chord_button(&cover_chord, *button, button_status(),
-        activity == ACTIVITY_AGENTS || activity == ACTIVITY_WPS ||
-        activity == ACTIVITY_ALBUMCOVERS, &fire);
+        true, &fire);
     if (fire)
     {
         last->button = BUTTON_REL;
@@ -1002,7 +1044,7 @@ static int route_screen_shortcut(int action, int context)
         (agents_nav_has(AGENTS_NAV_COVERS) ? AGENTS_NAV_BACK : AGENTS_NAV_COVERS) :
         agents ? AGENTS_NAV_AGENTS : AGENTS_NAV_WPS;
     agents_nav_request(target, action == ACTION_AGENTS_REMOTE_COVERS);
-    if (covers) root_menu_cover_shortcut();
+    if (covers) { /* The owner/modal unwinds to the root dispatcher. */ }
     else if (agents) root_menu_agents_shortcut();
     else root_menu_wps_shortcut();
 #ifdef IPOD_ACCESSORY_PROTOCOL
@@ -1017,6 +1059,9 @@ static int route_screen_shortcut(int action, int context)
 
 int get_action(int context, int timeout)
 {
+#ifdef HAVE_USB_PODLINK
+    podlink_time_sync();
+#endif
 #ifdef HAVE_USB_PODLINK
     if (agents_nav_pending() != AGENTS_NAV_NONE && !shortcut_screen_context(context))
         return ACTION_STD_CANCEL;
@@ -1129,6 +1174,9 @@ int action_set_keymap_handle(int handle, int count)
 int get_custom_action(int context,int timeout,
                       const struct button_mapping* (*get_context_map)(int))
 {
+#ifdef HAVE_USB_PODLINK
+    podlink_time_sync();
+#endif
 #ifdef HAVE_USB_PODLINK
     if (agents_nav_pending() != AGENTS_NAV_NONE && !shortcut_screen_context(context))
         return ACTION_STD_CANCEL;

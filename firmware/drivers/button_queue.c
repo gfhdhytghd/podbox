@@ -200,6 +200,11 @@ void button_clear_pressed(void)
     }
 }
 
+#if defined(HAVE_USB_PODLINK) && !defined(BOOTLOADER)
+static long (*ui_filter)(long);
+void button_set_ui_filter(long (*filter)(long)) { ui_filter = filter; }
+#endif
+
 long button_get_w_tmo(int ticks)
 {
     struct queue_event ev;
@@ -210,6 +215,9 @@ long button_get_w_tmo(int ticks)
     else
         button_data = ev.data;
 
+#if defined(HAVE_USB_PODLINK) && !defined(BOOTLOADER)
+    if (ui_filter) return ui_filter(ev.id);
+#endif
     return ev.id;
 }
 

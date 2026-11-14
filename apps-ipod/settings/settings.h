@@ -574,6 +574,7 @@ struct user_settings
 
     const struct settings_list *qs_items[QUICKSCREEN_ITEM_COUNT];
 
+    bool sync_time_from_computer;
     int timeformat;    /* time format: 0=24 hour clock, 1=12 hour clock */
 
     int disk_spindown; /* time until disk spindown, in seconds (0=off) */

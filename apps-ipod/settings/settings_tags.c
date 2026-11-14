@@ -400,6 +400,7 @@ static const struct tag_row tag_rows[] = {
 { "spike caption scroll",TAG_APPEARANCE,                         "spike game now playing scroll crop" },
 { "show debug menu",     TAG_ADVANCED|TAG_SYSTEM,                "debug" },
 { "settings mode",       TAG_SYSTEM,                             "basic advanced" },
+{ "sync time from computer", TAG_SYSTEM|TAG_USB,                  "clock date rtc podlink herdremote sync" },
 { "time format",         TAG_SYSTEM,                             "clock 12 24 hour" },
 { "lang",                TAG_SYSTEM,                             "language" },
 { "default codepage",    TAG_ADVANCED|TAG_SYSTEM,                "codepage character set encoding" },

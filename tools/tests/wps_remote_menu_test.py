@@ -13,6 +13,9 @@ pre=r'''
 #define GO_TO_AGENTS 1
 #define GO_TO_PREVIOUS 2
 #define GO_TO_ROOT 3
+#define GO_TO_ALBUM_COVERS_TRACKS 13
+static bool cover_nav_playing(void) {return false;}
+static bool album_covers_reopen_tracks(void) {return false;}
 #define ACTION_WPS_MENU 4
 #define WPS_MENU_PREVIOUS 5
 static struct {int wps_menu_action;}global_settings;
@@ -86,6 +89,7 @@ static void album_covers_cancel_resume(void){}
 static int db_summary_play_pending(void){return 1;}
 int album_covers_return(const char*,bool*);
 '''
+nav+='\nstatic bool cover_nav_active(void){return false;}\nstatic bool cover_nav_playing(void){return false;}\nstatic void cover_nav_begin(int i){(void)i;}\nstatic int cover_nav_finish(void){return GO_TO_PREVIOUS;}\nstatic void cover_nav_set_playing(bool b){(void)b;}\n'
 nav+=function(albums,'album_covers')+function(albums,'album_covers_return')
 nav+=function((R/'apps-ipod/screens/playback/wps.c').read_text(),'show_album_covers')
 nav+=function(root,'agents_scrn')

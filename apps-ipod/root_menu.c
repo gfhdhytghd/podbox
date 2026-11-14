@@ -435,7 +435,9 @@ static int browser(void* param)
                 return GO_TO_PREVIOUS;
             filter = SHOW_ID3DB;
             last_ft_dirlevel = tc->dirlevel;
-            album_tracks_from = (last_screen == GO_TO_ALBUM_COVERS
+            if (cover_nav_active() && !album_covers_reopen_tracks())
+                return GO_TO_PREVIOUS;
+            album_tracks_from = cover_nav_active() ? GO_TO_ALBUM_COVERS : (last_screen == GO_TO_ALBUM_COVERS
                                  || last_screen == GO_TO_ARTIST_PORTRAITS)
                                 ? last_screen : GO_TO_ROOT;
             /* browser_db_enter_album_tracks_on_next_load() was already armed by
@@ -606,6 +608,22 @@ static int browser(void* param)
              * called with old_previous already equal to GO_TO_ALBUM_COVERS
              * (Album covers is the only caller of this entry point), so
              * returning GO_TO_PREVIOUS resolves back to exactly that. */
+            if (cover_nav_active())
+            {
+                if (ret_val == GO_TO_WPS)
+                    cover_nav_set_playing(true);
+                else if (ret_val == GO_TO_PREVIOUS || ret_val == GO_TO_ROOT)
+                {
+                    cover_nav_set_playing(false);
+                    ret_val = GO_TO_ALBUM_COVERS;
+                }
+                else
+                {
+                    cover_nav_finish();
+                    album_covers_cancel_resume();
+                }
+                break;
+            }
             if (ret_val == GO_TO_ROOT)
                 ret_val = GO_TO_PREVIOUS;
 
@@ -639,6 +657,16 @@ static int plugins_browser_removed(void* param)
 {
     (void)param;
     return GO_TO_ROOT;
+}
+
+static int cover_tracks_scrn(void *param)
+{
+    if (!agents_nav_enter(AGENTS_NAV_TRACKS)) return GO_TO_PREVIOUS;
+    int ret = browser(param);
+    if (cover_nav_active() && agents_nav_pending() == AGENTS_NAV_WPS)
+        cover_nav_set_playing(true);
+    agents_nav_leave(AGENTS_NAV_TRACKS);
+    return ret;
 }
 
 static bool wps_return_agents;
@@ -713,6 +741,12 @@ static int wpsscrn(void* param)
     else
         pop_current_activity();
 
+    if (cover_nav_playing() && ret_val != GO_TO_ALBUM_COVERS_TRACKS &&
+        ret_val != GO_TO_WPS)
+    {
+        cover_nav_finish();
+        album_covers_cancel_resume();
+    }
     back_from_wps = ret_val == GO_TO_PREVIOUS;
     return ret_val;
 }
@@ -806,9 +840,21 @@ static int playlist_view(void * param)
 static int album_covers_scrn(void* param)
 {
     (void)param;
-    if (!wait_for_album_tables())
-        return GO_TO_PREVIOUS;
-    return album_covers(NULL);
+    if (!cover_nav_active()) cover_nav_begin(GO_TO_PREVIOUS);
+    int ret = wait_for_album_tables() ? album_covers_return(NULL, NULL) : GO_TO_PREVIOUS;
+    if (ret == GO_TO_PREVIOUS)
+    {
+        int origin = cover_nav_finish();
+        album_covers_cancel_resume();
+        return origin;
+    }
+    if (ret != GO_TO_ALBUM_COVERS_TRACKS &&
+        !(ret == GO_TO_WPS && cover_nav_playing()))
+    {
+        cover_nav_finish();
+        album_covers_cancel_resume();
+    }
+    return ret;
 }
 
 static int db_search_scrn(void* param)
@@ -978,8 +1024,9 @@ static int agents_scrn(void *param)
     int ret;
     while ((ret = agents_screen()) == AGENTS_SWITCH_COVERS)
     {
+        cover_nav_begin(GO_TO_AGENTS);
         int destination = album_covers_scrn(NULL);
-        if (destination != GO_TO_PREVIOUS) return destination;
+        if (destination != GO_TO_PREVIOUS && destination != GO_TO_AGENTS) return destination;
         /* A triple inside the carousel resumes the cached Agents client. */
     }
     wps_return_agents = ret == AGENTS_SWITCH_WPS || ret == AGENTS_SWITCH_REMOTE_WPS;
@@ -997,18 +1044,24 @@ static void run_screen_shortcut(int screen)
     for (;;)
     {
         button_set_sw_poweroff_state(poweroff);
+        if (screen == GO_TO_ALBUM_COVERS) cover_nav_begin(GO_TO_PREVIOUS);
         agents_nav_take(screen == GO_TO_AGENTS ? AGENTS_NAV_AGENTS :
-                        screen == GO_TO_WPS ? AGENTS_NAV_WPS : AGENTS_NAV_COVERS);
+                        screen == GO_TO_WPS ? AGENTS_NAV_WPS :
+                        screen == GO_TO_ALBUM_COVERS_TRACKS ? AGENTS_NAV_TRACKS : AGENTS_NAV_COVERS);
         int ret = screen == GO_TO_AGENTS ? agents_scrn(NULL) :
-                  screen == GO_TO_WPS ? wpsscrn(NULL) : album_covers_scrn(NULL);
+                  screen == GO_TO_WPS ? wpsscrn(NULL) :
+                  screen == GO_TO_ALBUM_COVERS_TRACKS ? cover_tracks_scrn((void *)GO_TO_ALBUM_COVERS_TRACKS) :
+                  album_covers_scrn(NULL);
         enum agents_nav_screen nav = agents_nav_pending();
         if (nav != AGENTS_NAV_NONE && nav != AGENTS_NAV_BACK)
             ret = nav == AGENTS_NAV_AGENTS ? GO_TO_AGENTS :
                   nav == AGENTS_NAV_WPS ? GO_TO_WPS : GO_TO_ALBUM_COVERS;
-        if (ret != GO_TO_AGENTS && ret != GO_TO_WPS && ret != GO_TO_ALBUM_COVERS)
+        if (ret != GO_TO_AGENTS && ret != GO_TO_WPS &&
+            ret != GO_TO_ALBUM_COVERS && ret != GO_TO_ALBUM_COVERS_TRACKS)
             break;
         screen = ret;
     }
+    if (cover_nav_active()) { cover_nav_finish(); album_covers_cancel_resume(); }
     wps_return_agents = wps_menu_covers = false;
     button_set_sw_poweroff_state(poweroff);
 }
@@ -1071,7 +1124,7 @@ static const struct root_items items[] = {
     [GO_TO_SPUN] = { playback_viewer_scrn, NULL, NULL },
     [GO_TO_MUSIC_QUIZ] = { music_quiz_scrn, NULL, &tagcache_menu },
     [GO_TO_LISTEN_STATS] = { listen_stats_scrn, NULL, &tagcache_menu },
-    [GO_TO_ALBUM_COVERS_TRACKS] = { browser, (void*)GO_TO_ALBUM_COVERS_TRACKS, &tagcache_menu },
+    [GO_TO_ALBUM_COVERS_TRACKS] = { cover_tracks_scrn, (void*)GO_TO_ALBUM_COVERS_TRACKS, &tagcache_menu },
 /* One reserved slot per tagnavi.config root-menu tag-browse row (see
  * GO_TO_TAGNAVI_FIRST in root_menu.h); all share the same dispatch function
  * and only differ in which slot index they carry as param. */
@@ -2027,6 +2080,12 @@ static inline int load_screen(int screen)
     else if (screen == GO_TO_WPS) agents_nav_take(AGENTS_NAV_WPS);
     else if (screen == GO_TO_ALBUM_COVERS) agents_nav_take(AGENTS_NAV_COVERS);
 #endif
+    if (screen == GO_TO_ALBUM_COVERS) cover_nav_begin(old_previous);
+    else if (cover_nav_active() && screen != GO_TO_WPS && screen != GO_TO_ALBUM_COVERS_TRACKS)
+    {
+        cover_nav_finish();
+        album_covers_cancel_resume();
+    }
     ret_val = items[screen].function(items[screen].param);
 #ifdef HAVE_USB_PODLINK
     /* A scratch-buffer owner has now unwound. Honor a deferred shortcut at
@@ -2226,6 +2285,9 @@ static int browser_default(void)
 
 void root_menu(void)
 {
+#ifdef HAVE_USB_PODLINK
+    agents_shortcut_init();
+#endif
     int previous_browser = browser_default();
     int selected = 0;
 
@@ -2243,6 +2305,16 @@ void root_menu(void)
 
     while (true)
     {
+#ifdef HAVE_USB_PODLINK
+        if (agents_nav_pending() == AGENTS_NAV_COVERS &&
+            !agents_nav_active() && !app_buffer_is_claimed())
+            next_screen = GO_TO_ALBUM_COVERS;
+#endif
+        if (next_screen == GO_TO_ROOT && cover_nav_active())
+        {
+            cover_nav_finish();
+            album_covers_cancel_resume();
+        }
         debug_log_notice(false);
         /* A playlist that ran out, extended here rather than where it ended:
          * this is the UI thread, and the work is seconds of disk. Silent

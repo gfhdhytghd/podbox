@@ -410,6 +410,9 @@ system/usb_log_file.c
 #endif
 draw/color.c
 audio/sound_feedback.c
+#ifdef HAVE_USB_PODLINK
+system/podlink_time.c
+#endif
 system/format_time.c
 system/shutdown.c
 system/output_pause.c

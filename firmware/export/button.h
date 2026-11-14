@@ -73,6 +73,9 @@ void button_clear_queue(void);
 void button_clear_pressed(void);
 long button_get(bool block);
 long button_get_w_tmo(int ticks);
+#if defined(HAVE_USB_PODLINK) && !defined(BOOTLOADER)
+void button_set_ui_filter(long (*filter)(long));
+#endif
 intptr_t button_get_data(void);
 
 #ifdef HAVE_HEADPHONE_DETECTION

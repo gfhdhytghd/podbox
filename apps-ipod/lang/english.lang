@@ -28096,3 +28096,18 @@
     *: "Previous Screen"
   </voice>
 </phrase>
+
+<phrase>
+  id: LANG_SYNC_COMPUTER_TIME
+  desc: synchronize the RTC from the resident computer PodLink session
+  user: core
+  <source>
+    *: "Sync time from computer"
+  </source>
+  <dest>
+    *: "Sync time from computer"
+  </dest>
+  <voice>
+    *: "Sync time from computer"
+  </voice>
+</phrase>

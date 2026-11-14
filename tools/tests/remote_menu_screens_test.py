@@ -44,7 +44,10 @@ pre = r'''
 #include "firmware/target/arm/ipod/button-target.h"
 #include "apps-ipod/input/agents_shortcut.h"
 #define TIME_BEFORE(a,b) ((long)((unsigned long)(a)-(unsigned long)(b)) < 0)
-static struct agents_shortcut_state shortcut;
+static int raw_ui_cancel(void) {return BUTTON_MENU;}
+bool ui_polling;
+void podlink_time_sync(void) {}
+struct agents_shortcut_state shortcut;
 static struct agents_cover_chord_state cover_chord;
 static bool shortcut_talking, remote_input_active;
 static unsigned long shortcut_talking_at, current_tick;

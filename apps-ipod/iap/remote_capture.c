@@ -265,6 +265,9 @@ unsigned int remote_log_format(const struct remote_log_record *r,
                      "ignored-outside-or-disconnected",
                      pair.press, pc_tick, dock_tick);
     }
+    else if (r->kind == REMOTE_LOG_TIME)
+        n = snprintf(out, size, "LOG TIME tick=%lu %.*s", r->tick,
+                     REMOTE_LOG_DATA, r->data);
     else if (r->kind == REMOTE_LOG_PAGE)
         n = snprintf(out, size,
                      "LOG PAGE tick=%lu %s button=%08lX source=%s",

@@ -79,7 +79,7 @@ subprocess.run([str(O/'gestures')],check=True)
 root=(R/'apps-ipod/root_menu.c').read_text()
 nav_h=(R/'apps-ipod/input/agents_shortcut.h').read_text()
 nav_c=(R/'apps-ipod/input/agents_shortcut.c').read_text()
-nav_production=nav_c[nav_c.index('static unsigned int nav_live;'):nav_c.index('int agents_shortcut_button(')]
+nav_production=nav_c[nav_c.index('static bool cover_journey'):nav_c.index('int agents_shortcut_button(')]
 nav_production=nav_h[nav_h.index('enum agents_nav_screen'):nav_h.rfind('#endif')]+nav_production
 wps=(R/'apps-ipod/screens/playback/wps.c').read_text();covers=(R/'apps-ipod/screens/covers/carousel.c').read_text()
 nav=r'''
@@ -102,6 +102,9 @@ static int album_covers_scrn(void*p){(void)p;calls++;return covers_result;}
 static bool button_get_sw_poweroff_state(void){return poweroff;}
 static void button_set_sw_poweroff_state(bool on){poweroff=on;}
 static int wpsscrn(void*p){(void)p;return GO_TO_PREVIOUS;}
+static void album_covers_cancel_resume(void) {}
+static int cover_tracks_scrn(void *p) {(void)p;return GO_TO_PREVIOUS;}
+#define GO_TO_ALBUM_COVERS_TRACKS 111
 static int app_buffer_is_claimed(void){return 0;}
 
 '''

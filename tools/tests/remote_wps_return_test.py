@@ -19,6 +19,9 @@ source = r'''
 #define GO_TO_AGENTS 1
 #define GO_TO_PREVIOUS 2
 #define GO_TO_ROOT 3
+#define GO_TO_ALBUM_COVERS_TRACKS 13
+static bool cover_nav_playing(void) {return false;}
+static bool album_covers_reopen_tracks(void) {return false;}
 #define ACTION_WPS_MENU 4
 #define WPS_MENU_PREVIOUS 5
 static struct {int wps_menu_action;}global_settings;

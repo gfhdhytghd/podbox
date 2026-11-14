@@ -8,6 +8,7 @@ docs/podbox/herdremote-protocol.md is the reference; tools/herdremote/tests
 checks this module against it.
 """
 import unicodedata
+import datetime
 
 VERSION = 1
 MAX_MESSAGE = 16384
@@ -280,3 +281,15 @@ def parse_command(payload):
     if shapes.get(name) != len(args) and not (name == "k" and len(args) == 3):
         return None
     return name, args
+
+
+def clock(local=None):
+    """RTC local civil time, with an explicit UTC offset (seconds east)."""
+    local = local or datetime.datetime.now().astimezone()
+    offset = local.utcoffset()
+    if offset is None or not 2000 <= local.year <= 2037:
+        raise ValueError("RTC sync needs an aware local date in 2000..2037")
+    seconds = int(offset.total_seconds())
+    if abs(seconds) > 14 * 3600 or offset.total_seconds() != seconds:
+        raise ValueError("Invalid UTC offset")
+    return encode([["TS", "1", local.strftime("%Y-%m-%dT%H:%M:%S"), "%+d" % seconds]])

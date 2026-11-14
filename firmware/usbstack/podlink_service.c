@@ -6,6 +6,7 @@
 #include "thread.h"
 #include "remote_log.h"
 #include "system.h"
+#include "button.h"
 #include <string.h>
 
 #define INBOX 16
@@ -25,6 +26,9 @@ static unsigned char welcome[128];
 static unsigned int welcome_length;
 static char log_line[REMOTE_LOG_LINE];
 static unsigned int log_length, log_epoch;
+static char time_record[PODLINK_TIME_RECORD];
+static unsigned long time_received_tick;
+static bool time_pending;
 static void (*background_message)(const struct podlink_message *);
 static long service_stack[DEFAULT_STACK_SIZE * 2 / sizeof(long)];
 _Static_assert(sizeof(inbox) + sizeof(inbox_bytes) + sizeof(delivered) +
@@ -36,6 +40,7 @@ static void invalidate(void)
     first = used = byte_first = byte_used = 0;
     ++generation;
     welcome_length = 0;
+    time_pending = false;
     announced = 255;
     if (background_message && client != 1)
     {
@@ -111,6 +116,19 @@ static void service_step(void)
             memcpy(welcome, m.data, m.length);
             welcome_length = m.length;
         }
+        if (m.type == PODLINK_TEXT && m.length >= 3 && !memcmp(m.data, "TS\t", 3))
+        {
+            time_record[0] = '\0';
+            if (m.length < sizeof(time_record) && !memchr(m.data, 0, m.length))
+            {
+                memcpy(time_record, m.data, m.length);
+                time_record[m.length] = '\0';
+            }
+            time_received_tick = current_tick;
+            if (!time_pending) button_queue_post(BUTTON_REDRAW, 0);
+            time_pending = true;
+            continue;
+        }
         if (client)
         {
             if (used == INBOX || m.length > INBOX_BYTES - byte_used)
@@ -118,7 +136,10 @@ static void service_step(void)
                 /* Keep transport/voice keepalives alive through a blocked UI.
                  * Memory pressure drops the picture, not the cable session. */
                 unsigned int saved_welcome = welcome_length;
+                bool saved_time = time_pending;
                 invalidate();
+                /* Foreground overflow does not end the wire clock session. */
+                time_pending = saved_time;
                 welcome_length = saved_welcome;
                 struct podlink_message lost = {.type = PODLINK_CLOSE};
                 store_message(&lost);
@@ -298,6 +319,21 @@ int podlink_poll(struct podlink_message *message)
     if (have)
     {
         take_message(message);
+    }
+    mutex_unlock(&service_mutex);
+    return have;
+}
+
+bool podlink_take_time(char *record, unsigned long *received_tick)
+{
+    if (!initialized) return false;
+    mutex_lock(&service_mutex);
+    bool have = time_pending;
+    if (have)
+    {
+        memcpy(record, time_record, sizeof(time_record));
+        *received_tick = time_received_tick;
+        time_pending = false;
     }
     mutex_unlock(&service_mutex);
     return have;

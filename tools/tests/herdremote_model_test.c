@@ -21,6 +21,13 @@ static int apply(const char *s)
     return hr_model_apply(&m, s, strlen(s));
 }
 
+static void clock_old_peer(void)
+{
+    struct hr_model before = m;
+    assert(!apply("TS\t1\t2026-11-13T19:02:03\t-18000"));
+    assert(!memcmp(&before, &m, sizeof(m)));
+}
+
 static void dump(void)
 {
     printf("hello=%d herdr_ok=%d age=%d\n", m.hello, m.herdr_ok, m.herdr_age);
@@ -99,6 +106,7 @@ static int replay(const char *path)
 
 int main(int argc, char **argv)
 {
+    clock_old_peer();
     if (argc == 2)
         return replay(argv[1]);
 

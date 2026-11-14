@@ -447,7 +447,7 @@ print('outside Agents: every pre-existing remote keymap array identical to db11c
 root=(R/'apps-ipod/root_menu.c').read_text()
 nav_h=(R/'apps-ipod/input/agents_shortcut.h').read_text()
 nav_c=(R/'apps-ipod/input/agents_shortcut.c').read_text()
-nav_production=nav_c[nav_c.index('static unsigned int nav_live;'):nav_c.index('int agents_shortcut_button(')]
+nav_production=nav_c[nav_c.index('static bool cover_journey'):nav_c.index('int agents_shortcut_button(')]
 
 navpre='''
 #define GO_TO_PLUGIN 1
@@ -464,6 +464,9 @@ navpre='''
 static int agents_return, a_calls, w_calls;
 static bool wps_return_agents,wps_menu_covers,was_agents;
 static bool poweroff=true;
+static void album_covers_cancel_resume(void) {}
+static int cover_tracks_scrn(void *p) {(void)p;return GO_TO_PREVIOUS;}
+#define GO_TO_ALBUM_COVERS_TRACKS 111
 static int app_buffer_is_claimed(void){return 0;}
 static bool button_get_sw_poweroff_state(void) {return poweroff;}
 static void button_set_sw_poweroff_state(bool on) {poweroff=on;}
@@ -504,6 +507,9 @@ hookpre='''
 #define ACTIVITY_WPS 2
 #define ACTIVITY_ALBUMCOVERS 3
 #define TIMEOUT_NOBLOCK 0
+static int raw_ui_cancel(void) {return BUTTON_MENU;}
+bool ui_polling;
+void podlink_time_sync(void) {}
 struct agents_shortcut_state shortcut;
 static struct agents_cover_chord_state cover_chord;
 static bool shortcut_talking;
@@ -598,7 +604,8 @@ int main(void) {
       queued_button=BUTTON_MENU|BUTTON_REL;
       assert(action_poll_button(&last,&cur)&&!cur.button);assert(!cover_chord.latched);
       queued_button=held_button=BUTTON_SELECT|BUTTON_MENU;
-      assert(agents_shortcut_get_button(5)==REMOTE_COVERS_BUTTON);
+      assert(agents_shortcut_get_button(5)==BUTTON_MENU);
+      assert(agents_nav_take(AGENTS_NAV_COVERS));
       queued_button=BUTTON_MENU|BUTTON_SELECT|BUTTON_REL;held_button=0;
       assert(!agents_shortcut_get_button(5));
     }

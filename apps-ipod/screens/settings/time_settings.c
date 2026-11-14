@@ -67,6 +67,9 @@ static int timedate_set(void)
 
 MENUITEM_FUNCTION(time_set, 0, ID2P(LANG_SET_TIME),
                   timedate_set, NULL, Icon_NOICON);
+#ifdef HAVE_USB_PODLINK
+MENUITEM_SETTING(sync_computer_time, &global_settings.sync_time_from_computer, NULL);
+#endif
 MENUITEM_SETTING(timeformat, &global_settings.timeformat, NULL);
 
 static void draw_timedate(struct viewport *vp, struct screen *display)
@@ -160,6 +163,9 @@ static int time_menu_callback(int action,
 
 MAKE_MENU(time_menu, ID2P(LANG_TIME_MENU), time_menu_callback, Icon_NOICON,
           &time_set,
+#ifdef HAVE_USB_PODLINK
+          &sync_computer_time,
+#endif
           &timeformat);
 
 int time_screen(void* ignored)

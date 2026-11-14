@@ -892,3 +892,80 @@ shortcut controller is one loop over the destinations, not mutually recursive
 screen calls. V1 MENU uses the same safe WPS-owned carousel path. Existing
 cached Agents selection, silent music exits and explicit MENU USB consent
 remain. Software navigation state is bounded independently of input length.
+
+## Computer clock sync (Follow-up 19)
+
+HerdRemote sends a standalone PodLink TEXT payload:
+
+```text
+TS\t1\t2026-11-13T19:02:03\t-18000
+```
+
+The separators are literal TABs, with no terminal newline. Fields are `TS`,
+record version `1`, the host's local civil date/time (`YYYY-MM-DDTHH:MM:SS`),
+and signed UTC offset in seconds east of UTC. The offset is metadata; do not
+apply it to the civil fields again. The player's RTC stores local time.
+UTC offsets from -50400 to +50400 are accepted. Dates are restricted to
+2000..2037, including real calendar/leap-day checks, so the existing signed
+32-bit log/scrobble timestamps remain representable. Seconds are 0..59.
+Unknown versions and malformed records are ignored. Older firmware ignores
+`TS`; an older daemon sends none. No PodLink or HerdRemote version bump is
+required for this optional extension.
+
+The resident host session sends on open, every 600 monotonic seconds, when
+wall time minus monotonic time differs by more than 2 seconds from the last
+send, or when the host UTC offset changes. This covers NTP steps, timezone/DST
+changes and suspend on systems whose monotonic clock excludes suspend.
+On systems where monotonic includes suspend, the periodic deadline covers
+long suspends. Gradual slew accumulates against the last sent sample.
+No new process, service or privilege is needed.
+
+The resident player worker intercepts `TS` independently of the foreground
+Agents client. It keeps the newest record in a 64-byte mailbox and posts one
+redraw wakeup while that mailbox is pending. Disconnect/session invalidation
+clears it. The worker never accesses RTC. The UI consumes it after input
+waits (including raw UI readers), rejects records older than 5 seconds, and
+adds whole elapsed seconds to fresh records. The UI compares a fresh RTC read, bypassing the display clock cache.
+Only drift strictly greater than 2 seconds causes an RTC write; an invalid current RTC is corrected.
+**Settings > Time & Date > Sync time from computer** defaults to On. Off
+consumes and ignores incoming records; it does not disconnect PodLink.
+
+With Debug > Stream remote log over PodLink enabled, `LOG TIME` lines in
+`~/.local/state/podbox/remote-live.log` report `applied`, `ignored-off`,
+`ignored-invalid`, `ignored-stale`, `ignored-range`, `ignored-drift` or
+`ignored-rtc-error`, plus tick, signed drift, offset, record age and source
+record. Ticks, remote gesture timing and sleep deadlines do not change.
+With a valid previous date, debug-log expiry retains its remaining duration
+across an applied step. An invalid previous RTC starts a fresh expiry interval.
+Existing historical log/play timestamps are not rewritten. New play/log
+entries use the corrected local time; database last-played ordering uses
+its existing serial numbers. A backward civil-time correction can therefore
+produce a lower wall timestamp, without changing elapsed playback duration.
+
+Deploy the matching `herdremote.py` and `hrproto.py` together; the bridge and
+remaining host runtime files are unchanged. This build package retains the
+complete `.rockbox/tools/` tree.
+
+## Cover Flow navigation (Follow-up 19 X1/X2)
+
+A short native SELECT+MENU chord toggles Cover Flow from all UI screens,
+including menus, browsers, settings, dialogs and raw-input game/viewer screens.
+The UI-thread input filter consumes the chord and its releases; audio/decoder
+threads bypass it. Child/modal screens unwind and app-buffer owners release
+before the root dispatcher enters Cover Flow. Native SELECT+PLAY is unchanged.
+The hardware reset/DFU warning for a held SELECT+MENU chord still applies.
+
+Playing music from Cover Flow retains a logical return journey:
+origin -> Cover Flow -> selected album's track list -> Now Playing.
+MENU in that Now Playing returns to the track list, ahead of FU18's direct
+MENU-to-Cover-Flow rule. MENU in the list returns to Cover Flow with that album
+centered. Cover Flow's own exit returns to its origin. Direct Play Album and
+playing from the cover's context menu retain the same track-list return.
+Unrelated navigation clears this journey. Go to Artist retains its independent
+browser jump.
+
+The album identity/name/index are copied before carousel cleanup. The list
+and WPS are dispatched after the previous screen unwinds; no album buffer is
+held as history. Logical history has at most four levels (origin, carousel,
+list, WPS). Live registered screen depth remains at most two (WPS with one
+modal carousel); the album list has its own single-instance lifetime.

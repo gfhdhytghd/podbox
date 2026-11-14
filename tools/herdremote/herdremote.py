@@ -22,6 +22,7 @@ import signal
 import sys
 import threading
 import time
+import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import podlink  # noqa: E402  tools/podlink.py: the PodLink frame codec
@@ -124,6 +125,33 @@ class Answerer(threading.Thread):
         return False, "The pane did not change"
 
 
+CLOCK_SYNC_SECONDS = 600.0
+CLOCK_JUMP_SECONDS = 2.0
+
+
+class ClockSync:
+    """Monotonic schedule; wall/monotonic divergence also detects resume/steps."""
+    def __init__(self):
+        self.anchor = None
+        self.offset = None
+        self.next_sync = 0.0
+
+    def poll(self, send, mono=None, wall=None, offset=None):
+        mono = time.monotonic() if mono is None else mono
+        wall = time.time() if wall is None else wall
+        if offset is None:
+            offset = int(datetime.datetime.fromtimestamp(wall).astimezone().utcoffset().total_seconds())
+        anchor = wall - mono
+        if (self.anchor is not None and mono < self.next_sync and
+                abs(anchor - self.anchor) <= CLOCK_JUMP_SECONDS and offset == self.offset):
+            return False
+        local = datetime.datetime.fromtimestamp(wall).astimezone()
+        send(hrproto.clock(local))
+        self.anchor, self.offset = anchor, offset
+        self.next_sync = mono + CLOCK_SYNC_SECONDS
+        return True
+
+
 class Daemon:
     def __init__(self, args):
         self.args = args
@@ -162,6 +190,7 @@ class Daemon:
         self.reset_session()
 
     def reset_session(self):
+        self.clock_sync = ClockSync()
         self.session_generation = getattr(self, "session_generation", 0) + 1
         self.keys.reset()
         self.voice.stop()
@@ -398,6 +427,7 @@ class Daemon:
         log.info("PodLink session open on %s", device)
         self.reset_session()
         self.send(hrproto.hello(VERSION))
+        self.clock_sync.poll(self.send)
         return True
 
     def close_link(self):
@@ -634,6 +664,7 @@ class Daemon:
                 time.sleep(0.05)
                 continue
             try:
+                self.clock_sync.poll(self.send)
                 self.link.poll()
                 while self.link.frames:
                     frame = self.link.frames.popleft()

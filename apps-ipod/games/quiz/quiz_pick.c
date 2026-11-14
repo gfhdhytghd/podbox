@@ -37,6 +37,7 @@
 #include "system.h"
 #include "kernel.h"
 #include "cpu.h"                      /* cpu_boost */
+#include "input/agents_shortcut.h"
 #include "button.h"                   /* button_get */
 #include "system/shutdown.h"          /* default_event_handler */
 #include "system/app_buffer.h"
@@ -149,6 +150,9 @@ static bool stopping(void)
         return true;
 
     ev = button_get(false);
+#ifdef HAVE_USB_PODLINK
+    if (agents_nav_pending() != AGENTS_NAV_NONE) stop_event = BUTTON_MENU;
+#endif
     if (ev == SYS_USB_CONNECTED || ev == SYS_POWEROFF || ev == SYS_REBOOT)
         stop_event = ev;
     else if (ev & SYS_EVENT)

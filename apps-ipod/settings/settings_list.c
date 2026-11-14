@@ -987,6 +987,10 @@ const struct settings_list settings[] = {
                   "show background tasks", NULL),
     OFFON_SETTING(0, show_working, LANG_SHOW_WORKING, true,
                   "show working", NULL),
+#ifdef HAVE_USB_PODLINK
+    OFFON_SETTING(0, sync_time_from_computer, LANG_SYNC_COMPUTER_TIME, true,
+                  "sync time from computer", NULL),
+#endif
     CHOICE_SETTING(0, timeformat, LANG_TIMEFORMAT, 1,
         "time format", "24hour,12hour", NULL, 2,
         ID2P(LANG_24_HOUR_CLOCK), ID2P(LANG_12_HOUR_CLOCK)),

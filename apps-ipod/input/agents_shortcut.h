@@ -6,6 +6,7 @@
 #include "input/agents_remote.h"
 #define AGENTS_SHORTCUT_BUTTON (BUTTON_REDRAW | BUTTON_SELECT | BUTTON_PLAY)
 #ifdef HAVE_USB_PODLINK
+void agents_shortcut_init(void);
 int agents_shortcut_get_button(int timeout);
 void root_menu_agents_shortcut(void);
 void root_menu_wps_shortcut(void);
@@ -28,10 +29,16 @@ int agents_cover_chord_button(struct agents_cover_chord_state *s, int button,
 int agents_shortcut_button(struct agents_shortcut_state *s, int button,
                            int held, bool talking, bool *fire);
 void agents_shortcut_talking(bool talking);
+/* One logical Cover Flow -> album list -> WPS journey, with an origin. */
+void cover_nav_begin(int origin);
+int cover_nav_finish(void);
+bool cover_nav_active(void);
+bool cover_nav_playing(void);
+void cover_nav_set_playing(bool playing);
 /* Cooperative navigation: children cancel/unwind; only their owner opens
- * another screen after its cleanup. Three bits bound live screen instances. */
+ * another screen after its cleanup. One bit per screen bounds live instances. */
 enum agents_nav_screen { AGENTS_NAV_NONE, AGENTS_NAV_AGENTS, AGENTS_NAV_WPS,
-                         AGENTS_NAV_COVERS, AGENTS_NAV_BACK };
+                         AGENTS_NAV_COVERS, AGENTS_NAV_TRACKS, AGENTS_NAV_BACK };
 void agents_nav_request(enum agents_nav_screen screen, bool remote);
 enum agents_nav_screen agents_nav_pending(void);
 bool agents_nav_remote(void);

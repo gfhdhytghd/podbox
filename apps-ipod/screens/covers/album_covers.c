@@ -65,6 +65,7 @@
 #include "file.h"
 #include "widgets/yesno.h"            /* gui_syncyesno_run */
 #include "root_menu.h"
+#include "input/agents_shortcut.h"
 #include "screens/browse/browser.h"
 #include "screens/browse/browser_db.h"
 #include "screens/playback/track_info.h"          /* browse_id3 */
@@ -725,12 +726,39 @@ static bool reinit(void)
  * Playing does not happen here. It needs the app buffer to put the album in
  * order, and this screen is still holding a claim on it -- so the album is
  * recorded and album_covers() plays it once carousel_run() has returned. */
+static long tracks_album_seek, tracks_artist_seek;
+static char tracks_album_name[TAGCACHE_BUFSZ];
+static int tracks_album_index;
+static bool tracks_album_valid;
+
+bool album_covers_reopen_tracks(void)
+{
+    if (!tracks_album_valid) return false;
+    pf_resume_album_index = tracks_album_index;
+    pf_resume_last_album = true;
+    browser_db_enter_artist_album_tracks_on_next_load(tracks_album_seek,
+        tracks_artist_seek, tracks_album_name);
+    return true;
+}
+
+static void album_save_tracks(int index)
+{
+    char album[TAGCACHE_BUFSZ];
+    tracks_album_index = index;
+    tracks_album_seek = carousel_idx.album_index[index].seek;
+    tracks_artist_seek = carousel_idx.album_index[index].artist_seek;
+    strmemccpy(tracks_album_name, get_album_name(index, album, sizeof(album)),
+               sizeof(tracks_album_name));
+    tracks_album_valid = true;
+}
+
 static int album_enter(int index)
 {
     char album[TAGCACHE_BUFSZ];
     long album_seek = carousel_idx.album_index[index].seek;
 
     pf_cfg.last_album = index;
+    album_save_tracks(index);
 
     if (global_settings.album_covers_on_select == ON_SELECT_PLAY_ALBUM)
     {
@@ -963,6 +991,7 @@ int carousel_cover_menu(void)
  * carousel is down, and opens it again on this album after */
 static int album_on_context(int index)
 {
+    album_save_tracks(index);
     char album[TAGCACHE_BUFSZ];
 
     pf_cfg.last_album = index;
@@ -976,17 +1005,32 @@ static int album_on_context(int index)
 void album_covers_cancel_resume(void)
 {
     pf_resume_last_album = false;
+    tracks_album_valid = false;
 }
 
 int album_covers(const char *selected_file)
 {
-    return album_covers_return(selected_file, NULL);
+    int ret = album_covers_return(selected_file, NULL);
+    if (ret == GO_TO_PREVIOUS)
+    {
+        int origin = cover_nav_finish();
+        album_covers_cancel_resume();
+        return origin;
+    }
+    if (ret != GO_TO_ALBUM_COVERS_TRACKS &&
+        !(ret == GO_TO_WPS && cover_nav_playing()))
+    {
+        cover_nav_finish();
+        album_covers_cancel_resume();
+    }
+    return ret;
 }
 
 int album_covers_return(const char *selected_file, bool *remote_return)
 {
     int ret;
     if (remote_return) *remote_return = false;
+    if (!cover_nav_active()) cover_nav_begin(GO_TO_PREVIOUS);
 
     while (1)
     {
@@ -1000,7 +1044,10 @@ int album_covers_return(const char *selected_file, bool *remote_return)
          * call this directly, and would not know what to do with a sentinel
          * escaping to them. The context menu is here for the same reason. */
         if (ret == CAROUSEL_PLAY_ALBUM)
+        {
             ret = db_summary_play_pending() > 0 ? GO_TO_WPS : GO_TO_PREVIOUS;
+            if (ret == GO_TO_WPS) cover_nav_set_playing(true);
+        }
         if (ret != CAROUSEL_CONTEXT)
             break;
 
@@ -1008,7 +1055,11 @@ int album_covers_return(const char *selected_file, bool *remote_return)
         if (ret != GO_TO_PREVIOUS)
         {
             /* Back from Go to Artist's albums comes back to this album */
-            if (ret != GO_TO_ALBUM_COVERS_TRACKS)
+            if (ret == GO_TO_WPS)
+                cover_nav_set_playing(true);
+            else if (ret == GO_TO_ALBUM_COVERS_TRACKS)
+                cover_nav_finish(); /* Go to Artist keeps its own browser jump. */
+            else
                 album_covers_cancel_resume();
             break;
         }

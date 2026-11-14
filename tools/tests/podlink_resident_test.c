@@ -15,6 +15,8 @@
 #undef podlink_poll
 #undef podlink_wait
 static void sleep(int ticks) { current_tick += ticks; }
+static int clock_wakes;
+void button_queue_post(long id, intptr_t data) { assert(id == 0x20000000 && !data); clock_wakes++; }
 #include "../../firmware/usbstack/podlink_service.c"
 #include "herdremote_model.h"
 
@@ -58,6 +60,35 @@ int main(void)
     mutex_lock(&service_mutex);mutex_lock(&serial_mtx);
     assert(podlink_host_connected());
     mutex_unlock(&serial_mtx);mutex_unlock(&service_mutex);
+    char clock_record[PODLINK_TIME_RECORD];unsigned long clock_tick;
+    assert(!podlink_take_time(clock_record,&clock_tick));
+    const char *stamp="TS\t1\t2026-11-13T19:02:03\t-18000";
+    for(int fg=0;fg<3;fg++) {
+        if(fg==1)assert(podlink_open_agents(background));
+        if(fg==2)assert(podlink_open());
+        int wake=clock_wakes;input_frame(PODLINK_TEXT,11+fg,stamp,strlen(stamp));work();
+        assert(clock_wakes==wake+1&&podlink_take_time(clock_record,&clock_tick));
+        assert(!strcmp(clock_record,stamp)&&!podlink_take_time(clock_record,&clock_tick));
+        podlink_close();work();
+    }
+    assert(podlink_open());
+    input_frame(PODLINK_TEXT,14,stamp,strlen(stamp));work();
+    for(int i=0;i<20;i++){input_frame(PODLINK_TEXT,14,"ignored",7);work();}
+    assert(podlink_take_time(clock_record,&clock_tick)&&!strcmp(clock_record,stamp));
+    podlink_close();work();
+    int wakes=clock_wakes;
+    input_frame(PODLINK_TEXT,15,stamp,strlen(stamp));work();
+    const char *newer="TS\t1\t2026-11-13T19:03:03\t-18000";
+    input_frame(PODLINK_TEXT,16,newer,strlen(newer));work();
+    assert(clock_wakes==wakes+1&&podlink_take_time(clock_record,&clock_tick));
+    assert(!strcmp(clock_record,newer));
+    char oversized[80];memset(oversized,'x',sizeof(oversized));memcpy(oversized,"TS\t",3);
+    input_frame(PODLINK_TEXT,16,oversized,sizeof(oversized));work();
+    assert(podlink_take_time(clock_record,&clock_tick)&&!clock_record[0]);
+    input_frame(PODLINK_TEXT,16,"TS\t1\0bad",8);work();
+    assert(podlink_take_time(clock_record,&clock_tick)&&!clock_record[0]);
+    input_frame(PODLINK_TEXT,17,stamp,strlen(stamp));work();assert(time_pending);
+    invalidate();assert(!podlink_take_time(clock_record,&clock_tick));
     uint32_t revision=podlink_session_revision();
     input_frame(PODLINK_TEXT,2,"HR\t1\thost",9);work();
     assert(podlink_open_agents(background));work();

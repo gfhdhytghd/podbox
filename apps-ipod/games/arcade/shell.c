@@ -30,6 +30,7 @@
 #include "lcd.h"
 #include "font.h"
 #include "button.h"
+#include "input/agents_shortcut.h"
 #include "input/remote_menu.h"
 #include "backlight.h"
 #include "powermgmt.h"        /* reset_poweroff_timer */
@@ -923,6 +924,9 @@ static int host_frame(void *ctx, unsigned *held, int *wheel)
         dialog_touched = current_tick;
         shell_scores_run(false);
     }
+#ifdef HAVE_USB_PODLINK
+    if (agents_nav_pending() != AGENTS_NAV_NONE) { dialog_to_root = true; return 0; }
+#endif
     if (dialog_to_root)
         return 0;
     if (!screen_held) {
@@ -1199,6 +1203,9 @@ static int hold_pause(struct vm *vm, bool idle)
     hold_backlight(false);
     while (r == PLAYING && (idle || button_hold())) {
         long b = button_get_w_tmo(HZ / 10);
+#ifdef HAVE_USB_PODLINK
+        if (agents_nav_pending() != AGENTS_NAV_NONE) { r = QUIT; break; }
+#endif
         if (b & SYS_EVENT)
             r = event(vm, b);
         else if (b & BUTTON_MULTIMEDIA)
@@ -1219,6 +1226,9 @@ static int drain(struct vm *vm, bool *menu_pressed)
 {
     long b;
     while ((b = button_get(false)) != BUTTON_NONE) {
+#ifdef HAVE_USB_PODLINK
+        if (agents_nav_pending() != AGENTS_NAV_NONE) return QUIT;
+#endif
         if (b & SYS_EVENT) {
             int r = event(vm, b);
             if (r != PLAYING)
@@ -1323,6 +1333,9 @@ static int run(const char *path, void *mem, size_t size)
         }
         if (TIME_BEFORE(now, due)) {
             long b = button_get_w_tmo(due - now);
+#ifdef HAVE_USB_PODLINK
+            if (agents_nav_pending() != AGENTS_NAV_NONE) { status = QUIT; break; }
+#endif
             if (b & SYS_EVENT) {
                 status = event(vm, b);
                 continue;

@@ -82,6 +82,7 @@ int album_covers_return(const char *selected_file, bool *remote_return);
  * back at the carousel: the signal outranks the playing track on the next
  * open, so left standing it lands the carousel on a stale album. */
 void album_covers_cancel_resume(void);
+bool album_covers_reopen_tracks(void);
 
 /* The same carousel over the album-artist list, showing artist photos
  * (<artist>/folder.jpg). Selecting an artist opens that album-artist's album
