@@ -95,6 +95,7 @@
 #include "skin/statusbar_skinned.h"
 #include "widgets/splash.h"
 #include "widgets/dialog.h"
+#include "settings/settings.h"
 #include "system/shutdown.h"
 #include "system/activity.h"
 #include "speech/talk.h"
@@ -1663,7 +1664,169 @@ static void draw_confirm(struct gui_synclist *list)
     d->set_viewport(NULL);
 }
 
-/* The question overlay is a view of Agents, never a nested screen. */
+/* The question overlay is a view of Agents, never a nested screen. It is
+ * drawn over the whole display: an amber rule and the asking agent at the
+ * top, the question below, and at the bottom what can be chosen -- the
+ * first options, or two big buttons for a yes/no -- over a band naming
+ * the keys. Text goes on in DRMODE_FG so the chips and buttons show
+ * through it. */
+#define Q_MARGIN    12
+#define Q_BAR       26      /* the key band at the bottom */
+#define Q_HEAD      40      /* where the question starts */
+#define Q_AMBER     USE_WARN
+#define Q_YES       DET_ACCENT
+#define Q_NO        USE_FULL
+#define Q_FAINT     LCD_RGBPACK(90, 90, 90)
+#define Q_BAND      LCD_RGBPACK(38, 38, 38)
+#define Q_CHIP      LCD_RGBPACK(70, 52, 20)
+#define Q_PREVIEW   3       /* options shown on the alert */
+
+static void draw_mic(struct screen *d, int x, int y, unsigned colour);
+
+/* The rule, a dot and the agent in bold, with where it is on the right */
+static int q_header(struct screen *d, struct viewport *vp)
+{
+    char where[48], name[48];
+    d->set_foreground(Q_AMBER);
+    d->fillrect(0, 0, vp->width, 3);
+    d->fillrect(Q_MARGIN + 1, 13, 5, 7);
+    d->fillrect(Q_MARGIN, 14, 7, 5);
+    fit(where, sizeof where, question_tab, 120);
+    int ww = text_w(d, where);
+    text_at(d, vp->width - Q_MARGIN - ww, 7, USE_DIM, where);
+    int bold = font_get_ui_bold();
+    if (bold >= 0)
+        vp->font = bold;
+    /* fit() measures in FONT_UI; the bold face is a little wider */
+    fit(name, sizeof name, question_agent,
+        vp->width - 2 * Q_MARGIN - 14 - ww - 18);
+    text_at(d, Q_MARGIN + 14, 7, USE_TEXT, name);
+    vp->font = FONT_UI;
+    d->set_foreground(Q_FAINT);
+    d->hline(Q_MARGIN, vp->width - Q_MARGIN - 1, 32);
+    return Q_HEAD;
+}
+
+/* The key band: each key in amber and what it does, the pairs spread over
+ * the width */
+static void q_keys(struct screen *d, struct viewport *vp, int n,
+                   const char *const *keys)
+{
+    int y = vp->height - Q_BAR, cell = vp->width / n;
+    d->set_foreground(Q_BAND);
+    d->fillrect(0, y, vp->width, Q_BAR);
+    for (int i = 0; i < n; i++)
+    {
+        const char *key = keys[2 * i], *what = keys[2 * i + 1];
+        int kw = text_w(d, key);
+        int x = i * cell + (cell - kw - 6 - text_w(d, what)) / 2;
+        text_at(d, x, y + 3, Q_AMBER, key);
+        text_at(d, x + kw + 6, y + 3, USE_SOFT, what);
+    }
+}
+
+/* The question from y down to bottom. A short first line -- Claude's
+ * header -- becomes a chip; the rest wraps, with an ellipsis on the last
+ * line that fits when there is more. */
+static int q_body(struct screen *d, struct viewport *vp, int y, int bottom)
+{
+    const struct hr_question *q = current_question();
+    const char *text = question_line;
+    int width = vp->width - 2 * Q_MARGIN;
+    if (q)
+    {
+        join_question(q);
+        text = question_text;
+        if (q->nlines > 1 && text_px(q->lines[0]) < width * 3 / 5)
+        {
+            int cw = text_px(q->lines[0]) + 12;
+            d->set_foreground(Q_CHIP);
+            d->fillrect(Q_MARGIN, y, cw, USE_LINE + 1);
+            text_at(d, Q_MARGIN + 6, y + 1, Q_AMBER, q->lines[0]);
+            y += USE_LINE + 7;
+            text = question_text + strlen(q->lines[0]);
+            while (*text == '\n' || *text == ' ')
+                text++;
+        }
+    }
+    struct dialog_text_line wrapped[8];
+    char line[200];
+    int n = dialog_wrap_text(text, width, FONT_UI, wrapped, 8);
+    int room = MAX(1, (bottom - y) / USE_LINE);
+    for (int i = 0; i < n && i < room; i++, y += USE_LINE)
+    {
+        int len = MIN(wrapped[i].len, (int)sizeof line - 4);
+        memcpy(line, wrapped[i].str, len);
+        line[len] = '\0';
+        if (len && line[len - 1] == '\n')
+            line[len - 1] = '\0';
+        if (i == room - 1 && i < n - 1)
+        {
+            strcat(line, "…");
+            fit(line, sizeof line, line, width);
+        }
+        text_at(d, Q_MARGIN, y, USE_TEXT, line);
+    }
+    return y;
+}
+
+/* Two buttons, LEFT for the yes, RIGHT for the no, each with its arrow */
+static void q_buttons(struct screen *d, struct viewport *vp,
+                      const struct hr_question *q, int y, int h)
+{
+    int bw = (vp->width - 2 * Q_MARGIN - 10) / 2;
+    for (int i = 0; i < 2; i++)
+    {
+        int x = Q_MARGIN + i * (bw + 10), num = i ? q->no : q->yes;
+        unsigned c = i ? Q_NO : Q_YES;
+        char label[96], cut[96];
+        bool ticked;
+        snprintf(label, sizeof label, "%s", i ? "No" : "Yes");
+        for (int k = 0; num > 0 && k < q->noptions; k++)
+            if (q->options[k].number == num)
+                option_parts(&q->options[k], &ticked, label, sizeof label);
+        d->set_foreground(i ? LCD_RGBPACK(51, 22, 22) : LCD_RGBPACK(28, 44, 30));
+        d->fillrect(x, y, bw, h);
+        d->set_foreground(c);
+        d->drawrect(x, y, bw, h);
+        const char *arrow = i ? "▶" : "◀";
+        int aw = text_w(d, arrow);
+        fit(cut, sizeof cut, label, bw - aw - 22);
+        int tw = text_w(d, cut), x0 = x + (bw - aw - 6 - tw) / 2;
+        int ty = y + (h - USE_LINE) / 2 + 2;
+        text_at(d, i ? x0 + tw + 6 : x0, ty, c, arrow);
+        text_at(d, i ? x0 : x0 + aw + 6, ty, USE_TEXT, cut);
+    }
+}
+
+/* The first options, numbered in boxes, the last saying how many more */
+static void q_preview(struct screen *d, struct viewport *vp,
+                      const struct hr_question *q, int y, int shown)
+{
+    for (int i = 0; i < shown; i++, y += USE_LINE)
+    {
+        const struct hr_option *o = &q->options[i];
+        char label[96], more[8] = "", num[4], cut[128];
+        bool ticked;
+        const char *detail = option_parts(o, &ticked, label, sizeof label);
+        if (detail)
+            snprintf(cut, sizeof cut, "%s — %s", label, detail);
+        else
+            snprintf(cut, sizeof cut, "%s", label);
+        if (i == shown - 1 && q->noptions > shown)
+            snprintf(more, sizeof more, "+%d", q->noptions - shown);
+        int mw = more[0] ? text_w(d, more) + 8 : 0;
+        snprintf(num, sizeof num, "%d", o->number % 100);
+        d->set_foreground(Q_FAINT);
+        d->drawrect(Q_MARGIN, y + 2, 17, 17);
+        text_at(d, Q_MARGIN + (17 - text_w(d, num)) / 2 + 1, y, USE_DIM, num);
+        fit(cut, sizeof cut, cut, vp->width - 2 * Q_MARGIN - 25 - mw);
+        text_at(d, Q_MARGIN + 25, y, USE_SOFT, cut);
+        if (more[0])
+            text_at(d, vp->width - Q_MARGIN - mw + 8, y, Q_FAINT, more);
+    }
+}
+
 static void draw_question_overlay(void)
 {
     struct screen *d = &screens[SCREEN_MAIN];
@@ -1672,46 +1835,64 @@ static void draw_question_overlay(void)
     viewport_set_fullscreen(&full, SCREEN_MAIN);
     full.font = FONT_UI;
     d->set_viewport(&full);
+    d->set_background(LCD_BLACK);
     d->clear_viewport();
-    int y = 8;
-    text_at(d, 6, y, USE_TEXT, question_agent); y += USE_LINE + 4;
-    text_at(d, 6, y, USE_DIM, question_tab); y += USE_LINE + 8;
+    d->set_drawmode(DRMODE_FG);
+    int y = q_header(d, &full);
+    int bar = full.height - Q_BAR;
+    const struct hr_question *q = current_question();
     if (view == VIEW_INPUT)
     {
-        text_at(d, 6, y, USE_TEXT, detail_ready ? "Custom answer" : "Focusing input...");
-        y += USE_LINE + 4;
-        if (model.detail_valid && !strcmp(model.detail_pane, question_pane))
-            draw_input(d, &full, y, false);
-        y = full.height - 3 * USE_LINE;
-        text_at(d, 6, y, USE_DIM, "Hold PLAY: dictate · LEFT: delete");
-        text_at(d, 6, y + USE_LINE, USE_TEXT, "SELECT: send · MENU: cancel");
+        static const char *const keys[] = { "SELECT", "Send", "MENU", "Cancel" };
+        char line[124];
+        text_at(d, Q_MARGIN, y, USE_DIM,
+                fit(line, sizeof line, q && q->nlines ? q->lines[q->nlines - 1]
+                                                      : question_line,
+                    full.width - 2 * Q_MARGIN));
+        y += USE_LINE + 6;
+        struct viewport box = full;
+        box.x = Q_MARGIN;
+        box.width = full.width - 2 * Q_MARGIN;
+        if (!detail_ready)
+            text_at(d, Q_MARGIN, y, USE_DIM, "Opening the input…");
+        else if (model.detail_valid && !strcmp(model.detail_pane, question_pane))
+        {
+            d->set_viewport(&box);
+            if (!model.detail.input[0])
+                text_at(d, INPUT_PAD + 1, y + INPUT_PAD, Q_FAINT,
+                        "Hold PLAY and speak");
+            draw_input(d, &box, y, false);
+            d->set_viewport(&full);
+            d->set_drawmode(DRMODE_FG);
+        }
+        int ky = bar - USE_LINE - 6;
+        draw_mic(d, Q_MARGIN, ky + 2, talk_held ? Q_AMBER : USE_DIM);
+        text_at(d, Q_MARGIN + 18, ky, USE_DIM, "Hold PLAY: speak · LEFT: delete");
+        q_keys(d, &full, 2, keys);
+    }
+    else if (q && q->yes && q->no)
+    {
+        static const char *const alert_keys[] = { "SELECT", "All options", "MENU", "Ignore" };
+        static const char *const page_keys[] = { "MENU", "Back" };
+        int bh = 46, by = bar - bh - 10;
+        q_body(d, &full, y, by - 6);
+        q_buttons(d, &full, q, by, bh);
+        if (view == VIEW_ALERT)
+            q_keys(d, &full, 2, alert_keys);
+        else
+            q_keys(d, &full, 1, page_keys);
     }
     else
     {
-        struct dialog_text_line wrapped[8];
-        char line[200];
-        int n = dialog_wrap_text(question_line, full.width - 12, FONT_UI,
-                                 wrapped, 8);
-        for (int i = 0; i < n && y < full.height - 4 * USE_LINE; i++, y += USE_LINE)
-        {
-            int len = MIN(wrapped[i].len, (int)sizeof line - 1);
-            memcpy(line, wrapped[i].str, len);
-            line[len] = '\0';
-            text_at(d, 6, y, USE_TEXT, line);
-        }
-        const struct hr_question *q = current_question();
-        y = full.height - 4 * USE_LINE;
-        if (q && q->yes && q->no)
-        {
-            d->set_foreground(USE_DIM);
-            d->drawrect(4, y, full.width / 2 - 6, 2 * USE_LINE);
-            d->drawrect(full.width / 2 + 2, y, full.width / 2 - 6, 2 * USE_LINE);
-            text_at(d, 10, y + USE_LINE / 2, USE_TEXT, "LEFT: Yes");
-            text_at(d, full.width / 2 + 8, y + USE_LINE / 2, USE_TEXT, "RIGHT: No");
-        }
-        text_at(d, 6, full.height - USE_LINE - 4, USE_DIM,
-                view == VIEW_ALERT ? "SELECT: options · MENU: ignore" : "LEFT: Yes · RIGHT: No · MENU: back");
+        static const char *const keys[] = { "SELECT", "Answer", "MENU", "Ignore" };
+        int shown = q ? MIN(q->noptions, Q_PREVIEW) : 0;
+        int oy = bar - 6 - shown * USE_LINE;
+        q_body(d, &full, y, oy - 6);
+        if (shown)
+            q_preview(d, &full, q, oy, shown);
+        q_keys(d, &full, 2, keys);
     }
+    d->set_drawmode(DRMODE_SOLID);
     d->update_viewport();
     d->set_viewport(NULL);
 }

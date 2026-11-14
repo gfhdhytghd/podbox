@@ -55,6 +55,15 @@ static char last_name[16],last_args[64];
 #define USE_LINE 14
 #define USE_TEXT 1
 #define USE_DIM 2
+#define USE_SOFT 3
+#define USE_WARN 4
+#define USE_FULL 5
+#define DET_ACCENT 6
+#define LCD_RGBPACK(r,g,b) ((r)<<16|(g)<<8|(b))
+#define LCD_BLACK 0
+#define DRMODE_FG 1
+#define INPUT_PAD 3
+#define MAX(a,b) ((a)>(b)?(a):(b))
 #define MIN(a,b) ((a)<(b)?(a):(b))
 #include <stddef.h>
 #define LCDFN(x) x
@@ -69,16 +78,24 @@ static struct viewport default_vp;
 INIT_VIEWPORT
 static void set_default_align_flags(struct viewport*v){v->flags=0;}
 static int getuifont(void){return FONT_UI;}
-struct screen {void (*set_viewport)(struct viewport*);void (*clear_viewport)(void);void (*set_foreground)(int);void (*drawrect)(int,int,int,int);void (*update_viewport)(void);struct viewport *(*init_viewport)(struct viewport*);int lcdwidth,lcdheight;int (*getuifont)(void);};
+struct screen {void (*set_viewport)(struct viewport*);void (*clear_viewport)(void);void (*set_foreground)(int);void (*drawrect)(int,int,int,int);void (*update_viewport)(void);struct viewport *(*init_viewport)(struct viewport*);int lcdwidth,lcdheight;int (*getuifont)(void);void (*set_background)(int);void (*set_drawmode)(int);void (*fillrect)(int,int,int,int);void (*hline)(int,int,int);};
 static int full_clears,input_draws,texts,yes_draws,no_draws;
-static void setvp(struct viewport*v){if(v)assert(v->width==320&&v->height==240);}
+static void setvp(struct viewport*v){if(v)assert(v->x>=0&&v->x+v->width<=320&&v->height==240);}
 static void clearvp(void){full_clears++;}
 static void colour(int c){(void)c;}
 static void rect(int x,int y,int w,int h){assert(x>=0&&y>=0&&x+w<=320&&y+h<=240);}
 static void update(void){}
-static struct screen screens[]={{setvp,clearvp,colour,rect,update,init_viewport,320,240,getuifont}};
+static void mode(int m){(void)m;}
+static void hline(int a,int b,int y){assert(a>=0&&b<320&&a<=b&&y>=0&&y<240);}
+static struct screen screens[]={{setvp,clearvp,colour,rect,update,init_viewport,320,240,getuifont,colour,mode,rect,hline}};
 FULLSCREEN
-static void text_at(struct screen*d,int x,int y,int colour,const char*t){(void)d;(void)colour;assert(x>=0&&x<320&&y>=0&&y+USE_LINE<=240);texts++;yes_draws+=strstr(t,"LEFT: Yes")!=NULL;no_draws+=strstr(t,"RIGHT: No")!=NULL;}
+static void text_at(struct screen*d,int x,int y,int colour,const char*t){(void)d;(void)colour;assert(x>=0&&x<320&&y>=0&&y+USE_LINE<=240);texts++;yes_draws+=strstr(t,"\u25c0")!=NULL;no_draws+=strstr(t,"\u25b6")!=NULL;}
+static int text_px(const char*t){int n=0;for(;*t;t++)n+=((*t&0xc0)!=0x80)*((unsigned char)*t>=0xe0?14:7);return n;}
+static int text_w(struct screen*d,const char*t){(void)d;return text_px(t);}
+static int font_get_ui_bold(void){return FONT_UI;}
+static void draw_mic(struct screen*d,int x,int y,unsigned c){(void)d;(void)c;assert(x>=0&&y>=0&&x+11<=320&&y+17<=240);}
+static char question_text[HR_MAX_LINES*124+HR_MAX_LINES];
+
 struct dialog_text_line {const char*str;int len;};
 typedef unsigned short ucschar_t;
 struct font {int unused;};
@@ -90,6 +107,8 @@ static int font_get_width(struct font *pf,ucschar_t ch){(void)pf;return ch>=0x30
 UTF8_DECODE
 WRAP_FUNCTIONS
 DIALOG_WRAP
+Q_MACROS
+PROD_HELPERS
 
 static int draw_input(struct screen*d,struct viewport*v,int y,bool dim){(void)d;(void)v;(void)dim;assert(y<240-3*USE_LINE);input_draws++;return y+3*USE_LINE;}
 
@@ -111,8 +130,10 @@ pre=pre.replace('FULLSCREEN',function('viewport_set_fullscreen',(S/'apps-ipod/dr
 pre=pre.replace('UTF8_DECODE',function('utf8decode',(S/'firmware/common/unicode.c').read_text()))
 w=(S/'apps-ipod/draw/text_wrap.c').read_text()
 pre=pre.replace('WRAP_FUNCTIONS','\n'.join(function(n,w) for n in ['is_punct_break','wrap_next','text_wrap_next']))
+pre=pre.replace('Q_MACROS','\n'.join(l for l in s.splitlines() if l.startswith('#define Q_')))
+pre=pre.replace('PROD_HELPERS','\n'.join(function(n) for n in ['fit','option_parts','join_question']))
 pre=pre.replace('DIALOG_WRAP',function('dialog_wrap_text',(S/'apps-ipod/widgets/dialog.c').read_text()))
-code=pre+'\n'.join(function(n) for n in ['background_link','current_question','question_binary_page','draw_question_overlay','open_question','leave_question','pop_question','enter_answer','answer_number','close_input','question_action'])
+code=pre+'\n'.join(function(n) for n in ['background_link','current_question','question_binary_page','q_header','q_keys','q_body','q_buttons','q_preview','draw_question_overlay','open_question','leave_question','pop_question','enter_answer','answer_number','close_input','question_action'])
 code+=r'''
 static void reset(void){memset(&model,0,sizeof model);memset(&popped,0,sizeof popped);view=VIEW_AGENTS;question_id[0]=question_pane[0]=pending_req[0]=focus_req[0]=talk_req[0]=detail_pane[0]=0;talk_held=false;focused=sent=wakes=keys=voices=discarded=0;status=raw=0;
 const char*q="Q\tid\tp1\tw1\t-\tAgent\t1\t-1\tTask\n?\tRun command?\no\t1\tYes\t-\no\t2\tAlways allow\t-\no\t3\tNo, and tell Codex differently\tc";assert(hr_model_apply(&model,q,strlen(q))=='Q');}
