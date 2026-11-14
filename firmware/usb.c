@@ -231,7 +231,7 @@ static bool usb_car_no_audio = false;
 #endif
 static bool usb_host_present = false;
 /* The host ejected the disk and it is back with the player, which goes on
- * charging; it is not handed over again until the cable is replugged. */
+ * charging. Only a replug or a new explicit disk choice re-arms storage. */
 static bool usb_disk_ejected = false;
 /* The host probe owns the controller: cable events are not acted on. */
 static bool usb_host_probe_on = false;
@@ -1032,6 +1032,10 @@ static void NORETURN_ATTR usb_thread(void)
                 break;
             if (ev.id == USB_CONFIRM_CONNECT)
             {
+                /* A new, explicit choice supersedes a host eject on this
+                 * cable. Otherwise the storage gate silently refuses the
+                 * re-asked SELECT and never broadcasts SYS_USB_CONNECTED. */
+                usb_disk_ejected = false;
 #ifdef HAVE_USB_PODLINK
                 podlink_requested = false;
 #endif

@@ -33,6 +33,7 @@ static struct usb_consent usb_consent;
 static struct timeout usb_confirm_tmo;
 static struct event_queue usb_queue;
 static bool usb_confirm_has_config, usb_host_present, cable, car, serial_iap;
+static bool usb_disk_ejected;
 static int prompts, detach_count, attach_count, normal_profiles;
 static int usb_detect(void) { return cable ? USB_INSERTED : USB_EXTRACTED; }
 bool iap_accessory_present(void) { return serial_iap; }

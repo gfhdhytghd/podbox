@@ -29,6 +29,14 @@ static void st16(uint8_t *p, unsigned int v) { p[0] = v; p[1] = v >> 8; }
 static uint32_t crc(const void *p, unsigned int n)
 { return podlink_crc32(p, n); }
 
+/* Yield between disk steps, then let the owner return to its USB queue.
+ * Never ACK here: the caller must unwind before closing its descriptors. */
+static bool checkpoint(struct cider_store *cs)
+{
+    if (cs->io->yield) cs->io->yield();
+    return cs->cancelled && cs->cancelled();
+}
+
 unsigned int cs_payload_size(unsigned int tier)
 {
     static const unsigned int dim[CS_TIERS] = {240, 128, 56, 32};
@@ -346,13 +354,17 @@ static bool table_create(struct cider_store *cs, uint8_t *buf,
     memset(buf, 0, CS_SECTOR);
     st32(buf, HEADER_MAGIC); st32(buf + 4, 1); st32(buf + 8, CS_BUCKETS);
     st32(buf + 12, seed ? seed : 1); st32(buf + 16, 0);
+    st32(buf + 20, 1);             /* incomplete until load/rebuild finishes */
     st32(buf + 508, crc(buf, 508));
     if (!write_at(cs, fd, 0, buf, CS_SECTOR)) return false;
     empty_bucket(buf);
     for (unsigned int i = 1; i < CS_SCAN_BUCKETS; i++)
         memcpy(buf + i * CS_SECTOR, buf, CS_SECTOR);
     for (unsigned int b = 0; b < CS_BUCKETS; b += CS_SCAN_BUCKETS)
+    {
+        if (checkpoint(cs)) return false;
         if (!write_at(cs, fd, (1 + b) * CS_SECTOR, buf, per)) return false;
+    }
     cs->epoch = seed ? seed : 1;
     return cs->io->sync(fd) >= 0;
 }
@@ -363,6 +375,7 @@ static bool header_write(struct cider_store *cs)
     memset(h, 0, CS_SECTOR);
     st32(h, HEADER_MAGIC); st32(h + 4, 1); st32(h + 8, CS_BUCKETS);
     st32(h + 12, cs->epoch); st32(h + 16, cs->session);
+    st32(h + 20, cs->rebuild);
     st32(h + 508, crc(h, 508));
     return write_at(cs, index_fd(cs), 0, h, CS_SECTOR);
 }
@@ -412,6 +425,7 @@ int cs_load(struct cider_store *cs, uint8_t *buf, unsigned int size,
     uint32_t maxs = 0;
     for (unsigned int i = 0; i < CS_PACKS; i++)
     {
+        if (checkpoint(cs)) return CS_BUSY;
         int n = cs->io->fsize(pack_path(cs, i));
         if (n < 0) continue;
         cs->pack[i].exists = true; cs->pack[i].size = n;
@@ -425,6 +439,7 @@ int cs_load(struct cider_store *cs, uint8_t *buf, unsigned int size,
     if (isz == (int)((1 + CS_BUCKETS) * CS_SECTOR) &&
         read_at(cs, index_fd(cs), 0, h, CS_SECTOR) &&
         le32(h) == HEADER_MAGIC && le32(h + 8) == CS_BUCKETS &&
+        le32(h + 20) == 0 &&
         le32(h + 508) == crc(h, 508))
     {
         cs->epoch = le32(h + 12); cs->session = le32(h + 16);
@@ -442,6 +457,7 @@ int cs_load(struct cider_store *cs, uint8_t *buf, unsigned int size,
     if (!fresh)
         for (unsigned int b = 0; b < CS_BUCKETS && !bad; b += CS_SCAN_BUCKETS)
         {
+            if (checkpoint(cs)) return CS_BUSY;
             if (!read_at(cs, cs->ifd, (1 + b) * CS_SECTOR, buf,
                          CS_SCAN_BUCKETS * CS_SECTOR)) { bad++; break; }
             for (unsigned int j = 0; j < CS_SCAN_BUCKETS; j++)
@@ -452,7 +468,6 @@ int cs_load(struct cider_store *cs, uint8_t *buf, unsigned int size,
                     if (slot_valid(slot(bk, i)))
                         account(cs, slot(bk, i), 1);
             }
-            if (cs->io->yield) cs->io->yield();
         }
     if (bad)
     {   /* Torn or unreadable table: the packs are the journal. */
@@ -467,6 +482,10 @@ int cs_load(struct cider_store *cs, uint8_t *buf, unsigned int size,
         rebuild_begin(cs);
     }
     else if (fresh && packs) rebuild_begin(cs);
+    /* A partial rebuild has valid bucket CRCs too. Persist that it is
+     * incomplete, so USB unload/reload cannot mistake it for a full index.
+     * The pack journal remains authoritative throughout the interruption. */
+    if (cs->rebuild && !header_write(cs)) return CS_ERR;
     /* Append target: the newest pack that still has room. */
     for (unsigned int i = 0; i < CS_PACKS; i++)
         if (cs->pack[i].exists && cs->pack[i].size % CS_SECTOR == 0 &&
@@ -621,6 +640,7 @@ int cs_list(struct cider_store *cs, unsigned int cursor, struct cs_item *out,
     if (size < CS_SECTOR || !max) return CS_BAD;
     for (; b < CS_BUCKETS; b++, i = 0)
     {
+        if (checkpoint(cs)) { *count = 0; return CS_BUSY; }
         if (!read_at(cs, index_fd(cs), (1 + b) * CS_SECTOR, buf, CS_SECTOR) ||
             !sealed(buf)) return CS_ERR;
         for (; i < CS_SLOTS; i++)
@@ -683,7 +703,15 @@ static bool step_rebuild(struct cider_store *cs, uint8_t *buf)
 {
     for (unsigned int n = 0; n < 8; n++)
     {
-        if (cs->order_at >= cs->order_n) { cs->rebuild = false; return false; }
+        if (checkpoint(cs)) return true;
+        if (cs->order_at >= cs->order_n)
+        {
+            /* Make every rebuilt bucket durable before clearing the marker. */
+            if (cs->io->sync(index_fd(cs)) < 0) return true;
+            cs->rebuild = false;
+            if (!header_write(cs)) cs->rebuild = true;
+            return cs->rebuild;
+        }
         unsigned int p = cs->order[cs->order_at];
         uint32_t off = cs->rebuild_off;
         int fd = pack_fd(cs, p);
@@ -706,6 +734,7 @@ static bool step_compact(struct cider_store *cs, uint8_t *buf, unsigned int size
     int p = cs->compact;
     for (unsigned int n = 0; n < 4; n++)
     {
+        if (checkpoint(cs)) return true;
         uint32_t off = cs->compact_off;
         if (off >= cs->pack[p].size) goto done;
         if (!read_at(cs, pack_fd(cs, p), off, buf, CS_SECTOR) ||
@@ -747,6 +776,7 @@ bool cs_maintain(struct cider_store *cs, uint8_t *buf, unsigned int size,
                  bool allow_compact)
 {
     if (!cs->loaded) return false;
+    if (checkpoint(cs)) return cs_busy(cs) || cs->compact >= 0;
     if (cs->rebuild) return step_rebuild(cs, buf);
     if (cs->evict >= 0) return step_evict(cs, buf);
     if (cs->compact >= 0) return allow_compact && step_compact(cs, buf, size);

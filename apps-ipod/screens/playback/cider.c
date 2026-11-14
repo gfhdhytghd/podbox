@@ -353,6 +353,14 @@ static unsigned int next(char *record, unsigned int size)
 
 /* ---- iPod-local store plumbing. Callers hold cider_mutex unless noted. ---- */
 
+/* Inspect, do not consume: only the worker's outer loop may ACK and park.
+ * Search past art wakeups so a queued USB event takes precedence. */
+static bool disk_usb_pending(void)
+{
+    return queue_peek_ex(&disk_queue, NULL, 0,
+                         QPEEK_FILTER1(SYS_USB_CONNECTED));
+}
+
 static int io_open(const char *path, int mode)
 {
     return open(path, mode == CS_O_READ ? O_RDONLY : O_RDWR | O_CREAT, 0666);
@@ -584,6 +592,7 @@ static void build_list(void)
     mutex_unlock(&cider_mutex);
     int next = cs_list(&store, cursor, list_items, ARRAYLEN(list_items), &n,
                        disk_data, sizeof disk_data);
+    if (disk_usb_pending()) return;
     mutex_lock(&cider_mutex);
     if (next < 0 || (uint32_t)next <= cursor) { next = 0; n = 0; }
     len = snprintf(list_page, sizeof list_page, "lv\t%lu\t%lu\t%lu\t%u\n",
@@ -612,6 +621,7 @@ static bool read_store(const char *key, const char *tier, bool transfer_job,
     int t = cs_tier(tier);
     int r = t < 0 || !cs_key_from_hex(key, kb) ? CS_BAD :
             cs_get(&store, kb, t, disk_data, sizeof disk_data, &payload, &length);
+    if (disk_usb_pending()) return false;
     mutex_lock(&cider_mutex);
     bool ok = r == CS_OK && cider_cache_put(&cache, key, tier, payload, length, false);
     if (ok) { art_revision++; pin_apply(); }
@@ -668,6 +678,7 @@ static bool store_write_batch(void)
         int r = t < 0 || !cs_key_from_hex(key, kb) ? CS_BAD :
                 cs_put(&store, kb, t, disk_data + CS_REC_HEAD, length,
                        disk_data, sizeof disk_data, &crc);
+        if (disk_usb_pending()) return false;
         mutex_lock(&cider_mutex);
         if (r == CS_OK || r == CS_DUP)
         {
@@ -705,14 +716,22 @@ static void disk_worker(void)
         if (ev.id == SYS_USB_CONNECTED)
         {
             cs_unload(&store);            /* sync, close, forget the index */
-            mutex_lock(&cider_mutex);
-            list_req = list_ready = false;
-            mutex_unlock(&cider_mutex);
+            /* No UI/service mutex on the handover path. The service resets
+             * the link on detach; clean up any late list after remount. */
             usb_acknowledge(SYS_USB_CONNECTED_ACK, ev.data);
             do { queue_wait(&disk_queue, &ev); }
             while (ev.id != SYS_USB_DISCONNECTED);
+            mutex_lock(&cider_mutex);
+            list_req = list_ready = false;
+            mutex_unlock(&cider_mutex);
+            more = was_busy = false;
+            load_at = current_tick - 30 * HZ;
             continue;
         }
+        /* Drain older wakeups without work, preserving USB connect/disconnect
+         * order. Pulling a later connect out of the queue could mistake an
+         * older disconnect for the end of the new storage session. */
+        if (disk_usb_pending()) continue;
         if (tagcache_is_busy()) continue;
         bool active = storage_disk_is_active();
         char key[65], tier[3];
@@ -730,14 +749,17 @@ static void disk_worker(void)
             TIME_AFTER(current_tick, load_at + 30 * HZ))
         {
             load_at = current_tick;
-            if (cs_load(&store, disk_data, sizeof disk_data,
-                        (uint32_t)current_tick * 2654435761u + 0x5bd1e995u)
-                == CS_OK) snap_store();
+            int result = cs_load(&store, disk_data, sizeof disk_data,
+                        (uint32_t)current_tick * 2654435761u + 0x5bd1e995u);
+            if (disk_usb_pending()) continue;
+            if (result == CS_OK) snap_store();
         }
+        if (disk_usb_pending()) continue;
         if (lookup) read_store(key, tier, true, req);
         /* Visible window and neighbours share one spin-up. */
         for (int n = 0; n < 6; n++)
         {
+            if (disk_usb_pending()) break;
             mutex_lock(&cider_mutex);
             bool have = nfills > 0;
             if (have)
@@ -750,12 +772,14 @@ static void disk_worker(void)
             if (!have) break;
             read_store(key, tier, false, 0);
         }
+        if (disk_usb_pending()) continue;
         mutex_lock(&cider_mutex);
         bool busy = transfer.active || TIME_BEFORE(current_tick, art_used_at + HZ);
         bool answer = list_req && !list_ready;
         mutex_unlock(&cider_mutex);
         active = storage_disk_is_active();
         if (answer && active && store.loaded) build_list();
+        if (disk_usb_pending()) continue;
         more = false;
         if (active && !busy && store.loaded)
         {
@@ -763,6 +787,7 @@ static void disk_worker(void)
             bool idle = TIME_AFTER(current_tick, art_used_at + 5 * HZ);
             if (!queue_empty(&disk_queue)) continue;
             more |= cs_maintain(&store, disk_data, sizeof disk_data, idle);
+            if (disk_usb_pending()) continue;
             if (was_busy && !cs_busy(&store)) snap_store();
             was_busy = cs_busy(&store);
         }
@@ -777,6 +802,7 @@ void cider_init(void)
     mutex_init(&cider_mutex);
     queue_init(&disk_queue, true);
     cs_init(&store, &store_io, STORE_ROOT, CIDER_STORE_CAP);
+    store.cancelled = disk_usb_pending;
     initialized = true;
     reset();
     podlink_set_resident(&consumer);
